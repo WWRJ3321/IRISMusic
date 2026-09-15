@@ -38,6 +38,21 @@ IRIS Music 是个**个人项目**：没有团队、没有 KPI，也不商业化�
 
 > 🔒 **它不上网。** 清单里没有 `INTERNET` 权限——歌单、收藏、听歌统计全部只留在本机，安全、无广告、无遥测。
 
+## 📸 截图
+
+<table>
+<tr>
+<td align="center"><img src="docs/screenshots/Main.jpg" width="220"><br><sub>歌单</sub></td>
+<td align="center"><img src="docs/screenshots/Playcard1.jpg" width="220"><br><sub>播放卡片</sub></td>
+<td align="center"><img src="docs/screenshots/Playcard2.jpg" width="220"><br><sub>堆叠排布</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/Playcard3.jpg" width="220"><br><sub>播放页</sub></td>
+<td align="center"><img src="docs/screenshots/Report.jpg" width="220"><br><sub>听歌报告</sub></td>
+<td></td>
+</tr>
+</table>
+
 ## 📥 安装
 
 去 **[Releases](../../releases/latest)** 下载 `IRISMusic-v3.3.0-arm64-v8a.apk`（绝大多数近几年的手机，arm64），直接安装。
