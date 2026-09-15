@@ -1,0 +1,56 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 0° 长 -->
+    <group android:rotation="0" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M51.5,29 v10 a2.5,2.5 0 0 0 5,0 v-10 a2.5,2.5 0 0 0 -5,0 z" />
+    </group>
+    <!-- 30° 短 -->
+    <group android:rotation="30" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M52,33 v6 a2,2 0 0 0 4,0 v-6 a2,2 0 0 0 -4,0 z" />
+    </group>
+    <!-- 60° 长 -->
+    <group android:rotation="60" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M51.5,29 v10 a2.5,2.5 0 0 0 5,0 v-10 a2.5,2.5 0 0 0 -5,0 z" />
+    </group>
+    <!-- 90° 短 -->
+    <group android:rotation="90" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M52,33 v6 a2,2 0 0 0 4,0 v-6 a2,2 0 0 0 -4,0 z" />
+    </group>
+    <!-- 120° 长 -->
+    <group android:rotation="120" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M51.5,29 v10 a2.5,2.5 0 0 0 5,0 v-10 a2.5,2.5 0 0 0 -5,0 z" />
+    </group>
+    <!-- 150° 短 -->
+    <group android:rotation="150" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M52,33 v6 a2,2 0 0 0 4,0 v-6 a2,2 0 0 0 -4,0 z" />
+    </group>
+    <!-- 180° 长 -->
+    <group android:rotation="180" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M51.5,29 v10 a2.5,2.5 0 0 0 5,0 v-10 a2.5,2.5 0 0 0 -5,0 z" />
+    </group>
+    <!-- 210° 短 -->
+    <group android:rotation="210" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M52,33 v6 a2,2 0 0 0 4,0 v-6 a2,2 0 0 0 -4,0 z" />
+    </group>
+    <!-- 240° 长 -->
+    <group android:rotation="240" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M51.5,29 v10 a2.5,2.5 0 0 0 5,0 v-10 a2.5,2.5 0 0 0 -5,0 z" />
+    </group>
+    <!-- 270° 短 -->
+    <group android:rotation="270" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M52,33 v6 a2,2 0 0 0 4,0 v-6 a2,2 0 0 0 -4,0 z" />
+    </group>
+    <!-- 300° 长 -->
+    <group android:rotation="300" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M51.5,29 v10 a2.5,2.5 0 0 0 5,0 v-10 a2.5,2.5 0 0 0 -5,0 z" />
+    </group>
+    <!-- 330° 短 -->
+    <group android:rotation="330" android:pivotX="54" android:pivotY="54">
+        <path android:fillColor="#FFFFFF" android:pathData="M52,33 v6 a2,2 0 0 0 4,0 v-6 a2,2 0 0 0 -4,0 z" />
+    </group>
+
+</vector>
