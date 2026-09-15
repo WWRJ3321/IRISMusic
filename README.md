@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/IRIS-Music-00F0FF?style=for-the-badge&logo=music&logoColor=00F0FF&labelColor=0d0d12">
-  <img src="https://img.shields.io/badge/IRIS-Music-111111?style=for-the-badge&logo=music&logoColor=111111&labelColor=F5F5F7" alt="IRIS Music">
-</picture>
+<img src="docs/logo.png" width="120" alt="IRIS Music">
 
 ### 一个本地音乐播放器
 
@@ -16,8 +13,9 @@
 ![Compose](https://img.shields.io/badge/Jetpack%20Compose-UI-4285F4?logo=jetpackcompose&logoColor=white)
 ![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white)
 ![Network](https://img.shields.io/badge/Network-None-ee0000?logo=ghost&logoColor=white)
+![visitors](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2FWWRJ3321%2FIRISMusic&count_bg=%23111116&title_bg=%23555555&icon=&icon_color=%23E7E7E7&title=visitors&edge_flat=false)
 
-[功能](#-功能) · [安装](#-安装) · [许可](#%EF%B8%8F-许可) · [免责声明](REMIND.md)
+[English](README.en.md) · [功能](#-功能) · [安装](#-安装) · [许可](#%EF%B8%8F-许可) · [免责声明](REMIND.md)
 
 </div>
 
@@ -42,20 +40,20 @@ IRIS Music 是个**个人项目**：没有团队、没有 KPI，也不商业化�
 
 <table>
 <tr>
-<td align="center"><img src="docs/screenshots/Main.jpg" width="220"><br><sub>歌单</sub></td>
-<td align="center"><img src="docs/screenshots/Playcard1.jpg" width="220"><br><sub>播放卡片</sub></td>
-<td align="center"><img src="docs/screenshots/Playcard2.jpg" width="220"><br><sub>播放卡片</sub></td>
+<td align="center"><img src="docs/screenshots/Main_f.png" width="200"><br><sub>歌单</sub></td>
+<td align="center"><img src="docs/screenshots/Playcard1_f.png" width="200"><br><sub>播放卡片</sub></td>
+<td align="center"><img src="docs/screenshots/Playcard2_f.png" width="200"><br><sub>播放卡片</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="docs/screenshots/Playcard3.jpg" width="220"><br><sub>播放卡片 · 堆叠</sub></td>
-<td align="center"><img src="docs/screenshots/Report.jpg" width="220"><br><sub>听歌报告</sub></td>
+<td align="center"><img src="docs/screenshots/Playcard3_f.png" width="200"><br><sub>播放卡片 · 堆叠</sub></td>
+<td align="center"><img src="docs/screenshots/Report_f.png" width="200"><br><sub>听歌报告</sub></td>
 <td></td>
 </tr>
 </table>
 
 ## 📥 安装
 
-去 **[Releases](../../releases/latest)** 下载 `IRISMusic-v3.3.0-arm64-v8a.apk`（绝大多数近几年的手机，arm64），直接安装。
+去 **[Releases](releases/latest)** 下载 `IRISMusic-v3.3.0-arm64-v8a.apk`（绝大多数近几年的手机，arm64），直接安装。
 
 首次打开授予「读取音频」权限即可；若要用悬浮歌词，需在系统设置里手动授予「显示在其他应用上层」。
 
