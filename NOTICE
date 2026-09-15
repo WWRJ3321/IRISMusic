@@ -1,0 +1,45 @@
+IRIS Music
+Copyright (C) 2026 WWRJ
+
+This program is free software licensed under the GNU General Public License
+version 3 (GPL-3.0). See the LICENSE file for the full text.
+
+--------------------------------------------------------------------------------
+Third-party notices
+--------------------------------------------------------------------------------
+IRIS Music is built on top of the following open-source libraries. Their own
+licenses apply to their respective code; IRIS Music's GPL-3.0 grant applies to
+IRIS Music's own sources only.
+
+  - Android Jetpack (androidx.core, androidx.activity, androidx.lifecycle)
+      License: Apache License 2.0
+      https://developer.android.com/jetpack
+
+  - Jetpack Compose (androidx.compose.*)
+      License: Apache License 2.0
+      https://developer.android.com/jetpack/compose
+
+  - Jetpack Media3 / ExoPlayer (androidx.media3.*)
+      License: Apache License 2.0
+      https://github.com/androidx/media
+
+  - Haze (dev.chrisbanes.haze)
+      License: Apache License 2.0
+      https://github.com/chrisbanes/haze
+
+  - AndroidLiquidGlass (Kyant0/AndroidLiquidGlass)
+      The liquid-glass SDF refraction & specular-highlight approach in
+      app/src/main/java/com/iris/music/ui/theme/ was studied from and inspired
+      by this project's reference implementation.
+      License: Apache License 2.0
+      https://github.com/Kyant0/AndroidLiquidGlass
+
+The Apache License 2.0 requires preservation of copyright notices and
+attribution, which this file satisfies for the components above.
+
+--------------------------------------------------------------------------------
+Music / media
+--------------------------------------------------------------------------------
+IRIS Music does NOT bundle, embed, distribute, or provide access to any music,
+audio files, or album artwork. Any media you play is imported from your own
+device storage and remains your responsibility. See REMIND.md for details.
