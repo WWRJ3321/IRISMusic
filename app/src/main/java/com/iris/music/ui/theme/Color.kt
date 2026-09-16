@@ -91,7 +91,9 @@ enum class IrisLayout(val label: String) {
     /** 横向排布：卡片横向铺开，左右滑动翻歌，两侧露出邻卡 */
     CAROUSEL("横向排布"),
     /** 堆叠排布：卡片叠成一沓，拖走最上面那张切歌 */
-    STACK("堆叠排布");
+    STACK("堆叠排布"),
+    /** 紧凑排布：整屏紧凑歌单 + 底部常驻迷你播放条（Folia 式） */
+    COMPACT("紧凑排布");
 
     /** 是否为卡片模式（没有歌单页，只有播放卡片） */
     val isDeck: Boolean get() = this != LIST
