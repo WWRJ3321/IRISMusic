@@ -50,7 +50,7 @@ GPL-3.0 授予的是**代码**的复制与修改权，**不**授予对 "IRIS"、
 
  此外，本项目的**液态玻璃（SDF 折射 / 镜面高光）实现思路参考自 Kyant0/AndroidLiquidGlass（Apache-2.0）**，为本项目的独立重写、非逐行拷贝。相关署名见 [`NOTICE`](./NOTICE)。
 
- 本项目的**"海报墙"紧凑排布**之交互**灵感**来自 Folia（[chthollyphile/folia-major](https://github.com/chthollyphile/folia-major)，AGPL-3.0），**已获原作者授权同意**。该布局由本项目以 Jetpack Compose **独立实现**，未复制、衍生或链接 Folia 的任何源代码，因此本项目许可仍为 GPL-3.0、不受 AGPL 传染。署名见 [`NOTICE`](./NOTICE)。
+ 本项目的**"唱片墙"紧凑排布**之交互**灵感**来自 Folia（[chthollyphile/folia-major](https://github.com/chthollyphile/folia-major)，AGPL-3.0），**已获原作者授权同意**。该布局由本项目以 Jetpack Compose **独立实现**，未复制、衍生或链接 Folia 的任何源代码，因此本项目许可仍为 GPL-3.0、不受 AGPL 传染。署名见 [`NOTICE`](./NOTICE)。
 
 ## 8. 签名提示 / Signing
 
