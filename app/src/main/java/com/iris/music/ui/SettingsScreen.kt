@@ -396,6 +396,7 @@ internal fun SettingsPanel(
                 IrisLayout.LIST -> "纵向排布：歌单列表 + 右滑播放页，原有结构"
                 IrisLayout.CAROUSEL -> "横向排布：只剩播放卡片，左右滑动翻歌"
                 IrisLayout.STACK -> "堆叠排布：卡片叠成一沓，把最上面那张拖走切歌"
+                IrisLayout.COMPACT -> "海报墙：正方形/长方形磁贴组成画布，可自由拖动探索"
             },
             color = colors.subText, fontSize = 11.sp
         )
@@ -935,6 +936,47 @@ private fun LayoutSwatch(
                     }
                 }
 
+IrisLayout.COMPACT -> {
+                     // 紧凑排布：上面一列歌曲行（序号点 + 标题条 + 元信息条），
+                     // 底部一条常驻迷你播放条（圆点 + 长条 + 三个小方点控制键）
+                     val gap = 2.5.dp.toPx()
+                     val barH = h * 0.20f
+                     val listH = h - barH - gap * 5f
+                     val rowH = (listH - gap * 3f) / 4f
+                     for (row in 0 until 4) {
+                         val y = pad + row * (rowH + gap)
+                         // 序号圆点
+                         drawCircle(
+                             color = fill.copy(alpha = fill.alpha * 0.7f),
+                             radius = rowH * 0.28f,
+                             center = Offset(pad + rowH * 0.30f, y + rowH / 2f)
+                         )
+                         // 标题条（长）
+                         drawRoundRect(fill,
+                             Offset(pad + rowH * 0.75f, y + rowH * 0.10f),
+                             Size(w - rowH * 0.75f, rowH * 0.28f), inner)
+                         // 元信息条（短、淡）
+                         drawRoundRect(fill.copy(alpha = fill.alpha * 0.55f),
+                             Offset(pad + rowH * 0.75f, y + rowH * 0.60f),
+                             Size((w - rowH * 0.75f) * 0.62f, rowH * 0.22f), inner)
+                     }
+                     // 底部迷你播放条
+                     val by = size.height - pad - barH
+                     drawRoundRect(fill.copy(alpha = fill.alpha * 0.85f),
+                         Offset(pad, by), Size(w, barH), inner)
+                     // 条内：控制点（上一首/播放/下一首）
+                     val dotR = barH * 0.16f
+                     val cy = by + barH / 2f
+                     val cxs = listOf(pad + barH * 0.5f, pad + barH * 0.95f, pad + barH * 1.4f)
+                     for (cx in cxs) drawCircle(frame, dotR, Offset(cx, cy))
+                     // 播放键中间实心
+                     drawCircle(frame.copy(alpha = frame.alpha * 0.9f), dotR * 0.55f,
+                         Offset(cxs[1], cy))
+                     // 进度条
+                     drawRoundRect(frame.copy(alpha = frame.alpha * 0.6f),
+                         Offset(pad + barH * 1.75f, cy - stroke / 2f),
+                         Size(w - barH * 1.75f - pad, stroke), CornerRadius.Zero)
+                 }
             }
         }
         Spacer(Modifier.height(6.dp))
