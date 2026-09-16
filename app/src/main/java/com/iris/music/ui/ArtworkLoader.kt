@@ -50,7 +50,7 @@ import java.util.concurrent.atomic.AtomicLong
 object ArtworkLoader {
 
     private const val DISK_TARGET_PX = 256       // 磁贴显示尺寸，够用且解码快
-    // 海报墙 6 格外扩余量下，同屏唯一封面可达 150~250 张；旧值 192 会在
+    // 唱片墙 6 格外扩余量下，同屏唯一封面可达 150~250 张；旧值 192 会在
     // 滚动中把刚解析完的封面挤出 LRU，再滚动时重新走 MediaMetadataRetriever
     // ——"卡片瞬间加载"的直接来源。384 张 × 256px RGB_565 ≈ 50MB，可承受。
     private const val MEM_CACHE_MAX = 384
@@ -248,7 +248,7 @@ object ArtworkLoader {
         ) {
             sample *= 2
         }
-                // RGB_565：海报墙封面是 ≤256px 的小图，565 相对 ARGB_8888 内存减半，
+                // RGB_565：唱片墙封面是 ≤256px 的小图，565 相对 ARGB_8888 内存减半，
         // 满屏几十张卡片的位图占用直接腰斩；肉眼在缩略尺寸下几乎看不出带状。
         val opts = BitmapFactory.Options().apply {
             inSampleSize = sample
