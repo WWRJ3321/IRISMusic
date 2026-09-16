@@ -159,12 +159,12 @@ fun SongDeck(
 
     Box(modifier.fillMaxSize()) {
         if (state.layout == IrisLayout.COMPACT) {
-            // 海报墙铺满整屏（延伸进状态栏），顶部按钮作为浮层叠在最上层
+            // 唱片墙铺满整屏（延伸进状态栏），顶部按钮作为浮层叠在最上层
             Box(
                 Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
-                        // 只观察、不消费：海报墙拖拽照常，这里仅统计"别处交互"
+                        // 只观察、不消费：唱片墙拖拽照常，这里仅统计"别处交互"
                         awaitPointerEventScope {
                             while (true) { awaitFirstDown(requireUnconsumed = false); contentTick++ }
                         }
@@ -306,9 +306,9 @@ private fun DeckTopBar(
     modifier: Modifier = Modifier
 ) {
     // 与主界面上栏完全一致：左 IRIS MUSIC 标题、右五个同款按钮，唯一区别是没有搜索框。
-    // 三档透明度：静止 2 秒淡到 30%；交互内容区（拖动海报墙等）升到 50%；
+    // 三档透明度：静止 2 秒淡到 30%；交互内容区（拖动唱片墙等）升到 50%；
     // 点顶栏本身升到 90%。任一交互都重置 2 秒回落计时。
-    // 顶栏整块消费点击（含空白区），不再穿透到后面的海报墙/卡片。
+    // 顶栏整块消费点击（含空白区），不再穿透到后面的唱片墙/卡片。
     var interactionTick by remember { mutableIntStateOf(0) }   // 点顶栏
     val barAlpha = remember { Animatable(0.9f) }               // 进场算顶栏档，先亮
     val barScope = rememberCoroutineScope()
@@ -326,8 +326,8 @@ private fun DeckTopBar(
         // 进场：2 秒无操作淡到 30%
         idleJob = barScope.launch { delay(2000); barAlpha.animateTo(0.3f, animationSpec = tween(300)) }
     }
-    // 点顶栏与"动别处"会在同一次按下里同时 ++（覆盖全屏的海报墙观察层 requireUnconsumed=false
-    // 必须穿透海报墙自身消费，故点顶栏也会 contentTick++）。用时间戳让"点顶栏"压制同帧的
+    // 点顶栏与"动别处"会在同一次按下里同时 ++（覆盖全屏的唱片墙观察层 requireUnconsumed=false
+    // 必须穿透唱片墙自身消费，故点顶栏也会 contentTick++）。用时间戳让"点顶栏"压制同帧的
     // "动别处"，保证点顶栏恒为 90% 而非被 50% 覆盖。
     var lastBarTouchAt by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     LaunchedEffect(interactionTick) {
