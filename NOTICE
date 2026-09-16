@@ -41,7 +41,7 @@ attribution, which this file satisfies for the components above.
 Design inspiration
 --------------------------------------------------------------------------------
   - Folia (chthollyphile/folia-major)
-      The interaction idea of the "poster wall" (海报墙) compact layout was
+      The interaction idea of the "record wall" (唱片墙) compact layout was
       inspired by Folia's tiling-poster browsing concept. With the original
       author's permission. IRIS Music implements this layout independently in
       Jetpack Compose; no source code from Folia (AGPL-3.0) is copied,
