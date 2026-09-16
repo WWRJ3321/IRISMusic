@@ -113,7 +113,7 @@ data class PlayerUiState(
     val loading: Boolean = true,
     /** 正在刷新音乐库（下拉刷新/刷新按钮），驱动 UI 指示器 */
     val refreshing: Boolean = false,
-    /** 果冻动效：卡片位移/尺寸变化带弹性果冻拉伸 */
+    /** 海报墙果冻动效：磁贴位移/尺寸变化带弹性果冻拉伸 */
     val jellyAnim: Boolean = false,
     /** 睡眠定时器总时长，0 表示未启用 */
     val sleepTimerMs: Long = 0L,
@@ -724,7 +724,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(showRecommendations = show)
     }
 
-    /** 果冻动效开关 */
+    /** 海报墙果冻动效开关 */
     fun setJellyAnim(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_JELLY_ANIM, enabled).apply()
         _state.value = _state.value.copy(jellyAnim = enabled)
