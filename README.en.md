@@ -4,7 +4,7 @@
 
 ### A local music player
 
-True refractive liquid glass · 3 layouts · custom palettes · fully offline · no account
+True refractive liquid glass · 4 layouts · custom palettes · fully offline · no account
 
 *A player I wanted, so I built it.*
 
@@ -30,7 +30,7 @@ IRIS Music is a **personal project**: no team, no KPIs, not commercial. It just 
 |:--|:--|
 | 🎨 **Many themes** | Monochrome plus three color sets (Neon Pink / Deep Sea / Grass Green) and a **custom** mode — pick any primary/secondary color live, layered over dark / light / auto. |
 | 🧠 **On-device recommendation** | Rare among local players. Scores your whole library from likes, play counts, skips and genre weighting, with a tunable "exploration" dial to balance favorites vs. discovery. |
-| 🧭 **One library, three layouts** | Vertical list / horizontal cards / stacked. Layout, palette, light-dark and material are each an independent axis — mix freely, nothing hardcoded. |
+| 🧭 **One library, four layouts** | Vertical list / horizontal cards / stacked / poster wall. Layout, palette, light-dark and material are each an independent axis — mix freely, nothing hardcoded. The poster-wall interaction is inspired by [Folia](https://github.com/chthollyphile/folia-major), used with the original author's permission; the code is an independent implementation. |
 | ✨ **Novel touches** | Bass-driven haptic heartbeat, a year-long listening heatmap report, an equalizer you drag by anchors on the frequency-response curve, jelly spring animations, and more. |
 
 > 🔒 **It never goes online.** There is no `INTERNET` permission — playlists, favorites and listening stats stay on your device. No ads, no telemetry.
