@@ -793,7 +793,7 @@ private fun solveWall(
 private data class OcclRect(val c0: Int, val r0: Int, val w: Int, val h: Int)
 
 /**
- * 无限海报墙：磁贴拼贴成大画布，四向平铺，拖动带惯性。
+ * 无限唱片墙：磁贴拼贴成大画布，四向平铺，拖动带惯性。
  *
  * 帧率要点：壳（本函数）是唯一读 positionMs/durationMs 的地方——进度每 500ms
  * 轮询一次，壳跟着重组，但它传给墙体的参数（队列/索引/点赞集/配色/回调）全部
@@ -1093,7 +1093,7 @@ private fun PosterWallBody(
             ordered.forEach { p -> prefetchScope.launch(io) { ArtworkLoader.load(p) } }
         }
 
-        // 封面预热：进入海报墙即后台并发预载整个队列封面。
+        // 封面预热：进入唱片墙即后台并发预载整个队列封面。
         // key 必须是 Unit：旧版 key=queue 会在每次换歌（viewModel 重建 queue 列表
         // 实例时）取消整个预热再来一遍，大库永远预热不完，边缘冷解析永远追不上
         // 滑动——"边边没渲染"的调度根因。
@@ -1482,7 +1482,7 @@ private fun PosterTile(
     // active 翻转不再做整卡 alpha 淡入——之前 snapTo(0.5f) 会让卡片在点卡播放瞬间
     // 明显暗一下再弹回（"闪一下"）。尺寸/描边/阴影动画已足够表达层级变化。
     val tileShape = IrisShape.item
-        // 海报墙磁贴不做液态玻璃：一屏几十张卡 × 实时 RenderEffect 会掉帧，
+        // 唱片墙磁贴不做液态玻璃：一屏几十张卡 × 实时 RenderEffect 会掉帧，
         // 且封面盖住 90% 面积玻璃根本不可见。实色底 + 主色描边近似表达层级。
         val tileBg = if (active) colors.card.copy(alpha = 0.85f) else colors.card
         val tileBorder = if (active) colors.primary else Color.Transparent
@@ -1694,7 +1694,7 @@ private fun PosterTile(
                         .padding(bottom = (2 * contentScale).dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 海报墙只保留一个播放/暂停键：切歌靠拖动探索 + 点其它磁贴完成，
+                    // 唱片墙只保留一个播放/暂停键：切歌靠拖动探索 + 点其它磁贴完成，
                     // 上一首/下一首在此布局下冗余，去掉后卡片更干净。
                     PlayPausePosterBtn(
                         isPlaying = posterIsPlaying.value,
@@ -1724,7 +1724,7 @@ private fun PosterTile(
     }
 }
 
-/** 海报墙播放状态快照（独立于整个 PlayerUiState，避免进度轮询引发全墙重组） */
+/** 唱片墙播放状态快照（独立于整个 PlayerUiState，避免进度轮询引发全墙重组） */
 private val posterIsPlaying = androidx.compose.runtime.mutableStateOf(false)
 
 /**
@@ -1841,7 +1841,7 @@ private fun LyricRow(
     }
 }
 
-/** 海报墙歌词基准字号（sp），contentScale 会等比放大它 */
+/** 唱片墙歌词基准字号（sp），contentScale 会等比放大它 */
 private const val POSTER_LYRIC_FONT = 17f
 
 /** 歌词行间距（sp 当量）。行高 = 字号 + 该值，随 contentScale 等比缩放 */
