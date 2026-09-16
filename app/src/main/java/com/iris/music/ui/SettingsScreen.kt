@@ -396,7 +396,7 @@ internal fun SettingsPanel(
                 IrisLayout.LIST -> "纵向排布：歌单列表 + 右滑播放页，原有结构"
                 IrisLayout.CAROUSEL -> "横向排布：只剩播放卡片，左右滑动翻歌"
                 IrisLayout.STACK -> "堆叠排布：卡片叠成一沓，把最上面那张拖走切歌"
-                IrisLayout.COMPACT -> "海报墙：正方形/长方形磁贴组成画布，可自由拖动探索"
+                IrisLayout.COMPACT -> "唱片墙：正方形/长方形磁贴组成画布，可自由拖动探索"
             },
             color = colors.subText, fontSize = 11.sp
         )
