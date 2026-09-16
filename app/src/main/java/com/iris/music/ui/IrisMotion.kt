@@ -97,7 +97,7 @@ enum class PressFeedback { CLICK, TAP, NONE }
  * 可按压元素的统一交互封装：按压缩放 + 触感 + 无水波点击。
  *
  * 项目里这套样板原本在 9 处逐字重写（PlayerCard 三处、MainScreen 五处、
- * SongDeck 若干）：每处都要自己 remember 一个 InteractionSource、
+ * SongDeck/PosterWall 若干）：每处都要自己 remember 一个 InteractionSource、
  * collectIsPressedAsState、animateFloatAsState、再手写 graphicsLayer 和
  * `indication = null`。散开写的代价不只是行数——按压幅度在各处从 0.82 到 0.94
  * 飘了五个值，手感并不统一，改动效果时要逐个文件找。
