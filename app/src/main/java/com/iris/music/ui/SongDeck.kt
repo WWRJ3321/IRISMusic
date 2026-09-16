@@ -85,9 +85,10 @@ import kotlin.math.pow
 /**
  * 卡片模式：整个 App 只剩一叠播放卡片，一首歌一张卡。
  *
- * 卡片模式共用同一张卡（[PlayerCard]），区别只在怎么摆：
+ * 三种排布里两种共用同一张卡（[PlayerCard]），区别只在怎么摆：
  * - [IrisLayout.CAROUSEL] 横向排布：卡片横向铺开，两侧露出邻卡，左右滑翻歌
- *
+ * - [IrisLayout.STACK] 堆叠排布：卡片叠成一沓，把最上面那张拖走切歌
+ * - [IrisLayout.COMPACT] 紧凑排布：不放卡，整屏紧凑歌单 + 底部常驻迷你播放条
  *
  * 没有歌单也没有上栏，所以顶部留一行极简 chrome（队列位置 + 返回列表 / 报告 / 设置），
  * 否则进了这个模式就再也回不去、也够不到设置。
@@ -157,6 +158,44 @@ fun SongDeck(
     var contentTick by remember { mutableIntStateOf(0) }
 
     Box(modifier.fillMaxSize()) {
+        if (state.layout == IrisLayout.COMPACT) {
+            // 海报墙铺满整屏（延伸进状态栏），顶部按钮作为浮层叠在最上层
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        // 只观察、不消费：海报墙拖拽照常，这里仅统计"别处交互"
+                        awaitPointerEventScope {
+                            while (true) { awaitFirstDown(requireUnconsumed = false); contentTick++ }
+                        }
+                    }
+            ) {
+                DeckPosterWall(
+                    state = state,
+                    colors = colors,
+                    onToggle = onToggle,
+                    onPrev = onPrev,
+                    onNext = onNext,
+                    onSeek = onSeek,
+                    onSelect = onSelect,
+                    jelly = state.jellyAnim
+                )
+            }
+            DeckTopBar(
+                colors = colors,
+                activePlaylist = state.activePlaylistId != null,
+                refreshing = state.refreshing,
+                onCycleLayout = onCycleLayout,
+                onOpenReport = onOpenReport,
+                onOpenSettings = onOpenSettings,
+                onOpenPlaylists = onOpenPlaylists,
+                onReload = onReload,
+                contentTick = contentTick,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+            )
+        } else {
             Column(
                 Modifier
                     .fillMaxSize()
@@ -232,7 +271,7 @@ fun SongDeck(
                     }
                 }
             }
-        
+        }
 
         if (showLyrics) {
             LyricsOverlay(
@@ -267,9 +306,9 @@ private fun DeckTopBar(
     modifier: Modifier = Modifier
 ) {
     // 与主界面上栏完全一致：左 IRIS MUSIC 标题、右五个同款按钮，唯一区别是没有搜索框。
-    // 三档透明度：静止 2 秒淡到 30%；交互内容区（拖动卡片等）升到 50%；
+    // 三档透明度：静止 2 秒淡到 30%；交互内容区（拖动海报墙等）升到 50%；
     // 点顶栏本身升到 90%。任一交互都重置 2 秒回落计时。
-    // 顶栏整块消费点击（含空白区），不再穿透到后面的卡片。
+    // 顶栏整块消费点击（含空白区），不再穿透到后面的海报墙/卡片。
     var interactionTick by remember { mutableIntStateOf(0) }   // 点顶栏
     val barAlpha = remember { Animatable(0.9f) }               // 进场算顶栏档，先亮
     val barScope = rememberCoroutineScope()
@@ -287,8 +326,8 @@ private fun DeckTopBar(
         // 进场：2 秒无操作淡到 30%
         idleJob = barScope.launch { delay(2000); barAlpha.animateTo(0.3f, animationSpec = tween(300)) }
     }
-    // 点顶栏与"动别处"会在同一次按下里同时 ++（覆盖全屏的内容观察层 requireUnconsumed=false
-    // 必须穿透内容层自身消费，故点顶栏也会 contentTick++）。用时间戳让"点顶栏"压制同帧的
+    // 点顶栏与"动别处"会在同一次按下里同时 ++（覆盖全屏的海报墙观察层 requireUnconsumed=false
+    // 必须穿透海报墙自身消费，故点顶栏也会 contentTick++）。用时间戳让"点顶栏"压制同帧的
     // "动别处"，保证点顶栏恒为 90% 而非被 50% 覆盖。
     var lastBarTouchAt by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     LaunchedEffect(interactionTick) {
@@ -805,6 +844,366 @@ private fun DeckStack(
             }
         }
     }
+}
+
+// ==================== 紧凑排布 ====================
+
+/**
+ * 紧凑排布：一屏看完整个队列。
+ *
+ * 借鉴 Folia 离线播放器的信息设计：一行 = 序号 + 标题 + 元信息（艺术家 · 时长 · 格式），
+ * 不放封面不放点赞性价比最高；但用 IRIS 自己的材质体系（irisSurface + 可选液态玻璃）
+ * 实现，并且列表本身参与折射背板——毛玻璃/液态玻璃模式下迷你播放条会折射到列表内容。
+ *
+ * 底部是常驻迷你播放条（标题 + 上一首/播放/下一首 + 细进度条），
+ * 点标题/封面区开歌词浮层。与 Folia 的差异：进度条可拖动 seek。
+ */
+@Composable
+private fun DeckCompact(
+    state: PlayerUiState,
+    colors: IrisColors,
+    onToggle: () -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onSelect: (Int) -> Unit,
+    onClickArtwork: () -> Unit
+) {
+    val queue = state.queue
+    val listState = rememberLazyListState()
+    // 自动切歌时列表滚到当前行，浏览位置会被抢走——只在"外部变化且仍在视口外"时才滚
+    LaunchedEffect(state.currentIndex, queue.size) {
+        if (queue.isEmpty()) return@LaunchedEffect
+        val target = state.currentIndex
+        if (target in queue.indices) {
+            val info = listState.layoutInfo.visibleItemsInfo
+            val visible = info.any { it.index == target }
+            if (!visible) listState.animateScrollToItem(target)
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 4.dp,
+                // 底部预留迷你播放条高度 + 安全区
+                bottom = 86.dp
+            )
+        ) {
+            itemsIndexed(queue, key = { _, song -> "song-${song.id}" }) { index, song ->
+                CompactSongRow(
+                    song = song,
+                    index = index,
+                    active = index == state.currentIndex,
+                    playing = index == state.currentIndex && state.isPlaying,
+                    colors = colors,
+                    onClick = { onSelect(index) }
+                )
+            }
+        }
+
+        // ===== 常驻迷你播放条 =====
+        val song = queue.getOrNull(state.currentIndex)
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 细进度条（可拖动 seek）：宽度 = 位置/时长
+            val duration = state.durationMs
+            val position = state.positionMs
+            val ratio = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            CompactSeekBar(
+                progress = ratio,
+                enabled = song != null && duration > 0,
+                onSeek = onSeek,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp),
+                colors = colors
+            )
+            Spacer(Modifier.height(2.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .irisSurface(GlassLevel.CARD, colors, IrisShape.item)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { Haptics.tap(); onClickArtwork() },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .padding(start = 14.dp, top = 10.dp, bottom = 10.dp)
+                ) {
+                    Text(
+                        song?.title ?: "未播放",
+                        color = colors.text,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            song?.artist ?: "选一首开始播放",
+                            color = colors.subText,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (song != null) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "${fmtCompact(position)} / ${fmtCompact(duration)}",
+                                color = colors.subText,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                // 三个按钮：⏮ ▶/⏸ ⏭ —— 项目不引图标库，用文字符号保持一致
+                CompactPlayButton("⏮", colors = colors, enabled = song != null) { Haptics.tap(); onPrev() }
+                CompactPlayButton(
+                    if (state.isPlaying) "⏸" else "▶",
+                    colors = colors,
+                    primary = true,
+                    enabled = song != null
+                ) { Haptics.tap(); onToggle() }
+                CompactPlayButton("⏭", colors = colors, enabled = song != null) { Haptics.tap(); onNext() }
+                Spacer(Modifier.width(10.dp))
+            }
+        }
+    }
+}
+
+/** 紧凑模式的歌曲行：序号/跳动条 + 标题 + 元信息，无封面无点赞（Folia 式极简） */
+@Composable
+private fun CompactSongRow(
+    song: Song,
+    index: Int,
+    active: Boolean,
+    playing: Boolean,
+    colors: IrisColors,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .irisSurface(
+                GlassLevel.ROW,
+                colors,
+                IrisShape.item,
+                solid = if (active) colors.row.copy(alpha = 0.8f) else colors.row,
+                accent = if (active) colors.primary else null
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { Haptics.tap(); onClick() }
+            )
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // 左侧 22dp 槽位：普通行放序号，播放行放跳动条
+        Box(
+            Modifier.width(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (active) {
+                CompactBarsIndicator(playing = playing, color = colors.primary.readableOn(colors.row, 3.2f))
+            } else {
+                Text(
+                    "${index + 1}",
+                    color = colors.subText,
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                song.title,
+                color = if (active) colors.primary.readableOn(colors.row, 3.2f) else colors.text,
+                fontSize = 13.sp,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(1.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    song.artist,
+                    color = colors.subText,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (song.artist.isNotBlank()) Spacer(Modifier.width(6.dp))
+                Text(
+                    fmtCompact(song.durationMs),
+                    color = colors.subText,
+                    fontSize = 10.sp
+                )
+                // 格式徽章（Folia 的 LRC 徽章同理，这里展示音频格式）
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    song.formatLabel,
+                    color = colors.primary.readableOn(colors.row, 3.2f).copy(alpha = 0.8f),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .border(
+                            width = 1.dp,
+                            color = colors.primary.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            }
+        }
+    }
+}
+
+/** 播放中的跳动条指示器（3 根柱子，随播放/暂停启停） */
+@Composable
+private fun CompactBarsIndicator(playing: Boolean, color: Color) {
+    // 相位只在 playing=true 时推进。
+    // 原先用 rememberInfiniteTransition：即使暂停（画的是静态柱子）动画也照跑，
+    // 每帧触发一次无意义重组——这在列表里是持续的后台耗电。
+    // 改成 Animatable + LaunchedEffect(playing)：暂停即协程挂起，彻底零开销。
+    val phase = remember { Animatable(0f) }
+    LaunchedEffect(playing) {
+        if (playing) {
+            phase.animateTo(
+                targetValue = phase.value + 4f * 1000f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(880, easing = LinearEasing),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Restart
+                )
+            )
+        }
+    }
+    Canvas(Modifier.size(width = 14.dp, height = 14.dp)) {
+        if (!playing) {
+            // 暂停：三根静态柱子，仍然比纯序号醒目
+            drawRoundRect(color, Offset(2f, size.height * 0.45f), Size(3f, size.height * 0.55f), CornerRadius(1.5f))
+            drawRoundRect(color, Offset(6f, size.height * 0.25f), Size(3f, size.height * 0.75f), CornerRadius(1.5f))
+            drawRoundRect(color, Offset(10f, size.height * 0.55f), Size(3f, size.height * 0.45f), CornerRadius(1.5f))
+            return@Canvas
+        }
+        // 三根柱子相位错开 1.33，视觉上此起彼伏
+        val p = phase.value
+        for (i in 0 until 3) {
+            val t = (p + i * 1.33f) % 4f
+            // t: 0→1→3→4 映射高度 0.35→1→0.35（快升慢降）
+            val h = when {
+                t < 1f -> 0.35f + 0.65f * t
+                else -> 1f - 0.65f * ((t - 1f) / 3f)
+            }
+            val barH = size.height * h
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(2f + i * 4f, (size.height - barH) / 2f),
+                size = Size(3f, barH),
+                cornerRadius = CornerRadius(1.5f)
+            )
+        }
+    }
+}
+
+/** 迷你播放条上的圆按钮 */
+@Composable
+private fun CompactPlayButton(
+    label: String,
+    colors: IrisColors,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    primary: Boolean = false,
+    onClick: () -> Unit
+) {
+    val btnColor = if (primary) colors.primary else colors.card
+    Box(
+        modifier
+            .size(if (primary) 42.dp else 36.dp)
+            .clip(RoundedCornerShape(percent = 50))
+            .background(btnColor)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                enabled = enabled,
+                onClick = { Haptics.tap(); onClick() }
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            color = if (primary) colors.primary.readableTextOn() else colors.text,
+            fontSize = if (primary) 16.sp else 14.sp
+        )
+    }
+}
+
+/** 迷你播放条的细进度条：轨道 3dp + 点击 seek */
+@Composable
+private fun CompactSeekBar(
+    progress: Float,
+    enabled: Boolean,
+    onSeek: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    colors: IrisColors
+) {
+    val trackColor = colors.card
+    val fillColor = colors.primary
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(18.dp)
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectTapGestures { offset ->
+                    val ratio = (offset.x / size.width).coerceIn(0f, 1f)
+                    onSeek(ratio)
+                }
+            }
+    ) {
+        // 轨道：稍加宽的命中区（18dp）内画 3dp 视觉轨道
+        Canvas(Modifier.fillMaxSize()) {
+            val trackY = (size.height - 3.dp.toPx()) / 2f
+            drawRoundRect(
+                trackColor,
+                Offset(0f, trackY),
+                Size(size.width, 3.dp.toPx()),
+                CornerRadius(1.5.dp.toPx())
+            )
+            drawRoundRect(
+                fillColor,
+                Offset(0f, trackY),
+                Size(size.width * progress, 3.dp.toPx()),
+                CornerRadius(1.5.dp.toPx())
+            )
+        }
+    }
+}
+
+/** 毫秒 → "m:ss" */
+private fun fmtCompact(ms: Long): String {
+    val t = ms / 1000
+    return "%d:%02d".format(t / 60, t % 60)
 }
 
 // ==================== 单张卡 ====================
