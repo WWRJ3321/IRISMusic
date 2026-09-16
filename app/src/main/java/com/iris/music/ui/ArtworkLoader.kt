@@ -59,10 +59,10 @@ object ArtworkLoader {
      * 磁盘缓存容量上限。缓存键带文件指纹（路径+长度+mtime），文件一旦改动
      * 就会产生新键的副本，旧副本若无回收会永久残留、缓存只增不减。这里给出
      * 硬上限：超出后按 lastModified 淘汰最旧的封面，缩到目标的 [DISK_TRIM_RATIO]。
-     * 32MB 约可容纳数千张 256px webp，覆盖绝大多数曲库；系统也可随时整体清空
+     * 12MB 约可容纳数千张 256px webp，覆盖绝大多数曲库；系统也可随时整体清空
      * cacheDir，因此这只是主动控容，不影响正确性。
      */
-    private const val DISK_MAX_BYTES = 32L * 1024 * 1024
+    private const val DISK_MAX_BYTES = 12L * 1024 * 1024
     private const val DISK_TRIM_RATIO = 0.8      // 超限后删到 80%，留出余量避免频繁触发
 
     /** 磁盘缓存目录（延迟初始化，避免在类加载时触碰 Context） */
@@ -204,7 +204,7 @@ object ArtworkLoader {
                         runCatching {
                             val existed = df.length()
                             val out = java.io.FileOutputStream(df)
-                            bmp.compress(Bitmap.CompressFormat.WEBP, 85, out)
+                            bmp.compress(Bitmap.CompressFormat.WEBP, 75, out)
                             out.flush(); out.close()
                             diskBytes.addAndGet(df.length() - existed)
                         }
