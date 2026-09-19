@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 悬浮歌词：桌面全局覆盖窗，需用户在系统设置里手动授予 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 检查更新（opt-in）：仅设置页开关开启并手动检查时访问 GitHub API，无遥测 -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="true"
