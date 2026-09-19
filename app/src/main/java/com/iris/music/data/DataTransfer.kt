@@ -60,7 +60,7 @@ object DataTransfer {
     // ==================== 导出 ====================
 
     /** 组装导出用的 JSON 文本。songs 传全库，用于写入 title/artist 便于跨设备匹配。 */
-    fun buildJson(songs: List<Song>): String {
+    fun buildJson(context: Context, songs: List<Song>): String {
         val likes = PlayHistory.getLikes()
         val playCounts = PlayHistory.getPlayCounts()
         val incomplete = PlayHistory.getIncompleteCounts()
@@ -119,8 +119,59 @@ object DataTransfer {
             put("songs", songArray)
             put("playlists", playlistArray)
             put("listenStats", listenArray)
+            put("settings", collectSettings(context))
         }.toString(2)
     }
+
+    /**
+     * 设置导出：iris_prefs 整份键值原样打包（主题/材质/明暗/探索度/播放模式/均衡器等全部）。
+     *
+     * 只排除 [EXCLUDED_SETTING_KEYS] 里的行为数据键——它们由 [import] 的取较大值合并路径处理，
+     * 原样写回会把"两边谁大"变成"一边说了算"，重复导入时可能翻倍污染推荐排行。
+     * 全量 dump 而不是白名单：以后新增设置项不需要记得来这里同步，自动被带走。
+     */
+    private fun collectSettings(context: Context): JSONObject {
+        val prefs = context.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
+        val out = JSONObject()
+        prefs.all.forEach { (key, value) ->
+            if (key in EXCLUDED_SETTING_KEYS) return@forEach
+            when (value) {
+                null -> {}
+                is Boolean -> out.put(key, value)
+                is Int -> out.put(key, value)
+                is Long -> out.put(key, value)
+                is Float -> out.put(key, value.toDouble())
+                is String -> out.put(key, value)
+                is Set<*> -> out.put(key, JSONArray().apply { value.forEach { put(it) } })
+            }
+        }
+        return out
+    }
+
+    /** 设置写回：只覆盖导出文件里出现的键，本机多出的键不动 */
+    private fun applySettings(context: Context, settings: JSONObject) {
+        val prefs = context.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
+        val edit = prefs.edit()
+        settings.keys().forEach { key ->
+            when (val v = settings.opt(key)) {
+                null -> {}
+                is Boolean -> edit.putBoolean(key, v)
+                is Int -> edit.putInt(key, v)
+                is Long -> edit.putLong(key, v)
+                is Double -> edit.putFloat(key, v.toFloat())
+                is String -> edit.putString(key, v)
+                is JSONArray -> edit.putStringSet(key, HashSet<String>().apply {
+                    for (i in 0 until v.length()) v.optString(i, "").takeIf { it.isNotEmpty() }?.let { add(it) }
+                })
+            }
+        }
+        edit.apply()
+    }
+
+    /** 行为数据键：导入时走 [PlayHistory.mergeImported] 精细合并，不走设置原样恢复 */
+    private val EXCLUDED_SETTING_KEYS = setOf(
+        "play_counts", "skip_counts", "last_played", "likes", "total_played_ms", "incomplete_counts"
+    )
 
     /** 写出到用户选定的 Uri（SAF）。IO 线程执行。 */
     suspend fun export(context: Context, uri: Uri, songs: List<Song>): Boolean =
@@ -128,7 +179,7 @@ object DataTransfer {
             runCatching {
                 // 落盘前先把内存缓冲刷进明细文件，否则最近几十秒的听歌会漏掉
                 ListenStats.flush()
-                val json = buildJson(songs)
+                val json = buildJson(context, songs)
                 context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
                     out.write(json.toByteArray())
                 } ?: return@runCatching false
@@ -190,6 +241,10 @@ object DataTransfer {
                 }
 
                 PlayHistory.mergeImported(likes, plays, incompletes, totals, lasts)
+
+                // ---- 设置（原样恢复，只覆盖文件里出现的键）----
+                val settingsJson = root.optJSONObject("settings")
+                if (settingsJson != null) applySettings(context, settingsJson)
 
                 // ---- 歌单 ----
                 var playlistCount = 0
