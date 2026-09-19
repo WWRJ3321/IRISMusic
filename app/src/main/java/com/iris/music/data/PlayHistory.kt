@@ -105,6 +105,8 @@ object PlayHistory {
             cachedTotalPlayedMs = totals
             cachedIncomplete = incomplete
         }
+        // 行为数据变了，推荐分必须重算（否则命中旧缓存，排行/未完播权重形同虚设）
+        Recommender.invalidate()
     }
 
     /** 获取所有播放计数 */
@@ -127,13 +129,17 @@ object PlayHistory {
 
     /** 切换歌曲点赞状态，返回切换后的状态 */
     fun toggleLike(songId: Long): Boolean {
+        val result: Boolean
         synchronized(writeLock) {
             val likes = (cachedLikes ?: readLikes()).toMutableSet()
             val next = if (songId in likes) likes - songId else likes + songId
             prefs.edit().putString(KEY_LIKES, next.joinToString(";")).apply()
             cachedLikes = next
-            return songId in next
+            result = songId in next
         }
+        // 点赞是单项最强信号（×1.5），不失效缓存的话推荐结果不会变
+        Recommender.invalidate()
+        return result
     }
 
     /** 获取所有点赞歌曲 ID */
@@ -141,6 +147,52 @@ object PlayHistory {
 
     /** 当前歌曲是否已点赞 */
     fun isLiked(songId: Long): Boolean = songId in getLikes()
+
+    // ==================== 导入合并 ====================
+
+    /**
+     * 合并外部导入的行为数据（见 [DataTransfer]）。
+     *
+     * 合并而非覆盖：点赞取并集，计数与时长逐项取较大值，最后播放时间取较晚。
+     * 取较大值而不是相加，是为了让同一份文件重复导入保持幂等——相加会把次数翻倍，
+     * 直接污染推荐排行。
+     */
+    fun mergeImported(
+        likes: Set<Long>,
+        playCounts: Map<Long, Int>,
+        incompleteCounts: Map<Long, Int>,
+        totalPlayedMs: Map<Long, Long>,
+        lastPlayed: Map<Long, Long>
+    ) {
+        synchronized(writeLock) {
+            val mergedLikes = (cachedLikes ?: readLikes()).toMutableSet().apply { addAll(likes) }
+            val counts = (cachedPlayCounts ?: readCounts(KEY_PLAY_COUNTS)).toMutableMap()
+            val incomplete = (cachedIncomplete ?: readCounts(KEY_INCOMPLETE)).toMutableMap()
+            val totals = (cachedTotalPlayedMs
+                ?: readCounts(KEY_TOTAL_PLAYED_MS).mapValues { it.value.toLong() }).toMutableMap()
+            val lasts = (cachedLastPlayed ?: readLastPlayed()).toMutableMap()
+
+            playCounts.forEach { (id, v) -> counts[id] = maxOf(counts[id] ?: 0, v) }
+            incompleteCounts.forEach { (id, v) -> incomplete[id] = maxOf(incomplete[id] ?: 0, v) }
+            totalPlayedMs.forEach { (id, v) -> totals[id] = maxOf(totals[id] ?: 0L, v) }
+            lastPlayed.forEach { (id, v) -> lasts[id] = maxOf(lasts[id] ?: 0L, v) }
+
+            val edit = prefs.edit()
+            edit.putString(KEY_LIKES, mergedLikes.joinToString(";"))
+            writeCountsTo(edit, KEY_PLAY_COUNTS, counts)
+            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.toInt() })
+            writeCountsTo(edit, KEY_INCOMPLETE, incomplete)
+            writeLastPlayedTo(edit, lasts)
+            edit.apply()
+
+            cachedLikes = mergedLikes
+            cachedPlayCounts = counts
+            cachedIncomplete = incomplete
+            cachedTotalPlayedMs = totals
+            cachedLastPlayed = lasts
+        }
+        Recommender.invalidate()
+    }
 
     private fun readLikes(): MutableSet<Long> {
         val raw = prefs.getString(KEY_LIKES, null) ?: return mutableSetOf()

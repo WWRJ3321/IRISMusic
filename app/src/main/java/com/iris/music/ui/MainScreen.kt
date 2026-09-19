@@ -137,8 +137,7 @@ fun MainScreen(
     onSearch: (String) -> Unit,
     onSelectFolder: (String?) -> Unit,
     onToggleLike: (Long) -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+    onCyclePlayMode: () -> Unit,
     onToggleSettings: (Boolean) -> Unit,
     onThemeChange: (IrisTheme) -> Unit,
     onModeChange: (IrisMode) -> Unit,
@@ -248,8 +247,7 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                     onSeek = onSeek,
                     onSelect = onSelect,
                     onToggleLike = onToggleLike,
-                    onToggleShuffle = onToggleShuffle,
-                    onCycleRepeat = onCycleRepeat,
+                    onCyclePlayMode = onCyclePlayMode,
                     onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
                     onOpenEqualizer = { showEqualizer = true },
                     onOpenSleepTimer = { showSleepTimer = true },
@@ -295,8 +293,7 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                         onNext = onNext,
                         onSeek = onSeek,
                         onToggleLike = onToggleLike,
-                        onToggleShuffle = onToggleShuffle,
-                        onCycleRepeat = onCycleRepeat,
+                        onCyclePlayMode = onCyclePlayMode,
                         onOpenEqualizer = { showEqualizer = true },
                         onOpenSleepTimer = { showSleepTimer = true },
                         eqActive = eqState.active
@@ -782,7 +779,8 @@ private fun LibraryPage(
                             RecommendationSection(
                                 recommendations = recs,
                                 colors = colors,
-                                onSelect = onPlaySong
+                                onSelect = onPlaySong,
+                                allSongs = state.allSongs
                             )
                         } else {
                             // 后台计算中，显示占位
@@ -1051,8 +1049,7 @@ private fun PlayerPage(
     onNext: () -> Unit,
     onSeek: (Float) -> Unit,
     onToggleLike: (Long) -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+    onCyclePlayMode: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onOpenSleepTimer: () -> Unit,
     /** 均衡器曲线是否非全平，决定副控制行里那枚推子图标点不点亮 */
@@ -1129,8 +1126,7 @@ private fun PlayerPage(
                 onPrev = onPrev,
                 onNext = onNext,
                 onSeek = onSeek,
-                onToggleShuffle = onToggleShuffle,
-                onCycleRepeat = onCycleRepeat,
+                onCyclePlayMode = onCyclePlayMode,
                 onToggleLike = {
                     state.currentSong?.let { onToggleLike(it.id) }
                 },

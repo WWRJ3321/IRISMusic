@@ -56,6 +56,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.window.Dialog
+import com.iris.music.data.Recommender
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.unit.IntOffset
@@ -124,10 +126,14 @@ internal fun formatDuration(ms: Long): String {
 internal fun RecommendationSection(
     recommendations: List<Song>,
     colors: IrisColors,
-    onSelect: (Song) -> Unit
+    onSelect: (Song) -> Unit,
+    /** 全库，用于算"为什么推荐这首"。为空时长按不显示解释。 */
+    allSongs: List<Song> = emptyList()
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
     val scrollState = rememberScrollState()
+    // 长按选中的歌：非空时弹出解释卡
+    var explainSong by remember { mutableStateOf<Song?>(null) }
 
     Column(Modifier.padding(bottom = 8.dp)) {
         Row(
@@ -142,7 +148,7 @@ internal fun RecommendationSection(
                 fontWeight = FontWeight.Black
             )
             Text(
-                "基于偏好",
+                "长按看原因",
                 color = colors.subText,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium
@@ -173,20 +179,124 @@ internal fun RecommendationSection(
                     RecommendCard(
                         song = song,
                         colors = colors,
-                        onClick = { onSelect(song) }
+                        onClick = { onSelect(song) },
+                        onLongClick = if (allSongs.isEmpty()) null else {
+                            { explainSong = song }
+                        }
                     )
                 }
             }
         }
         Spacer(Modifier.height(14.dp))
     }
+
+    explainSong?.let { song ->
+        RecommendExplainDialog(
+            song = song,
+            allSongs = allSongs,
+            colors = colors,
+            onDismiss = { explainSong = null }
+        )
+    }
 }
 
+/**
+ * "为什么是这首"：把打分的贡献因子摊开。
+ *
+ * 推荐原先是个黑盒打分器，用户无从判断该不该信它、更无从知道调"探索度"会发生什么。
+ * 解释直接取自 [Recommender.explain]，与真实排序同源。
+ */
+@Composable
+private fun RecommendExplainDialog(
+    song: Song,
+    allSongs: List<Song>,
+    colors: IrisColors,
+    onDismiss: () -> Unit
+) {
+    val explanation = remember(song.id, allSongs) { Recommender.explain(song, allSongs) }
+    val onSheet = if (colors.isDark) Color.White else Color.Black
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(IrisShape.card)
+                .background(if (colors.isDark) Color(0xFF1E1E26) else Color.White)
+                .padding(20.dp)
+        ) {
+            Text("为什么推荐这首", color = onSheet, fontSize = 15.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "${song.title} · ${song.artist}",
+                color = colors.subText, fontSize = 12.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            if (explanation.factors.isEmpty()) {
+                Text(
+                    if (explanation.isColdStart)
+                        "这是首新歌，还没有任何播放记录，拿的是基准分。想让新歌更容易出现，可以在设置里调高「探索度」。"
+                    else
+                        "这首歌目前只拿基准分，没有明显的加减分因素。",
+                    color = onSheet, fontSize = 13.sp, lineHeight = 20.sp
+                )
+            } else {
+                explanation.factors.forEach { f ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            f.label,
+                            color = onSheet, fontSize = 13.sp,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        // 正贡献用主色、负贡献用柔和红，符号明确写出避免歧义
+                        val pct = (kotlin.math.abs(f.weight) * 100f).toInt()
+                        Text(
+                            (if (f.weight >= 0) "+" else "−") + "$pct%",
+                            color = if (f.weight >= 0) colors.primary else Color(0xFFE2606A),
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                if (explanation.isColdStart) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "新导入的歌只拿基准分，靠「探索度」出头。",
+                        color = colors.subText, fontSize = 11.sp, lineHeight = 17.sp
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth().height(40.dp)
+                    .clip(IrisShape.item)
+                    .background(colors.primary)
+                    .clickable { Haptics.tap(); onDismiss() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("知道了", color = colors.primary.readableTextOn(),
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecommendCard(
     song: Song,
     colors: IrisColors,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /** 长按查看推荐原因；为 null 时只保留点击 */
+    onLongClick: (() -> Unit)? = null
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
 
@@ -194,7 +304,10 @@ private fun RecommendCard(
         Modifier
             .width(120.dp)
             .irisSurface(GlassLevel.CARD, colors, IrisShape.item)
-            .clickable { Haptics.tap(); onClick() }
+            .combinedClickable(
+                onClick = { Haptics.tap(); onClick() },
+                onLongClick = onLongClick?.let { action -> { Haptics.click(); action() } }
+            )
             .padding(10.dp)
     ) {
         // 封面：SongArtwork（异步加载 + HSV 占位 + 音符图标）

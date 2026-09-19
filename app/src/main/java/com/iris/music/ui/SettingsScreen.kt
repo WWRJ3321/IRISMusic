@@ -99,6 +99,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.iris.music.data.DataTransfer
 import com.iris.music.data.MusicFolder
 import com.iris.music.data.LyricLine
 import com.iris.music.data.LyricParser
@@ -714,6 +717,13 @@ internal fun SettingsPanel(
         // ---- 检查更新（opt-in）----
         UpdateCheckSection(colors)
 
+        Spacer(Modifier.height(18.dp))
+
+        // ==================== 我的数据 ====================
+        SectionHeader("我的数据", colors)
+        Spacer(Modifier.height(8.dp))
+        DataTransferSection(colors, state.allSongs)
+
         Spacer(Modifier.height(24.dp))
         } // ===== 结束可滚动内容 =====
 
@@ -745,6 +755,110 @@ private fun SectionHeader(text: String, colors: IrisColors) {
         fontSize = 15.sp,
         fontWeight = FontWeight.Black
     )
+}
+
+/**
+ * 我的数据：导出 / 导入听歌数据（JSON，全程离线）。
+ *
+ * 存在意义是让推荐算法依赖的长期行为数据可以跟着人走——换机、刷机、重装不再清零。
+ * 走 SAF（ACTION_CREATE_DOCUMENT / OpenDocument），因此不需要任何存储写权限。
+ */
+@Composable
+private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var status by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = "正在导出…"
+        scope.launch {
+            val ok = DataTransfer.export(ctx, uri, songs)
+            status = if (ok) "已导出到所选位置" else "导出失败"
+            busy = false
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = "正在导入…"
+        scope.launch {
+            status = when (val r = DataTransfer.import(ctx, uri, songs)) {
+                is DataTransfer.ImportResult.Success -> {
+                    val s = r.summary
+                    "导入完成：匹配 ${s.playedSongs} 首、点赞 ${s.likes}、歌单 ${s.playlists}、听歌记录 ${s.listenDays} 天"
+                }
+                DataTransfer.ImportResult.BadFormat -> "导入失败：文件格式不是 IRIS Music 导出的数据"
+                DataTransfer.ImportResult.Failed -> "导入失败：文件无法读取"
+            }
+            busy = false
+        }
+    }
+
+    Column {
+        Text(
+            "把点赞、播放次数、听歌时长和歌单导出成 JSON 文件，换机或重装后导入即可恢复。" +
+                "导入按曲目匹配并取较大值合并，重复导入不会翻倍。全程本地读写，不联网。",
+            color = colors.subText,
+            fontSize = 12.sp,
+            lineHeight = 18.sp
+        )
+
+        Spacer(Modifier.height(10.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(
+                Modifier
+                    .weight(1f).height(40.dp)
+                    .clip(IrisShape.item)
+                    .background(if (busy) colors.primary.copy(alpha = 0.18f) else colors.primary)
+                    .clickable(enabled = !busy) {
+                        Haptics.tap()
+                        status = ""
+                        exportLauncher.launch(DataTransfer.SUGGESTED_FILE_NAME)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "导出数据",
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    color = if (busy) colors.primary else colors.primary.readableTextOn()
+                )
+            }
+
+            Box(
+                Modifier
+                    .weight(1f).height(40.dp)
+                    .clip(IrisShape.item)
+                    .background(colors.primary.copy(alpha = 0.18f))
+                    .clickable(enabled = !busy) {
+                        Haptics.tap()
+                        status = ""
+                        // 部分机型对 application/json 过滤过严，放宽到任意类型再由解析兜底
+                        importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "导入数据",
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    color = colors.primary
+                )
+            }
+        }
+
+        if (status.isNotBlank()) {
+            Spacer(Modifier.height(10.dp))
+            Text(status, color = colors.subText, fontSize = 12.sp, lineHeight = 18.sp)
+        }
+    }
 }
 
 /**

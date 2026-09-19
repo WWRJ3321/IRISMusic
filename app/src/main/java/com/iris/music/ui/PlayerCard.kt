@@ -73,6 +73,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.iris.music.data.LyricLine
@@ -104,8 +106,7 @@ fun PlayerCard(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Float) -> Unit,
-    onToggleShuffle: () -> Unit,
-    onCycleRepeat: () -> Unit,
+    onCyclePlayMode: () -> Unit,
     onToggleLike: () -> Unit = {},
     liked: Boolean = false,
     onClickArtwork: () -> Unit = {},
@@ -182,6 +183,11 @@ fun PlayerCard(
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
 
+            // 横屏/矮屏下给封面一个高度上限：正方形封面在宽屏上会把整张卡撑出屏幕，
+            // 控制行被挤没。取屏幕高的 46% 封顶，竖屏时该值远大于卡宽、不生效。
+            val screenHeightDp = LocalConfiguration.current.screenHeightDp.dp
+            val coverMaxHeight = screenHeightDp * 0.46f
+
             // 封面：点击显示歌词。
             // 底色不用死黑（0xFF1B1024）：封面解码间隙或无封面文件露出来的就是这块底，
             // 深色底下像"内黑"色块。改成按歌曲路径派生的 HSV 占位色，和歌单行/推荐卡一致。
@@ -190,6 +196,7 @@ fun PlayerCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = coverMaxHeight)
                     .aspectRatio(1f)
                     .coverShake(shake)
                     .clip(IrisShape.item)
@@ -371,9 +378,10 @@ fun PlayerCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(gap)
                     ) {
-                        MiniControlButton(shuffle, onToggleShuffle, btnColor, onCard) { Icon(Icons.Shuffle, null, Modifier.size(20.dp), it) }
-                        // 循环：OFF 灰、ALL 点亮、ONE 点亮且中心加点（三档必须在图标上分得出来）
-                        MiniControlButton(repeatMode != RepeatMode.OFF, onCycleRepeat, btnColor, onCard) { RepeatIcon(repeatMode, it) }
+                        // 播放模式四合一：关 → 随机 → 列表循环 → 单曲循环 → 关
+                        MiniControlButton(shuffle || repeatMode != RepeatMode.OFF, onCyclePlayMode, btnColor, onCard) {
+                            PlayModeIcon(shuffle, repeatMode, it)
+                        }
                         // 点赞：已点赞显示实心爱心（主题色），未点赞空心
                         MiniControlButton(liked, onToggleLike, btnColor, onCard) {
                             Icon(if (liked) Icons.Favorite else Icons.FavoriteBorder, null, Modifier.size(20.dp), it)
@@ -891,21 +899,49 @@ private object Icons {
 }
 
 /**
- * 循环指示：ALL 只点亮图标，ONE 在图标中心叠一个圆点。
+ * 四合一播放模式指示（原 随机+循环 两枚按钮合并后的图标）：
+ * 关 = 灰色随机图标；随机 = 点亮随机；列表循环 = 点亮循环；单曲循环 = 点亮循环 + 中心圆点。
  *
- * 三档模式（关 / 列表循环 / 单曲循环）只靠颜色只能表达两档，
- * 单曲循环必须在图形上有额外标记，否则和列表循环完全一样。
+ * 图标形状表示"当前是哪一档"，颜色深浅表示开/关；随机 ↔ 循环切换时做
+ * 同点旋转淡变（和播放/暂停同款手法），两图标交叉切换不硬切。
  */
 @Composable
-private fun RepeatIcon(mode: RepeatMode, color: Color) {
+private fun PlayModeIcon(shuffle: Boolean, repeatMode: RepeatMode, color: Color) {
     // 单曲圆点：淡入 + 弹性放大，不硬出现
     val oneT by animateFloatAsState(
-        targetValue = if (mode == RepeatMode.ONE) 1f else 0f,
+        targetValue = if (repeatMode == RepeatMode.ONE) 1f else 0f,
         animationSpec = IrisMotion.pressScale(),
-        label = "repeatOneDot"
+        label = "playModeOneDot"
+    )
+    // 随机(0) ↔ 循环(1) 图标翻面过渡
+    val iconT by animateFloatAsState(
+        targetValue = if (shuffle) 0f else 1f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "playModeIconFlip"
     )
     Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-        Icon(Icons.Repeat, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+        Icon(
+            Icons.Shuffle, contentDescription = null, tint = color,
+            modifier = Modifier
+                .size(20.dp)
+                .graphicsLayer {
+                    rotationZ = -90f * iconT
+                    alpha = 1f - iconT
+                    scaleX = 0.85f + 0.15f * (1f - iconT)
+                    scaleY = 0.85f + 0.15f * (1f - iconT)
+                }
+        )
+        Icon(
+            Icons.Repeat, contentDescription = null, tint = color,
+            modifier = Modifier
+                .size(20.dp)
+                .graphicsLayer {
+                    rotationZ = 90f * (1f - iconT)
+                    alpha = iconT
+                    scaleX = 0.85f + 0.15f * iconT
+                    scaleY = 0.85f + 0.15f * iconT
+                }
+        )
         if (oneT > 0.01f) {
             Canvas(
                 Modifier
@@ -915,8 +951,7 @@ private fun RepeatIcon(mode: RepeatMode, color: Color) {
                         scaleX = oneT; scaleY = oneT
                     }
             ) {
-                // 原先写的是裸像素 1.8f，在 3x 屏上只有 0.6dp，肉眼几乎看不见。
-                // 改成 dp 换算，任何密度下都是同样大小的一颗点。
+                // 单曲循环必须在图形上有额外标记，否则和列表循环完全一样
                 drawCircle(
                     color = color,
                     radius = 1.9.dp.toPx(),
