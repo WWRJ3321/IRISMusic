@@ -124,10 +124,13 @@ object DataTransfer {
     }
 
     /**
-     * 设置导出：iris_prefs 整份键值原样打包（主题/材质/明暗/探索度/播放模式/均衡器等全部）。
+     * 设置导出：iris_prefs 整份键值打包（主题/材质/明暗/探索度/播放模式/均衡器等全部）。
      *
-     * 只排除 [EXCLUDED_SETTING_KEYS] 里的行为数据键——它们由 [import] 的取较大值合并路径处理，
-     * 原样写回会把"两边谁大"变成"一边说了算"，重复导入时可能翻倍污染推荐排行。
+     * 每个键存成 {"t": 类型, "v": 值}。**必须带类型标记**：JSON 不区分 Int/Long，
+     * 一个 Long 键若数值不大，读回来会退化成 Integer，用 putInt 写入后 app 端
+     * getLong 会抛 ClassCastException 直接崩溃。带上 t 就能原样还原。
+     *
+     * 只排除 [EXCLUDED_SETTING_KEYS] 里的行为数据键——它们由 [import] 的取较大值合并路径处理。
      * 全量 dump 而不是白名单：以后新增设置项不需要记得来这里同步，自动被带走。
      */
     private fun collectSettings(context: Context): JSONObject {
@@ -135,33 +138,60 @@ object DataTransfer {
         val out = JSONObject()
         prefs.all.forEach { (key, value) ->
             if (key in EXCLUDED_SETTING_KEYS) return@forEach
+            val entry = JSONObject()
             when (value) {
-                null -> {}
-                is Boolean -> out.put(key, value)
-                is Int -> out.put(key, value)
-                is Long -> out.put(key, value)
-                is Float -> out.put(key, value.toDouble())
-                is String -> out.put(key, value)
-                is Set<*> -> out.put(key, JSONArray().apply { value.forEach { put(it) } })
+                null -> return@forEach
+                is Boolean -> entry.put("t", "bool").put("v", value)
+                is Int -> entry.put("t", "int").put("v", value)
+                is Long -> entry.put("t", "long").put("v", value)
+                is Float -> entry.put("t", "float").put("v", value.toDouble())
+                is String -> entry.put("t", "string").put("v", value)
+                is Set<*> -> entry.put("t", "set").put("v", JSONArray().apply { value.forEach { put(it) } })
+                else -> return@forEach
             }
+            out.put(key, entry)
         }
         return out
     }
 
-    /** 设置写回：只覆盖导出文件里出现的键，本机多出的键不动 */
+    /**
+     * 设置写回：只覆盖导出文件里出现的键，本机多出的键不动。
+     * 按导出时记录的类型精确还原，避免 Int/Long 混淆导致 app 读取时崩溃。
+     * 兼容旧格式（值直接是原始类型、无 t/v 包装）。
+     */
     private fun applySettings(context: Context, settings: JSONObject) {
         val prefs = context.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
         val edit = prefs.edit()
         settings.keys().forEach { key ->
-            when (val v = settings.opt(key)) {
+            val raw = settings.opt(key)
+            // 新格式：{t,v}
+            if (raw is JSONObject && raw.has("t")) {
+                when (raw.optString("t")) {
+                    "bool" -> edit.putBoolean(key, raw.optBoolean("v"))
+                    "int" -> edit.putInt(key, raw.optInt("v"))
+                    "long" -> edit.putLong(key, raw.optLong("v"))
+                    "float" -> edit.putFloat(key, raw.optDouble("v").toFloat())
+                    "string" -> edit.putString(key, raw.optString("v"))
+                    "set" -> {
+                        val arr = raw.optJSONArray("v") ?: JSONArray()
+                        edit.putStringSet(key, HashSet<String>().apply {
+                            for (i in 0 until arr.length()) arr.optString(i, "").takeIf { it.isNotEmpty() }?.let { add(it) }
+                        })
+                    }
+                }
+                return@forEach
+            }
+            // 旧格式兼容：值直接是原始类型（无类型标记，尽力而为）
+            when (raw) {
                 null -> {}
-                is Boolean -> edit.putBoolean(key, v)
-                is Int -> edit.putInt(key, v)
-                is Long -> edit.putLong(key, v)
-                is Double -> edit.putFloat(key, v.toFloat())
-                is String -> edit.putString(key, v)
+                is Boolean -> edit.putBoolean(key, raw)
+                // JSON 不分 Int/Long，已知的 Long 键强制 putLong，避免 app 端 getLong 崩溃
+                is Int -> if (key in KNOWN_LONG_KEYS) edit.putLong(key, raw.toLong()) else edit.putInt(key, raw)
+                is Long -> edit.putLong(key, raw)
+                is Double -> edit.putFloat(key, raw.toFloat())
+                is String -> edit.putString(key, raw)
                 is JSONArray -> edit.putStringSet(key, HashSet<String>().apply {
-                    for (i in 0 until v.length()) v.optString(i, "").takeIf { it.isNotEmpty() }?.let { add(it) }
+                    for (i in 0 until raw.length()) raw.optString(i, "").takeIf { it.isNotEmpty() }?.let { add(it) }
                 })
             }
         }
@@ -171,6 +201,12 @@ object DataTransfer {
     /** 行为数据键：导入时走 [PlayHistory.mergeImported] 精细合并，不走设置原样恢复 */
     private val EXCLUDED_SETTING_KEYS = setOf(
         "play_counts", "skip_counts", "last_played", "likes", "total_played_ms", "incomplete_counts"
+    )
+
+    /** 旧格式导入兼容：这些键在 app 里用 getLong 读，JSON 里退化成 Int 时要强制 putLong，否则崩溃 */
+    private val KNOWN_LONG_KEYS = setOf(
+        "fade_ms", "custom_primary", "custom_secondary",
+        "active_playlist_id", "last_song_id", "last_position_ms"
     )
 
     /** 写出到用户选定的 Uri（SAF）。IO 线程执行。 */
