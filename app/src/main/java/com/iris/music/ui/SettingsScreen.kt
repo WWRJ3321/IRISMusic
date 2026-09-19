@@ -96,6 +96,8 @@ import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
 import com.iris.music.playback.FloatingLyric
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import com.iris.music.data.MusicFolder
 import com.iris.music.data.LyricLine
@@ -104,6 +106,7 @@ import com.iris.music.data.RepeatMode
 import com.iris.music.data.Playlist
 import com.iris.music.data.Playlists
 import com.iris.music.data.Song
+import com.iris.music.data.UpdateChecker
 import com.iris.music.data.formatLabel
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
@@ -705,6 +708,12 @@ internal fun SettingsPanel(
             fontSize = 12.sp,
             lineHeight = 18.sp
         )
+
+        Spacer(Modifier.height(14.dp))
+
+        // ---- 检查更新（opt-in）----
+        UpdateCheckSection(colors)
+
         Spacer(Modifier.height(24.dp))
         } // ===== 结束可滚动内容 =====
 
@@ -736,6 +745,113 @@ private fun SectionHeader(text: String, colors: IrisColors) {
         fontSize = 15.sp,
         fontWeight = FontWeight.Black
     )
+}
+
+/**
+ * 检查更新（opt-in）：开关默认关；关闭时完全不碰网络。
+ * 开启后显示「检查更新」按钮，手动点按才发起一次 GitHub API GET，
+ * 结果三态：已是最新 / 发现新版本（点击跳转 release 页）/ 检查失败。
+ */
+@Composable
+private fun UpdateCheckSection(colors: IrisColors) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val prefs = ctx.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
+
+    var enabled by remember { mutableStateOf(prefs.getBoolean(UpdateChecker.KEY_ENABLED, false)) }
+    var checking by remember { mutableStateOf(false) }
+    var statusText by remember { mutableStateOf("") }
+    var newTag by remember { mutableStateOf<String?>(null) }
+
+    Column {
+        SettingToggleRow(
+            "检查更新",
+            enabled,
+            colors,
+            subtitle = "开启后可手动检查 GitHub 上的新版本，仅此访问网络"
+        ) {
+            enabled = !enabled
+            prefs.edit().putBoolean(UpdateChecker.KEY_ENABLED, enabled).apply()
+            if (!enabled) {
+                // 关闭时清掉结果残留
+                statusText = ""
+                newTag = null
+            }
+        }
+
+        AnimatedVisibility(
+            visible = enabled,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(Modifier.padding(top = 10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // 检查按钮：主色，与设置页其它按钮同构
+                    Box(
+                        Modifier
+                            .weight(1f).height(40.dp)
+                            .clip(IrisShape.item)
+                            .background(if (checking) colors.primary.copy(alpha = 0.18f) else colors.primary)
+                            .clickable(enabled = !checking) {
+                                Haptics.tap()
+                                checking = true
+                                statusText = "正在检查…"
+                                newTag = null
+                                scope.launch {
+                                    when (val r = UpdateChecker.check()) {
+                                        is UpdateChecker.Result.NewVersion -> {
+                                            newTag = r.tag
+                                            statusText = "发现新版本 ${r.tag}"
+                                        }
+                                        UpdateChecker.Result.UpToDate -> statusText = "已是最新版本"
+                                        UpdateChecker.Result.Failed -> statusText = "检查失败：网络不可用或稍后再试"
+                                    }
+                                    checking = false
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (checking) "检查中…" else "检查更新",
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = if (checking) colors.primary else colors.primary.readableTextOn()
+                        )
+                    }
+                }
+
+                if (statusText.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        statusText,
+                        color = colors.subText, fontSize = 12.sp,
+                        fontWeight = if (newTag != null) FontWeight.Bold else FontWeight.Normal
+                    )
+                    // 发现新版本时给个跳转 release 页的入口
+                    if (newTag != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            Modifier
+                                .fillMaxWidth().height(40.dp)
+                                .clip(IrisShape.item)
+                                .background(colors.primary.copy(alpha = 0.18f))
+                                .clickable {
+                                    Haptics.tap()
+                                    ctx.startActivity(
+                                        Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse("https://github.com/WWRJ3321/IRISMusic/releases/latest")
+                                        )
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("前往下载", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
