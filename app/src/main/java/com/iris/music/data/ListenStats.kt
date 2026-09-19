@@ -205,6 +205,67 @@ object ListenStats {
         }
     }
 
+    // ==================== 导出 / 导入 ====================
+
+    /** 导出用：天 → (曲目 → 毫秒)。复用 [load] 的聚合结果，避免重复解析逻辑。 */
+    fun exportRows(): Map<Long, Map<Long, Long>> {
+        val out = HashMap<Long, MutableMap<Long, Long>>()
+        load().forEach { e ->
+            out.getOrPut(e.day) { HashMap() }[e.songId] = e.ms
+        }
+        return out
+    }
+
+    /**
+     * 合并导入的听歌明细，返回受影响的天数。
+     *
+     * 同一 (天, 曲目) 取较大值而非相加，保证重复导入同一份文件是幂等的。
+     * 合并后整文件重写（而非 append），这样导入不会在日志里留下会被再次累加的碎行。
+     */
+    fun mergeImported(rows: Map<Long, Map<Long, Long>>): Int {
+        if (rows.isEmpty()) return 0
+        val f = file ?: return 0
+        synchronized(lock) {
+            flushLocked()
+            // 先读现有聚合
+            val agg = HashMap<Long, HashMap<Long, Long>>()
+            if (f.exists()) {
+                runCatching {
+                    f.forEachLine { line ->
+                        val c1 = line.indexOf(',')
+                        if (c1 <= 0) return@forEachLine
+                        val c2 = line.indexOf(',', c1 + 1)
+                        if (c2 <= c1) return@forEachLine
+                        val day = line.substring(0, c1).toLongOrNull() ?: return@forEachLine
+                        val id = line.substring(c1 + 1, c2).toLongOrNull() ?: return@forEachLine
+                        val ms = line.substring(c2 + 1).trim().toLongOrNull() ?: return@forEachLine
+                        if (ms <= 0L) return@forEachLine
+                        val bySong = agg.getOrPut(day) { HashMap() }
+                        bySong[id] = (bySong[id] ?: 0L) + ms
+                    }
+                }
+            }
+            rows.forEach { (day, bySong) ->
+                val target = agg.getOrPut(day) { HashMap() }
+                bySong.forEach { (id, ms) ->
+                    if (ms > 0L) target[id] = maxOf(target[id] ?: 0L, ms)
+                }
+            }
+            val cutoff = todayEpochDay() - KEEP_DAYS
+            val sb = StringBuilder()
+            var days = 0
+            agg.forEach { (day, bySong) ->
+                if (day < cutoff) return@forEach
+                days++
+                bySong.forEach { (id, ms) ->
+                    sb.append(day).append(',').append(id).append(',').append(ms).append('\n')
+                }
+            }
+            runCatching { f.writeText(sb.toString()) }
+            return days
+        }
+    }
+
     // ==================== 日期换算 ====================
 
     /** 今天是第几天（本地时区，1970-01-01 = 0） */

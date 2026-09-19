@@ -86,7 +86,7 @@ data class PlayerUiState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val shuffle: Boolean = false,
-    val repeatMode: RepeatMode = RepeatMode.ALL,
+    val repeatMode: RepeatMode = RepeatMode.OFF,
     val theme: IrisTheme = IrisTheme.MONO,
     val mode: IrisMode = IrisMode.LIGHT,
     val systemDark: Boolean = false,
@@ -457,6 +457,35 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         prefs.edit().putString(KEY_REPEAT, next.name).apply()
         _state.value = _state.value.copy(repeatMode = next)
+        applyPlaybackModes()
+    }
+
+    /**
+     * 播放模式四档循环（播放页副控制行的合并按钮）：
+     * 关 → 随机 → 列表循环 → 单曲循环 → 关。
+     *
+     * 随机与循环底层仍是两个正交状态（shuffle / repeatMode，各自持久化到
+     * 原有 key，旧版本数据无缝兼容）；这里只是按"一枚按钮"的心智模型切换。
+     * 旧数据里可能存在「随机+循环」同时开的组合（两枚按钮时代的合法状态），
+     * 随机视为主导，第一次点击直接落回「列表循环」档归一。
+     */
+    fun cyclePlayMode() {
+        val s = _state.value
+        val (nextShuffle, nextRepeat) = when {
+            s.shuffle -> false to RepeatMode.ALL                       // 随机（含旧组合）→ 列表循环
+            s.repeatMode == RepeatMode.OFF -> true to RepeatMode.OFF   // 关 → 随机
+            s.repeatMode == RepeatMode.ALL -> false to RepeatMode.ONE  // 列表循环 → 单曲循环
+            else -> false to RepeatMode.OFF                            // 单曲循环 → 关
+        }
+        prefs.edit()
+            .putBoolean(KEY_SHUFFLE, nextShuffle)
+            .putString(KEY_REPEAT, nextRepeat.name)
+            .apply()
+        _state.value = s.copy(shuffle = nextShuffle, repeatMode = nextRepeat)
+        if (nextShuffle != s.shuffle) {
+            // 开随机：偏好加权洗牌（当前歌保持在首位续播）；关随机：恢复原排序
+            if (nextShuffle) shuffleQueueByPreference() else applyFilters(resetToFirst = false)
+        }
         applyPlaybackModes()
     }
 
@@ -1302,8 +1331,8 @@ private fun refreshSystemDark() {
 
     /** 循环模式：其它开关都持久化了，这两个原先是漏的，重启会回到默认 */
     private fun readRepeatMode(): RepeatMode =
-        runCatching { RepeatMode.valueOf(prefs.getString(KEY_REPEAT, RepeatMode.ALL.name)!!) }
-            .getOrDefault(RepeatMode.ALL)
+        runCatching { RepeatMode.valueOf(prefs.getString(KEY_REPEAT, RepeatMode.OFF.name)!!) }
+            .getOrDefault(RepeatMode.OFF)
 
     private fun saveSelectedFolders(sets: Set<String>) {
         prefs.edit().putString(KEY_SELECTED_FOLDERS, sets.joinToString(",")).apply()

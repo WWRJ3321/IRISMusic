@@ -38,7 +38,7 @@ IRIS Music 的**自有源代码**在 **GNU General Public License version 3**（
 
 ## 5. 隐私声明 / Privacy
 
-IRIS Music **默认不联网**，不含账号系统、不含广告、不含任何遥测/埋点/数据上报。你的歌单、收藏、统计等数据全部仅保存在你的本机。
+IRIS Music **默认不联网**，不含账号系统、不含广告、不含任何遥测/埋点/数据上报。你的歌单、收藏、统计等数据全部仅保存在你的本机，导出/导入数据也全程本地读写。
 
 唯一例外：**「检查更新」**（设置 → 关于，默认关闭）——开启并手动点击「检查更新」时，应用会发起一次到 `api.github.com/repos/WWRJ3321/IRISMusic/releases/latest` 的单向 HTTP GET（只读取最新版本号用于本地比较），不上传任何数据、不发送设备信息。关闭开关后应用完全不访问网络。详见 `AndroidManifest.xml` 中 `INTERNET` 权限的注释。
 

@@ -49,6 +49,17 @@ object Recommender {
     @Volatile private var cachedScores: Pair<Int, Map<Long, Float>>? = null
 
     /**
+     * 让偏好分缓存失效。
+     *
+     * 缓存键只看 allSongs 的对象身份，而点赞/播放记录改变时这个列表对象并不会换新——
+     * 不显式失效的话 [getOrCreateScores] 会一直命中旧分数，表现为"点赞了但推荐没变"。
+     * 因此任何写入 [PlayHistory] 的行为之后都必须调用本函数。
+     */
+    fun invalidate() {
+        cachedScores = null
+    }
+
+    /**
      * @param exploration 随机档位 0-1（0=纯偏好，1=纯随机）
      */
     fun recommend(
@@ -176,6 +187,65 @@ object Recommender {
             if (liked == 0) null else artist to liked.toFloat() / artistSongs.size
         }.toMap()
     }
+
+    // ==================== 可解释性 ====================
+
+    /**
+     * 拆出某首歌得分的构成，供"为什么推荐这首"卡片展示。
+     *
+     * 与 [preferenceScores] 用同一套输入和同样的算式——不另写一份近似逻辑，
+     * 否则解释和真实排序迟早会对不上，那比没有解释更糟。
+     */
+    fun explain(song: Song, allSongs: List<Song>): Explanation {
+        val playCounts = PlayHistory.getPlayCounts()
+        val totalPlayedMs = PlayHistory.getTotalPlayedMs()
+        val incompleteCounts = PlayHistory.getIncompleteCounts()
+        val likes = PlayHistory.getLikes()
+        val lastPlayed = PlayHistory.getLastPlayed()
+
+        val factors = mutableListOf<Factor>()
+
+        val liked = song.id in likes
+        if (liked) factors.add(Factor("你点赞过这首", 0.5f))
+
+        rankBoost(allSongs, playCounts)[song.id]?.takeIf { it > 0.001f }?.let {
+            factors.add(Factor("播放次数排名靠前（${playCounts[song.id] ?: 0} 次）", it))
+        }
+        rankBoost(allSongs, totalPlayedMs)[song.id]?.takeIf { it > 0.001f }?.let {
+            val minutes = ((totalPlayedMs[song.id] ?: 0L) / 60_000L).toInt()
+            factors.add(Factor("累计听了较久（约 $minutes 分钟）", it))
+        }
+        buildArtistLikeRatio(allSongs, likes)[song.artist]?.takeIf { it > 0f }?.let {
+            factors.add(Factor("你常点赞 ${song.artist} 的歌", it * 0.10f))
+        }
+        rankPenalty(allSongs, incompleteCounts)[song.id]?.takeIf { it > 0.001f }?.let {
+            factors.add(Factor("经常没听完就切走（${incompleteCounts[song.id] ?: 0} 次）", -it))
+        }
+
+        val last = lastPlayed[song.id]
+        val recent = last != null && System.currentTimeMillis() - last < RECENT_WINDOW_MS
+        if (recent) factors.add(Factor("最近一小时刚听过，暂时降权", -0.9f))
+
+        val isNew = song.id !in playCounts && song.id !in lastPlayed && !liked
+        return Explanation(
+            score = getOrCreateScores(allSongs)[song.id] ?: 1f,
+            isColdStart = isNew,
+            factors = factors.sortedByDescending { kotlin.math.abs(it.weight) }
+        )
+    }
+
+    /** 单条贡献因子。weight 为正表示加分、负表示减分（已折算到最终分的增量口径） */
+    data class Factor(val label: String, val weight: Float)
+
+    /**
+     * @param isColdStart 新导入且无任何行为记录：这类歌只拿基准分 1.0，
+     *   既不会被历史压住，也不会凭空加分；提高探索度可以让它们更容易出现。
+     */
+    data class Explanation(
+        val score: Float,
+        val isColdStart: Boolean,
+        val factors: List<Factor>
+    )
 }
 
 data class RecommendItem(val song: Song, val score: Float)

@@ -1,7 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// 正式签名凭据：从项目根的 keystore.properties 读取（该文件与 .jks 都不入库）。
+// 缺失时回落 debug 签名，保证别人 clone 下来仍能编译出可安装的包。
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { stream -> load(stream) }
+}
+val releaseStoreFile = keystoreProps.getProperty("storeFile")
+val hasReleaseKeystore = releaseStoreFile != null && rootProject.file(releaseStoreFile).exists()
 
 android {
     namespace = "com.iris.music"
@@ -17,12 +28,26 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.iris.music"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3680
-        versionName = "3.6.8"
+        versionCode = 3700
+        versionName = "3.7.0Beta"
 
         // 只保留中英文资源，去掉其它语言的 Compose/AndroidX 字符串，减小体积
         resourceConfigurations += listOf("en", "zh")
@@ -36,7 +61,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
         debug {
             isMinifyEnabled = false
