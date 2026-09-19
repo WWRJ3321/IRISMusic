@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.audio
 
 import android.content.Context
@@ -64,9 +63,16 @@ object BassHaptics {
     var pulseMs: Int = 20
         private set
 
-    /** 触发灵敏度 1-10：越大起拍阈值越低，越容易触发。默认 5（对应原 ONSET_DELTA 0.18） */
+    /** 触发灵敏度 1-10：越大起拍阈值越低，越容易触发。默认 5（对应原 ONSET_DELTA 0.18）。自适应下作为基准 */
     @Volatile
     var sensitivity: Int = 5
+        private set
+
+    /** 自适应：开启后单次震动时长与触发灵敏度跟随音乐实时变化，忽略手动档位 */
+    const val KEY_ADAPTIVE = "bass_haptics_adaptive"
+
+    @Volatile
+    var adaptive: Boolean = false
         private set
 
     /** 触发地板：瞬时低频能量至少这么高，连背景低噪都不到就不值得震 */
@@ -106,6 +112,7 @@ object BassHaptics {
     private const val BG_TICKS = 100
 
     private var bgSum = 0f
+    private var bgSumSq = 0f
     private var bgCount = 0
     private val bgWindow = FloatArray(BG_TICKS)
     private var bgIndex = 0
@@ -116,6 +123,7 @@ object BassHaptics {
         intensity = prefs.getInt(KEY_INTENSITY, 1).coerceIn(0, 2)
         pulseMs = prefs.getInt(KEY_PULSE_MS, 20).coerceIn(1, 30)
         sensitivity = prefs.getInt(KEY_SENSITIVITY, 5).coerceIn(1, 10)
+        adaptive = prefs.getBoolean(KEY_ADAPTIVE, false)
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)
                 ?.defaultVibrator
@@ -147,6 +155,11 @@ object BassHaptics {
         sensitivity = level.coerceIn(1, 10)
     }
 
+    /** 自适应开关：时长/灵敏度跟随音乐实时变化 */
+    fun setAdaptive(value: Boolean) {
+        adaptive = value
+    }
+
     /** 选档预览：立刻用该档位波形震一下，让用户直接感受 */
     fun preview(level: Int) {
         val v = vibrator ?: return
@@ -159,15 +172,17 @@ object BassHaptics {
      * 不用系统预定义 EFFECT_*：部分厂商 ROM 对 TICK/CLICK/HEAVY_CLICK 的映射
      * 是非标准的（实测有轻档反而更重的机器），自己拼才保证档位与手感一致。
      */
-    private fun firePulse(v: Vibrator, level: Int = intensity) {
-        // 幅度按档位：轻点 60 / 标准 150 / 重击 255
-        val amp = when (level) {
+    private fun firePulse(v: Vibrator, level: Int = intensity, durationMs: Int = pulseMs, ampFactor: Float = 1f) {
+        // 档位基础幅度：轻点 60 / 标准 150 / 重击 255
+        val base = when (level) {
             0 -> 60
             1 -> 150
             else -> 255
         }
-        // 时长由用户滑条决定（1-30ms）
-        val ms = pulseMs.toLong()
+        // 自适应下 ampFactor<1 让弱拍更轻、强拍保持档位满幅 → 震感跟随鼓点强弱
+        val amp = (base * ampFactor.coerceIn(0f, 1f)).toInt().coerceAtLeast(40).coerceAtMost(255)
+        // 时长：手动模式用 pulseMs；自适应模式由调用方传入实时映射后的值
+        val ms = durationMs.coerceIn(1, 30).toLong()
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && v.hasAmplitudeControl()) {
                 v.vibrate(VibrationEffect.createOneShot(ms, amp))
@@ -191,6 +206,7 @@ object BassHaptics {
         envelope = 0f
         armed = true
         bgSum = 0f
+        bgSumSq = 0f
         bgCount = 0
         bgIndex = 0
         java.util.Arrays.fill(bgWindow, 0f)
@@ -211,19 +227,27 @@ object BassHaptics {
 
             val level = SpectrumAnalyzer.beatLevel
 
-            // ---- 背景基线：2 秒滑动均值 ----
+            // ---- 背景基线：2 秒滑动均值 + 标准差 ----
             // 满窗前用累积均值，避免开头的基线抖动
             if (bgCount < BG_TICKS) {
                 bgWindow[bgCount] = level
                 bgSum += level
+                bgSumSq += level * level
                 bgCount++
             } else {
-                bgSum -= bgWindow[bgIndex]
+                val old = bgWindow[bgIndex]
+                bgSum -= old
+                bgSumSq -= old * old
                 bgWindow[bgIndex] = level
                 bgSum += level
+                bgSumSq += level * level
                 bgIndex = (bgIndex + 1) % BG_TICKS
             }
+            val n = if (bgCount > 0) bgCount else 1
             val background = if (bgCount > 0) bgSum / bgCount else level
+            // 背景标准差 = 歌曲近期起伏程度（鼓点/旋律的动态大小）
+            val variance = (bgSumSq / n - background * background).coerceAtLeast(0f)
+            val spread = kotlin.math.sqrt(variance)
 
             // ---- 差分 + 起拍检测 ----
             // d：归一化差分。持续强低音时 background 被顶上去，d 归零不触发；
@@ -233,15 +257,34 @@ object BassHaptics {
             envelope += (d - envelope) * k
 
             if (armed) {
-                // 灵敏度 1-10 → 起拍阈值：10 级最灵敏（0.06），1 级最迟钝（0.34），5 级=0.18（原调优值）
-                val onsetDelta = 0.34f - (sensitivity - 1) * 0.0311f
+                // 灵敏度→起拍阈值：10 级最灵敏（0.06），1 级最迟钝（0.34），5 级=0.18（原调优值）
+                var sens = sensitivity
+                if (adaptive) {
+                    // 自适应灵敏度：以用户档位为基准，按歌曲起伏（背景标准差）上下浮动。
+                    // 不再单独由 spread 定档——beatLevel 是窄平台，spread 普遍很小，
+                    // 旧公式把灵敏度压到 2-3，触发比手动还少 → "感觉没自适应"。
+                    val bump = (spread / 0.03f).coerceIn(0f, 1f) * 2f
+                    sens = (sensitivity - 1 + bump).toInt().coerceIn(1, 10)
+                }
+                val onsetDelta = 0.34f - (sens - 1) * 0.0311f
                 if (level >= TRIGGER && (d - envelope) >= onsetDelta) {
                     val now = android.os.SystemClock.uptimeMillis()
                     if (now - lastPulseAt >= MIN_INTERVAL_MS) {
                         lastPulseAt = now
                         armed = false
-                        // 系统预定义波形：与按钮点击同一套手感（详见 firePulse）
-                        firePulse(v)
+                        if (adaptive) {
+                            // 力度→tanh 软饱和：raw 越大越逼近 1 但永不硬顶，消除"到极限啪一下钉死"的撞墙感。
+                            // raw=0→0，1→0.76，2→0.96，斜率渐趋 0，强拍收得柔顺。
+                            val raw = (d - envelope - onsetDelta) / 0.20f
+                            val strength = kotlin.math.tanh(raw)
+                            // 时长 4..26ms：基准比旧版高，弱拍 4ms、满力 26ms
+                            val dur = (4 + strength * 22f).toInt()
+                            // 幅度系数 0.4..1：强拍满幅、弱拍明显更轻——这是最可感知的自适应
+                            val amp = 0.4f + 0.6f * strength
+                            firePulse(v, intensity, dur, amp)
+                        } else {
+                            firePulse(v)
+                        }
                     }
                 }
             } else if (d <= envelope + REARM_DELTA) {

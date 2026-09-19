@@ -53,7 +53,7 @@ IRIS Music 是个**个人项目**：没有团队、没有 KPI，也不商业化�
 
 ## 📥 安装
 
-去 **[Releases](releases/latest)** 下载 `IRISMusic-v3.3.0-arm64-v8a.apk`（绝大多数近几年的手机，arm64），直接安装。
+去 **[Releases](releases/latest)** 下载 `IRISMusic-v3.6.7-arm64-v8a.apk`（绝大多数近几年的手机，arm64），直接安装。
 
 首次打开授予「读取音频」权限即可；若要用悬浮歌词，需在系统设置里手动授予「显示在其他应用上层」。
 

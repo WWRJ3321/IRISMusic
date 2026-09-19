@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.ui
 
 import com.iris.music.BuildConfig
@@ -143,10 +142,13 @@ internal fun SettingsPanel(
     onShowRecsChange: (Boolean) -> Unit,
     onJellyAnimChange: (Boolean) -> Unit,
     onSilenceSkipChange: (Boolean) -> Unit,
+    onPhysicsFxChange: (Boolean) -> Unit,
+    onCoverLyricChange: (Boolean) -> Unit,
     onBassHapticsChange: (Boolean) -> Unit,
     onBassHapticsIntensityChange: (Int) -> Unit,
     onBassHapticsPulseMsChange: (Int) -> Unit,
     onBassHapticsSensitivityChange: (Int) -> Unit,
+    onBassHapticsAdaptiveChange: (Boolean) -> Unit,
     onCustomColorsChange: (Long, Long) -> Unit,
     onPickBackground: () -> Unit,
     onClearBackground: () -> Unit,
@@ -174,8 +176,12 @@ internal fun SettingsPanel(
         Text("设置", color = colors.text, fontSize = 20.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(16.dp))
 
+        // ==================== 外观 ====================
+        SectionHeader("外观", colors)
+        Spacer(Modifier.height(10.dp))
+
         // ---- 明暗模式 ----
-        Text("外观", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text("明暗模式", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ModeSwatch("深色", state.mode == IrisMode.DARK, colors,
@@ -396,7 +402,7 @@ internal fun SettingsPanel(
                 IrisLayout.LIST -> "纵向排布：歌单列表 + 右滑播放页，原有结构"
                 IrisLayout.CAROUSEL -> "横向排布：只剩播放卡片，左右滑动翻歌"
                 IrisLayout.STACK -> "堆叠排布：卡片叠成一沓，把最上面那张拖走切歌"
-                IrisLayout.COMPACT -> "唱片墙：正方形/长方形磁贴组成画布，可自由拖动探索"
+                IrisLayout.COMPACT -> "海报墙：正方形/长方形磁贴组成画布，可自由拖动探索"
             },
             color = colors.subText, fontSize = 11.sp
         )
@@ -443,19 +449,12 @@ internal fun SettingsPanel(
             }
         }
 
+        Spacer(Modifier.height(18.dp))
+
+        // ==================== 播放 ====================
+        SectionHeader("播放", colors)
         Spacer(Modifier.height(14.dp))
 
-        // ---- 触感反馈 ----
-        SettingToggleRow(
-            "触感反馈",
-            state.hapticsEnabled,
-            colors,
-            subtitle = "按键、切歌、拖动滚动条时轻微震动"
-        ) { onHapticsChange(!state.hapticsEnabled) }
-
-        Spacer(Modifier.height(14.dp))
-
-        // ---- 渐入渐出 ----
         SettingToggleRow(
             "音乐渐入渐出",
             state.fadeEnabled,
@@ -485,7 +484,7 @@ internal fun SettingsPanel(
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(10.dp))
 
         // ---- 无声略过（beta） ----
         SettingToggleRow(
@@ -495,7 +494,59 @@ internal fun SettingsPanel(
             subtitle = "自动跳过歌曲开头和结尾没有声音的部分"
         ) { onSilenceSkipChange(!state.silenceSkip) }
 
+        Spacer(Modifier.height(18.dp))
+
+        // ==================== 歌词 ====================
+        SectionHeader("歌词", colors)
         Spacer(Modifier.height(14.dp))
+
+        SettingToggleRow(
+            "封面歌词",
+            state.coverLyric,
+            colors,
+            subtitle = "封面左下角单行歌词，换句时模糊渐隐渐出"
+        ) { onCoverLyricChange(!state.coverLyric) }
+
+        Spacer(Modifier.height(14.dp))
+
+        // ---- 悬浮歌词 ----
+        FloatingLyricSection(colors, headerColor)
+
+        Spacer(Modifier.height(18.dp))
+
+        // ==================== 动效与反馈 ====================
+        SectionHeader("动效与反馈", colors)
+        Spacer(Modifier.height(14.dp))
+
+        // ---- 触感反馈 ----
+        SettingToggleRow(
+            "触感反馈",
+            state.hapticsEnabled,
+            colors,
+            subtitle = "按键、切歌、拖动滚动条时轻微震动"
+        ) { onHapticsChange(!state.hapticsEnabled) }
+
+        Spacer(Modifier.height(10.dp))
+
+        // ---- 物理动效 ----
+        SettingToggleRow(
+            "物理动效 beta",
+            state.tiltSpectrum || state.coverShake,
+            colors,
+            subtitle = "倾斜频谱 + 摇动封面，传感器驱动"
+        ) { onPhysicsFxChange(!(state.tiltSpectrum || state.coverShake)) }
+
+        Spacer(Modifier.height(10.dp))
+
+        // ---- 果冻动效 ----
+        SettingToggleRow(
+            "果冻动效",
+            state.jellyAnim,
+            colors,
+            subtitle = "全局弹性动画：按钮、开关、卡片回弹带果冻感"
+        ) { onJellyAnimChange(!state.jellyAnim) }
+
+        Spacer(Modifier.height(10.dp))
 
         // ---- 低音马达震动（beta） ----
         SettingToggleRow(
@@ -525,39 +576,67 @@ internal fun SettingsPanel(
 
                 Spacer(Modifier.height(10.dp))
 
-                // 单次震动时长：1-30ms
-                Text(
-                    "单次震动时长 · ${state.bassHapticsPulseMs} 毫秒",
-                    color = colors.subText, fontSize = 11.sp
-                )
-                CompactSlider(
-                    value = state.bassHapticsPulseMs.toFloat(),
-                    onValueChange = { onBassHapticsPulseMsChange(it.toInt()) },
-                    onValueChangeFinished = { BassHaptics.preview(state.bassHapticsIntensity) },
-                    valueRange = 1f..30f,
-                    steps = 28,
-                    activeColor = colors.primary,
-                    inactiveColor = colors.surface
-                )
+                // 自适应：震动时长与触发灵敏度跟随音乐旋律实时变化，开启后手动档位无效
+                Spacer(Modifier.height(4.dp))
+                SettingToggleRow(
+                    "自适应旋律",
+                    state.bassHapticsAdaptive,
+                    colors,
+                    subtitle = "鼓点越猛震得越久，歌曲起伏自动调节灵敏度"
+                ) { onBassHapticsAdaptiveChange(!state.bassHapticsAdaptive) }
 
-                Spacer(Modifier.height(10.dp))
+                // 手动档位仅在「自适应」关闭时显示
+                AnimatedVisibility(
+                    visible = !state.bassHapticsAdaptive,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Column {
+                        Spacer(Modifier.height(10.dp))
 
-                // 触发灵敏度：1-10，越大越容易跟随鼓点
-                Text(
-                    "触发灵敏度 · ${state.bassHapticsSensitivity} 级",
-                    color = colors.subText, fontSize = 11.sp
-                )
-                CompactSlider(
-                    value = state.bassHapticsSensitivity.toFloat(),
-                    onValueChange = { onBassHapticsSensitivityChange(it.toInt()) },
-                    valueRange = 1f..10f,
-                    steps = 8,
-                    activeColor = colors.primary,
-                    inactiveColor = colors.surface
-                )
+                        // 单次震动时长：三档（短/中/长 = 8/20/30ms），按钮替代滑条——
+                        // 底部滑条手势竞争太强调不动，改成点选一档最稳。
+                        Text("单次震动时长", color = colors.subText, fontSize = 11.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val dur = state.bassHapticsPulseMs
+                            ModeSwatch("短", dur <= 12, colors,
+                                modifier = Modifier.weight(1f)) {
+                                onBassHapticsPulseMsChange(8); BassHaptics.preview(state.bassHapticsIntensity)
+                            }
+                            ModeSwatch("中", dur > 12 && dur < 25, colors,
+                                modifier = Modifier.weight(1f)) {
+                                onBassHapticsPulseMsChange(20); BassHaptics.preview(state.bassHapticsIntensity)
+                            }
+                            ModeSwatch("长", dur >= 25, colors,
+                                modifier = Modifier.weight(1f)) {
+                                onBassHapticsPulseMsChange(30); BassHaptics.preview(state.bassHapticsIntensity)
+                            }
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+
+                        // 触发灵敏度：三档（低/中/高）。越大越容易跟随鼓点。
+                        Text("触发灵敏度", color = colors.subText, fontSize = 11.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val sens = state.bassHapticsSensitivity
+                            ModeSwatch("低", sens <= 3, colors,
+                                modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(3) }
+                            ModeSwatch("中", sens > 3 && sens < 7, colors,
+                                modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(5) }
+                            ModeSwatch("高", sens >= 7, colors,
+                                modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(8) }
+                        }
+                    }
+                }
             }
         }
 
+        Spacer(Modifier.height(18.dp))
+
+        // ==================== 推荐 ====================
+        SectionHeader("推荐", colors)
         Spacer(Modifier.height(14.dp))
 
         // ---- 推荐探索度 ----
@@ -587,21 +666,11 @@ internal fun SettingsPanel(
             subtitle = "关闭后歌单页只显示歌曲列表"
         ) { onShowRecsChange(!state.showRecommendations) }
 
-        Spacer(Modifier.height(10.dp))
-
-        SettingToggleRow(
-            "果冻动效",
-            state.jellyAnim,
-            colors,
-            subtitle = "全局弹性动画：按钮、开关、卡片回弹带果冻感"
-        ) { onJellyAnimChange(!state.jellyAnim) }
-
-        Spacer(Modifier.height(14.dp))
-
-        // ---- 悬浮歌词 ----
-        FloatingLyricSection(colors, headerColor)
-
         Spacer(Modifier.height(18.dp))
+
+        // ==================== 数据 ====================
+        SectionHeader("数据", colors)
+        Spacer(Modifier.height(14.dp))
 
         // ---- 文件夹 ----
         Text("音乐文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -627,8 +696,8 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
-        // ---- 关于 ----
-        Text("关于", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        // ==================== 关于 ====================
+        SectionHeader("关于", colors)
         Spacer(Modifier.height(8.dp))
         Text(
             "IRIS Music v${BuildConfig.VERSION_NAME}\n本地音乐播放器\nKotlin + Jetpack Compose 构建",
@@ -656,6 +725,17 @@ internal fun SettingsPanel(
         }
         Spacer(Modifier.height(18.dp))
     }
+}
+
+/** 一级分组标题：醒目、中性（用主文字色），与彩色子项标题区分开层级。 */
+@Composable
+private fun SectionHeader(text: String, colors: IrisColors) {
+    Text(
+        text,
+        color = colors.text,
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Black
+    )
 }
 
 /**

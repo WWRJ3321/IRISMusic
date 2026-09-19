@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.ui
 
 import androidx.compose.foundation.Canvas
@@ -83,7 +82,11 @@ fun CompactSlider(
     Box(
         modifier
             .fillMaxWidth()
-            .height(16.dp)
+            // 触摸命中区加高到 36dp（约一指宽），视觉轨道仍是下方居中绘制的 16dp 细胶囊。
+            // 底部滑条（低音时长/灵敏度）夹在 verticalScroll 末尾 + AnimatedVisibility 内，
+            // 手指按下带的竖直漂移会撞上列表滚动/底部过滚；命中区太小就"按住拖不动"。
+            // 加高命中区后落点容错大幅提升，Initial pass 消费 + 大命中区 = 稳拖。
+            .height(36.dp)
             .pointerInput(start, end, steps) {
                 // 自带手势循环，不用 detectHorizontalDragGestures / detectDragGestures。
                 //
@@ -120,8 +123,9 @@ fun CompactSlider(
             }
     ) {
         Canvas(Modifier.matchParentSize()) {
-            // 轨道占满组件高度（16dp 胶囊），圆点（10dp）嵌在条内，不突出
-            val trackHeight = size.height
+            // 触摸块 36dp，但视觉轨道固定画成 16dp 细胶囊并垂直居中（cy = 块中心），
+            // 加高只放大命中区、不增粗观感。
+            val trackHeight = 16.dp.toPx().coerceAtMost(size.height)
             val cy = size.height / 2f
             val thumbR = 5.dp.toPx()
             val corner = CornerRadius(trackHeight / 2f)

@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.audio
 
 import android.content.Context
@@ -62,10 +61,10 @@ object FadeController {
     private const val ANTI_POP_MS = 150f
 
     /**
-     * 手动暂停/恢复的渐变时长。故意比曲目渐变短很多：
-     * 按下暂停要等 2 秒才真的停会显得按键没反应，350ms 既柔和又不迟滞。
+     * 手动暂停/恢复的渐变时长。故意比曲目渐变短很多：按下暂停要等 2 秒才真的停会
+     * 显得按键没反应，350ms 被反馈成"反应慢"，压到 150ms——几乎无感，仍保留柔和 + 防爆音。
      */
-    private const val GATE_MS = 350f
+    private const val GATE_MS = 150f
 
     private val handler = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
