@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.player
 
 import android.app.Application
@@ -113,7 +112,7 @@ data class PlayerUiState(
     val loading: Boolean = true,
     /** 正在刷新音乐库（下拉刷新/刷新按钮），驱动 UI 指示器 */
     val refreshing: Boolean = false,
-    /** 唱片墙果冻动效：磁贴位移/尺寸变化带弹性果冻拉伸 */
+    /** 海报墙果冻动效：磁贴位移/尺寸变化带弹性果冻拉伸 */
     val jellyAnim: Boolean = false,
     /** 睡眠定时器总时长，0 表示未启用 */
     val sleepTimerMs: Long = 0L,
@@ -135,6 +134,12 @@ data class PlayerUiState(
     val activePlaylistId: Long? = null,
     /** 播放页可视化频谱开关（点击音频格式徽章切换） */
     val visualizerEnabled: Boolean = false,
+    /** 实验性：可视化随手机倾斜变化（向哪侧倾斜哪侧升幅加大） */
+    val tiltSpectrum: Boolean = false,
+    /** 实验性：摇动手机封面跟着一晃（duangduang） */
+    val coverShake: Boolean = false,
+    /** 封面左下角单行歌词（锁在封面上，换词时模糊渐隐渐出） */
+    val coverLyric: Boolean = false,
     /** 全局圆角基准值（dp），驱动所有卡片/列表/徽章的圆角 */
     val cornerBase: Float = 38f,
     /** 音乐渐入渐出开关 */
@@ -155,6 +160,8 @@ data class PlayerUiState(
     val bassHapticsPulseMs: Int = 20,
     /** 触发灵敏度 1-10，越大越容易触发 */
     val bassHapticsSensitivity: Int = 5,
+    /** 自适应：时长/灵敏度跟随音乐实时变化 */
+    val bassHapticsAdaptive: Boolean = false,
     /** 虚拟低音（V2.2 · beta） */
     val virtualBass: Boolean = false,
     /** 虚拟低音混合强度 0-100 */
@@ -201,6 +208,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             showLikedBadge = prefs.getBoolean(KEY_LIKED_BADGE, false),
             exploration = prefs.getFloat(KEY_EXPLORATION, 0.3f),
             visualizerEnabled = prefs.getBoolean(KEY_VISUALIZER, false),
+            tiltSpectrum = prefs.getBoolean(KEY_TILT_SPECTRUM, false),
+            coverShake = prefs.getBoolean(KEY_COVER_SHAKE, false),
+            coverLyric = prefs.getBoolean(KEY_COVER_LYRIC, false),
             cornerBase = prefs.getFloat(KEY_CORNER_BASE, 38f),
             fadeEnabled = prefs.getBoolean(FadeController.KEY_ENABLED, false),
             fadeMs = prefs.getLong(FadeController.KEY_FADE_MS, FadeController.DEFAULT_FADE_MS),
@@ -212,6 +222,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             bassHapticsIntensity = prefs.getInt(BassHaptics.KEY_INTENSITY, 1).coerceIn(0, 2),
             bassHapticsPulseMs = prefs.getInt(BassHaptics.KEY_PULSE_MS, 20).coerceIn(1, 30),
             bassHapticsSensitivity = prefs.getInt(BassHaptics.KEY_SENSITIVITY, 5).coerceIn(1, 10),
+            bassHapticsAdaptive = prefs.getBoolean(BassHaptics.KEY_ADAPTIVE, false),
             virtualBass = prefs.getBoolean(VirtualBass.KEY_ENABLED, false),
             virtualBassStrength = prefs.getInt(VirtualBass.KEY_STRENGTH, 50).coerceIn(0, 100),
             rangeEnhancer = prefs.getBoolean(RangeEnhancer.KEY_ENABLED, false),
@@ -683,6 +694,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(visualizerEnabled = enabled)
     }
 
+/** 实验性：物理动效开关（频谱倾斜 + 封面摇动 合并，一个开关同时控制）。 */
+    fun setPhysicsFx(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TILT_SPECTRUM, enabled).putBoolean(KEY_COVER_SHAKE, enabled).apply()
+        _state.value = _state.value.copy(tiltSpectrum = enabled, coverShake = enabled)
+    }
+
+    /** 封面左下角单行歌词开关。 */
+    fun setCoverLyric(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_COVER_LYRIC, enabled).apply()
+        _state.value = _state.value.copy(coverLyric = enabled)
+    }
+
     /** 设置全局圆角基准（dp），0=直角，44=接近胶囊 */
     fun setCornerBase(dp: Float) {
         val v = dp.coerceIn(0f, 44f)
@@ -724,7 +747,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(showRecommendations = show)
     }
 
-    /** 唱片墙果冻动效开关 */
+    /** 海报墙果冻动效开关 */
     fun setJellyAnim(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_JELLY_ANIM, enabled).apply()
         _state.value = _state.value.copy(jellyAnim = enabled)
@@ -767,6 +790,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putInt(BassHaptics.KEY_SENSITIVITY, v).apply()
         BassHaptics.setSensitivity(v)
         _state.value = _state.value.copy(bassHapticsSensitivity = v)
+    }
+
+    /** 自适应：时长/灵敏度跟随音乐实时变化 */
+    fun setBassHapticsAdaptive(enabled: Boolean) {
+        prefs.edit().putBoolean(BassHaptics.KEY_ADAPTIVE, enabled).apply()
+        BassHaptics.setAdaptive(enabled)
+        _state.value = _state.value.copy(bassHapticsAdaptive = enabled)
     }
     // ==================== V2.2 声音增强 ====================
     /** 虚拟低音（beta · 多维听感）：心理声学谐波合成 */
@@ -1324,6 +1354,9 @@ private const val KEY_THEME = "theme"
         const val KEY_ROW_COVER = "row_cover"
         const val KEY_LIKED_BADGE = "liked_badge"
         const val KEY_VISUALIZER = "visualizer_enabled"
+        const val KEY_TILT_SPECTRUM = "tilt_spectrum"
+        const val KEY_COVER_SHAKE = "cover_shake"
+        const val KEY_COVER_LYRIC = "cover_lyric"
         const val KEY_CORNER_BASE = "corner_base"
         const val KEY_EXPLORATION = "exploration"
         const val KEY_SELECTED_FOLDERS = "selected_folders"

@@ -15,15 +15,20 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.ui
 
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,9 +42,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import com.iris.music.audio.SpectrumAnalyzer
+
+/** 倾斜对升幅的最大增益：tilt=±1 时一侧 +85%、另一侧 -85%。 */
+private const val TILT_GAIN = 0.85f
 
 /**
  * 实时频谱条：从 [SpectrumAnalyzer] 拉取 FFT 结果并绘制成对称柱状图。
@@ -53,12 +63,18 @@ import com.iris.music.audio.SpectrumAnalyzer
  * - 非对称平滑：上升快、下落慢，模拟真实 VU 表的惯性
  * - 峰值保持：峰帽悬停后缓慢下坠
  * - 中央镜像排布：低频居中、高频向两侧展开，比左低右高更对称好看
+ *
+ * 实验性 · 倾斜响应：读取重力传感器的横滚分量，向哪侧倾斜，
+ * 那一侧的柱子升幅加大、另一侧抑制，频谱像朝倾斜方向"积聚"。
+ * 跟随可视化开关一同显示，无独立入口；传感器不可用时静默退化为普通频谱。
  */
 @Composable
 fun SpectrumBars(
     accent: Color,
     /** 是否正在播放：暂停时柱子平滑归零而非突然消失 */
     playing: Boolean,
+    /** 实验性：随手机倾斜变化。关闭时退化为普通频谱，且不读取传感器。 */
+    tiltEnabled: Boolean = false,
     modifier: Modifier = Modifier,
     height: Dp = 46.dp
 ) {
@@ -71,6 +87,32 @@ fun SpectrumBars(
 
     // 唯一的 State：帧计数器，自增用于触发重绘（不触发重组内容 lambda 之外的部分）
     var frameTick by remember { mutableStateOf(0) }
+
+    // —— 实验性 · 倾斜 ——
+    // 原始横滚加速度计分量（非 State，由传感器回调写、帧循环读）与平滑后的 tilt。
+    val context = LocalContext.current
+    val rawTilt = remember { FloatArray(1) }   // 已归一化并限幅到 [-1,1]，左倾为正
+    val tilt = remember { FloatArray(1) }      // 低通平滑后的显示用 tilt
+    DisposableEffect(tiltEnabled) {
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val acc = sm?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        // 关闭时不注册传感器，省功耗；tilt 平滑自然停在 0，退化为普通频谱。
+        if (!tiltEnabled || acc == null) {
+            rawTilt[0] = 0f
+            return@DisposableEffect onDispose { }
+        }
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                if (event.sensor.type != Sensor.TYPE_ACCELEROMETER) return
+                // 设备坐标 x 向右。实测向左倾时 ax 为正，直接除以 g 即"左倾为正"。
+                val ax = event.values[0]
+                rawTilt[0] = (ax / SensorManager.GRAVITY_EARTH).coerceIn(-1f, 1f)
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+        if (acc != null) sm?.registerListener(listener, acc, SensorManager.SENSOR_DELAY_GAME)
+        onDispose { sm?.unregisterListener(listener) }
+    }
 
     // 整体淡入淡出：开关切换与暂停时不硬切
     val alpha by animateFloatAsState(
@@ -93,13 +135,16 @@ fun SpectrumBars(
                          else ((now - lastNanos) / 16_666_667f).coerceIn(0.2f, 3f)
                 lastNanos = now
 
+                // tilt 低通平滑：更快跟手，倾斜响应更激进连贯
+                tilt[0] += (rawTilt[0] - tilt[0]) * (0.32f * dt).coerceAtMost(1f)
+
                 val isPlaying = playingState.value
                 val src = SpectrumAnalyzer.snapshot()
                 for (i in 0 until bands) {
                     val target = if (isPlaying) src.getOrElse(i) { 0f } else 0f
                     val cur = level[i]
-                    // 非对称平滑：attack 快速跟上瞬态，release 缓慢回落
-                    val k = if (target > cur) 0.45f else 0.14f
+                    // 非对称平滑：attack 激进地冲上去抓瞬态，release 缓慢回落显出波浪
+                    val k = if (target > cur) 0.65f else 0.12f
                     level[i] = cur + (target - cur) * (k * dt).coerceAtMost(1f)
 
                     // 峰帽：被顶起时瞬时跟随，之后重力加速下坠
@@ -128,6 +173,8 @@ fun SpectrumBars(
         val h = size.height
         if (w <= 0f || h <= 0f) return@Canvas
 
+        val t = tilt[0]
+
         // 中央镜像：低频在中间，高频向两侧铺开，视觉上更平衡
         val halfCount = bands
         val totalSlots = halfCount * 2
@@ -139,7 +186,13 @@ fun SpectrumBars(
 
         fun drawBar(slot: Int, v: Float, p: Float) {
             val x = slot * slotW + gap
-            val barH = (v * h).coerceAtLeast(minBar)
+            // 该柱在画布上的水平位置 [-1,1]：左=-1，右=+1。
+            // 倾斜增益：与倾斜同侧(pos 与 t 同号，这里用 -t 因为左倾 t>0 想让左侧放大)放大，异侧抑制。
+            val center = x + barW / 2f
+            val pos = ((center / w) * 2f - 1f).coerceIn(-1f, 1f)
+            val gain = (1f + TILT_GAIN * t * (-pos)).coerceAtLeast(0.15f)
+
+            val barH = (v * gain * h).coerceAtLeast(minBar)
             val y = h - barH
 
             // 柱体：底部主题色、顶部渐淡，避免大色块压迫感
@@ -160,7 +213,7 @@ fun SpectrumBars(
             // 峰帽：细亮条，比柱体更高更亮，给出打击感
             if (p > 0.04f) {
                 val capH = barW * 0.4f
-                val capY = (h - p * h - capH).coerceAtLeast(0f)
+                val capY = (h - p * gain * h - capH).coerceAtLeast(0f)
                 drawRoundRect(
                     color = accent.copy(alpha = 0.7f * alpha),
                     topLeft = Offset(x, capY),

@@ -52,7 +52,7 @@ IRIS Music is a **personal project**: no team, no KPIs, not commercial. It just 
 
 ## 📥 Install
 
-Grab `IRISMusic-v3.3.0-arm64-v8a.apk` from **[Releases](releases/latest)** (arm64 — most phones from the last few years) and install it.
+Grab `IRISMusic-v3.6.7-arm64-v8a.apk` from **[Releases](releases/latest)** (arm64 — most phones from the last few years) and install it.
 
 Grant the "read audio" permission on first launch. For floating lyrics, also enable "display over other apps" in system settings.
 

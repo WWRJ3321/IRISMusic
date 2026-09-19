@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.ui
 
 import android.graphics.Bitmap
@@ -43,14 +42,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
 import androidx.compose.foundation.border
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -65,12 +68,15 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.iris.music.data.LyricLine
+import com.iris.music.data.LyricParser
 import com.iris.music.data.RepeatMode
 import com.iris.music.ui.theme.GlassContent
 import com.iris.music.ui.theme.GlassLevel
@@ -118,6 +124,12 @@ fun PlayerCard(
     /** 可视化频谱开关状态；徽章即开关 */
     visualizerEnabled: Boolean = false,
     onToggleVisualizer: () -> Unit = {},
+    /** 实验性：可视化随手机倾斜变化 */
+    tiltSpectrum: Boolean = false,
+    /** 实验性：摇动手机封面跟着一晃一晃（duangduang） */
+    coverShakeEnabled: Boolean = false,
+    /** 封面左下角单行歌词开关（锁在封面上，换词时模糊渐隐渐出） */
+    coverLyricEnabled: Boolean = false,
     /**
      * 是否是"活的"卡片。
      *
@@ -136,6 +148,15 @@ fun PlayerCard(
     val onCard = if (colors.isDark) Color.White else Color.Black
     // 主题色在卡片背景上的可读版本（霓虹黄/青落在白卡上会看不清）
     val readableAccent = btnColor
+    // 实验性：封面摇动。仅在活动卡 + 开关开启时注册加速度计。
+    val shake = rememberShakeState(coverShakeEnabled && interactive)
+    // 封面左下角单行歌词：仅在开启 + 活动卡解析。解析放 IO，切歌时重载。
+    var coverLyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
+    LaunchedEffect(artworkPath, coverLyricEnabled) {
+        if (!coverLyricEnabled || !interactive) { coverLyrics = emptyList(); return@LaunchedEffect }
+        coverLyrics = if (artworkPath == null) emptyList()
+        else withContext(Dispatchers.IO) { runCatching { LyricParser.loadLyrics(artworkPath, durationMs) }.getOrDefault(emptyList()) }
+    }
     // 次要文字：0.55 太淡，提到 0.72 保证小字也看得清
     val subOnCard = onCard.copy(alpha = 0.72f)
 
@@ -164,10 +185,13 @@ fun PlayerCard(
             // 封面：点击显示歌词。
             // 底色不用死黑（0xFF1B1024）：封面解码间隙或无封面文件露出来的就是这块底，
             // 深色底下像"内黑"色块。改成按歌曲路径派生的 HSV 占位色，和歌单行/推荐卡一致。
+            // 整张封面卡作为一个整体随摇动旋转/平移：clip+底色+点击都在同一层，
+            // 旋转的是带圆角的整卡，露出的是播放器卡背景（不是纯色底）。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1f)
+                    .coverShake(shake)
                     .clip(IrisShape.item)
                     .background(Color.hsv(
                         hue = (artworkPath?.hashCode()?.mod(360) ?: 0).toFloat(),
@@ -177,12 +201,24 @@ fun PlayerCard(
                     .clickable { Haptics.tap(); onClickArtwork() }
             ) {
                 AlbumArt(filePath = artworkPath)
-                // 压暗层：只压到让频谱清晰可辨的程度，封面仍应看得出内容
+                // 压暗层：固定盖满整卡，让频谱清晰可辨
                 if (vizT.value > 0.01f) {
                     Box(
                         Modifier
                             .matchParentSize()
                             .background(Color.Black.copy(alpha = 0.3f * vizT.value))
+                    )
+                }
+                // 封面左下角单行歌词：锁在封面上（随 shake 一起动），换词时模糊渐隐渐出。
+                // 只在活动卡显示：非活动卡 positionMs 恒 0，显示也无意义还徒增解析开销。
+                if (coverLyricEnabled && interactive) {
+                    val curIdx = LyricParser.currentIndex(coverLyrics, positionMs)
+                    val curText = if (curIdx in coverLyrics.indices) coverLyrics[curIdx].text else ""
+                    CoverLyricLine(
+                        text = curText,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(start = 14.dp, bottom = 14.dp)
                     )
                 }
             }
@@ -236,6 +272,7 @@ fun PlayerCard(
                     SpectrumBars(
                         accent = readableAccent,
                         playing = isPlaying,
+                        tiltEnabled = tiltSpectrum,
                         height = 52.dp,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -375,14 +412,55 @@ fun PlayerCard(
                                 letterSpacing = 0.6.sp,
                                 maxLines = 1,
                                 // 宽度再不够也不折行、不裁字：宁可挤掉一点按钮间隙
-                                softWrap = false
-                            )
-                        }
-                    }
-                }
-            }
+                                 softWrap = false
+                             )
+                         }
+                     }
+                 }
+             }
         }
     }
+}
+
+/**
+ * 封面左下角单行歌词：纯文字无底框，固定屏幕坐标（不随封面摇动），盖在封面左下角。
+ *
+ * 换词时「模糊渐隐 → 换字 → 模糊渐出」：先淡出到 0（伴随轻微模糊），切到新词后
+ * 再淡入回到清晰。整段用一个 [Animatable] 驱动 visibility，alpha 与 blur 都从它
+ * 派生——淡出时 blur 0→峰值、淡入时峰值→0，中段最糊，正好是字切换的瞬间。
+ */
+@Composable
+private fun CoverLyricLine(text: String, modifier: Modifier = Modifier) {
+    var displayText by remember { mutableStateOf(text) }
+    val visibility = remember { Animatable(1f) }
+    // 短词切换不突兀、无词/首词直接落位不重复播过渡
+    LaunchedEffect(text) {
+        if (displayText == text) return@LaunchedEffect
+        if (displayText.isEmpty() || text.isEmpty()) { displayText = text; return@LaunchedEffect }
+        visibility.animateTo(0f, tween(240))
+        displayText = text
+        visibility.animateTo(1f, tween(320))
+    }
+    // blur 峰值 6dp：visibility 0 处最糊，1 处清晰
+    val blur = (1f - visibility.value) * 6f
+    Text(
+        displayText,
+        color = Color.White,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        style = TextStyle(
+            shadow = Shadow(
+                color = Color.Black.copy(alpha = 0.55f),
+                offset = Offset(0f, 1.2f),
+                blurRadius = 3f
+            )
+        ),
+        modifier = modifier
+            .graphicsLayer { alpha = visibility.value }
+            .blur(blur.dp)
+    )
 }
 
 /** 主控制按钮：无底图标，按压缩放动画（0.85x），图标本身圆角 */

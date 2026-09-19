@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.iris.music.ui
 
 import androidx.compose.animation.*
@@ -78,6 +77,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -144,6 +145,7 @@ fun MainScreen(
     onRowSizeChange: (Int) -> Unit,
     onExplorationChange: (Float) -> Unit
 ) {
+    // 横屏「天台夜航」场景已暂时下线（NightFlightScene 文件保留，恢复时在此处重新接回）。
     // 自定义背景图 SAF 选择器
     val bgPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -385,10 +387,13 @@ visible = scrollerVisible,
 onShowRecsChange = viewModel::setShowRecommendations,
                            onJellyAnimChange = viewModel::setJellyAnim,
                            onSilenceSkipChange = viewModel::setSilenceSkip,
-                            onBassHapticsChange = viewModel::setBassHaptics,
+onPhysicsFxChange = viewModel::setPhysicsFx,
+                             onCoverLyricChange = viewModel::setCoverLyric,
+                             onBassHapticsChange = viewModel::setBassHaptics,
                             onBassHapticsIntensityChange = viewModel::setBassHapticsIntensity,
                             onBassHapticsPulseMsChange = viewModel::setBassHapticsPulseMs,
                             onBassHapticsSensitivityChange = viewModel::setBassHapticsSensitivity,
+                            onBassHapticsAdaptiveChange = viewModel::setBassHapticsAdaptive,
                             onCustomColorsChange = viewModel::setCustomColors,
                             onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
                             onClearBackground = { viewModel.setCustomBackground(null) },
@@ -1139,9 +1144,12 @@ private fun PlayerPage(
                 onOpenEqualizer = onOpenEqualizer,
                 eqActive = eqActive,
                 audioFormat = state.currentSong?.formatLabel ?: "",
-                visualizerEnabled = state.visualizerEnabled,
-                onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) }
-            )
+visualizerEnabled = state.visualizerEnabled,
+                   tiltSpectrum = state.tiltSpectrum,
+                   coverShakeEnabled = state.coverShake,
+                   coverLyricEnabled = state.coverLyric,
+                   onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) }
+              )
         }
 
         // 歌词弹层：毛玻璃背景 + 滚动歌词
