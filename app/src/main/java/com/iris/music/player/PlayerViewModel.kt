@@ -41,6 +41,7 @@ import com.iris.music.data.ListenEntry
 import com.iris.music.data.ListenReport
 import com.iris.music.data.ListenReportBuilder
 import com.iris.music.data.ListenStats
+import com.iris.music.data.DataTransfer
 import com.iris.music.data.MusicFolder
 import com.iris.music.data.MusicRepository
 import com.iris.music.data.PlayHistory
@@ -508,6 +509,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             updateRecommendations()
             // 报告里的歌名来自 allSongs，库换了要跟着重算
             refreshReportIfNeeded()
+            // 曲库就绪：收编空库导入时暂存的孤儿数据（点赞/明细/歌单）
+            DataTransfer.attachOrphans(getApplication(), songs)
         }
     }
 

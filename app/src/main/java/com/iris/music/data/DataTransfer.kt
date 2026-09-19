@@ -194,8 +194,13 @@ object DataTransfer {
      * - 点赞取并集；计数与时长取两边较大值（避免重复导入把次数翻倍）
      * - 歌单按名称合并，同名歌单合并曲目、不重复
      * - 听歌明细按 (天, 曲目) 取较大值后整体重写
+     * - 设置原样恢复（iris_prefs 全量，行为数据键除外）
      *
      * 曲目匹配：先按 songId，命中不到时按 title+artist 在本机库里找同名曲重定向 ID。
+     *
+     * songs 传空库也安全：未匹配的曲目数据不丢，暂存到 orphan 区；等曲库加载完成后
+     * 调用 [attachOrphans] 按 title+artist 二次匹配收编——新装应用导入时曲库往往
+     * 还没扫完，allSongs 为空会让全部匹配失败，那正是"导入后什么都没有"的根源。
      */
     suspend fun import(context: Context, uri: Uri, songs: List<Song>): ImportResult =
         withContext(Dispatchers.IO) {
@@ -208,6 +213,10 @@ object DataTransfer {
             if (!root.has("songs") || !root.has("format")) return@withContext ImportResult.BadFormat
 
             runCatching {
+                val settingsJson = root.optJSONObject("settings")
+                // 设置不依赖曲库，最先恢复——即匹配全空，主题/歌单等也已回来
+                if (settingsJson != null) applySettings(context, settingsJson)
+
                 val localIds = songs.mapTo(HashSet()) { it.id }
                 // 跨设备回退索引：标题+作者 → 本机 songId
                 val byName = HashMap<String, Long>()
@@ -220,6 +229,7 @@ object DataTransfer {
 
                 // ---- 曲目维度 ----
                 val idRemap = HashMap<Long, Long>()
+                val orphanSongs = HashMap<String, JSONObject>() // 未匹配 → 原始条目，曲库加载后再收编
                 val likes = HashSet<Long>()
                 val plays = HashMap<Long, Int>()
                 val incompletes = HashMap<Long, Int>()
@@ -231,7 +241,11 @@ object DataTransfer {
                     val o = songArray.optJSONObject(i) ?: continue
                     val rawId = o.optLong("id", -1L)
                     if (rawId < 0L) continue
-                    val id = resolve(rawId, o.optString("title"), o.optString("artist")) ?: continue
+                    val id = resolve(rawId, o.optString("title"), o.optString("artist"))
+                    if (id == null) {
+                        o.optString("title").takeIf { it.isNotBlank() }?.let { orphanSongs[nameKey(it, o.optString("artist"))] = o }
+                        continue
+                    }
                     idRemap[rawId] = id
                     if (o.optBoolean("liked")) likes.add(id)
                     o.optInt("playCount").let { if (it > 0) plays[id] = maxOf(plays[id] ?: 0, it) }
@@ -242,11 +256,8 @@ object DataTransfer {
 
                 PlayHistory.mergeImported(likes, plays, incompletes, totals, lasts)
 
-                // ---- 设置（原样恢复，只覆盖文件里出现的键）----
-                val settingsJson = root.optJSONObject("settings")
-                if (settingsJson != null) applySettings(context, settingsJson)
-
-                // ---- 歌单 ----
+                // ---- 歌单（未匹配曲目的 songIds 按名称原样保留，attachOrphans 时重定向）----
+                val rawPlaylists = ArrayList<Triple<String, String, List<Long>>>() // name, titleKey, rawIds
                 var playlistCount = 0
                 val playlistArray = root.optJSONArray("playlists") ?: JSONArray()
                 for (i in 0 until playlistArray.length()) {
@@ -254,31 +265,47 @@ object DataTransfer {
                     val name = o.optString("name").trim()
                     if (name.isEmpty()) continue
                     val idsJson = o.optJSONArray("songIds") ?: continue
-                    val mapped = ArrayList<Long>(idsJson.length())
-                    for (j in 0 until idsJson.length()) {
-                        idRemap[idsJson.optLong(j, -1L)]?.let { mapped.add(it) }
-                    }
-                    if (mapped.isEmpty()) continue
+                    val rawIds = ArrayList<Long>(idsJson.length())
+                    for (j in 0 until idsJson.length()) rawIds.add(idsJson.optLong(j, -1L))
+                    val mapped = rawIds.mapNotNull { idRemap[it] }
                     val target = Playlists.all().firstOrNull { it.name == name }?.id
                         ?: Playlists.create(name)
                     mapped.forEach { Playlists.addSong(target, it) }
                     playlistCount++
+                    // 未匹配部分原样记下，等收编
+                    val unmapped = rawIds.filter { it !in idRemap }
+                    if (unmapped.isNotEmpty()) {
+                        val titleKeys = unmapped.mapNotNull { raw ->
+                            orphanSongs.entries.firstOrNull { it.value.optLong("id", -1L) == raw }?.key
+                        }
+                        rawPlaylists.add(Triple(name, titleKeys.joinToString("\u0002"), unmapped))
+                    }
                 }
 
-                // ---- 听歌明细 ----
+                // ---- 听歌明细（未匹配曲目按 title 暂存孤儿区）----
                 val rows = HashMap<Long, HashMap<Long, Long>>()
+                val orphanListen = HashMap<String, HashMap<Long, Long>>() // titleKey → (day → ms)
                 val listenArray = root.optJSONArray("listenStats") ?: JSONArray()
                 for (i in 0 until listenArray.length()) {
                     val o = listenArray.optJSONObject(i) ?: continue
                     val day = o.optLong("day", -1L)
-                    val songId = idRemap[o.optLong("songId", -1L)] ?: continue
+                    val rawSongId = o.optLong("songId", -1L)
                     val ms = o.optLong("ms", 0L)
                     if (day < 0L || ms <= 0L) continue
+                    val songId = idRemap[rawSongId]
+                    if (songId == null) {
+                        val key = orphanSongs.entries.firstOrNull { it.value.optLong("id", -1L) == rawSongId }?.key
+                            ?: continue
+                        val byDay = orphanListen.getOrPut(key) { HashMap() }
+                        byDay[day] = maxOf(byDay[day] ?: 0L, ms)
+                        continue
+                    }
                     val bySong = rows.getOrPut(day) { HashMap() }
                     bySong[songId] = maxOf(bySong[songId] ?: 0L, ms)
                 }
                 val listenDays = ListenStats.mergeImported(rows)
 
+                persistOrphans(context, orphanSongs, orphanListen, rawPlaylists)
                 // 导入改写了行为数据，推荐分必须重算
                 Recommender.invalidate()
 
@@ -292,6 +319,110 @@ object DataTransfer {
                 )
             }.getOrElse { ImportResult.Failed }
         }
+
+    // ==================== 孤儿区（空库导入的暂存）====================
+
+    private const val ORPHAN_FILE = "import_orphans.json"
+
+    /**
+     * 暂存未匹配的曲目/歌单/明细。曲库加载完成后由 ViewModel 调 [attachOrphans] 收编；
+     * 收编后清空。放在 filesDir，不联网、随应用数据走。
+     */
+    private fun persistOrphans(
+        context: Context,
+        songs: Map<String, JSONObject>,
+        listen: Map<String, HashMap<Long, Long>>,
+        playlists: List<Triple<String, String, List<Long>>>
+    ) {
+        if (songs.isEmpty() && listen.isEmpty() && playlists.isEmpty()) return
+        runCatching {
+            val root = JSONObject()
+            val songArr = JSONArray()
+            songs.forEach { (_, o) -> songArr.put(o) }
+            root.put("songs", songArr)
+            val listenArr = JSONArray()
+            listen.forEach { (key, byDay) ->
+                byDay.forEach { (day, ms) ->
+                    listenArr.put(JSONObject().put("key", key).put("day", day).put("ms", ms))
+                }
+            }
+            root.put("listen", listenArr)
+            val plArr = JSONArray()
+            playlists.forEach { (name, keys, _) -> plArr.put(JSONObject().put("name", name).put("keys", keys)) }
+            root.put("playlists", plArr)
+            context.filesDir.resolve(ORPHAN_FILE).writeText(root.toString())
+        }
+    }
+
+    private fun readOrphans(context: Context): JSONObject? =
+        runCatching {
+            val f = context.filesDir.resolve(ORPHAN_FILE)
+            if (!f.exists()) null else JSONObject(f.readText())
+        }.getOrNull()
+
+    private fun clearOrphans(context: Context) {
+        runCatching { context.filesDir.resolve(ORPHAN_FILE).delete() }
+    }
+
+    /**
+     * 曲库就绪后收编孤儿数据：按 title+artist 匹配本机 ID，把暂存的
+     * 点赞/计数/明细/歌单曲目归位。空库导入的场景在这里补全。
+     */
+    fun attachOrphans(context: Context, songs: List<Song>) {
+        if (songs.isEmpty()) return
+        val root = readOrphans(context) ?: return
+        runCatching {
+            val byName = HashMap<String, Long>()
+            songs.forEach { byName.putIfAbsent(nameKey(it.title, it.artist), it.id) }
+
+            val likes = HashSet<Long>()
+            val plays = HashMap<Long, Int>()
+            val incompletes = HashMap<Long, Int>()
+            val totals = HashMap<Long, Long>()
+            val lasts = HashMap<Long, Long>()
+            var matched = 0
+
+            val songArr = root.optJSONArray("songs") ?: JSONArray()
+            for (i in 0 until songArr.length()) {
+                val o = songArr.optJSONObject(i) ?: continue
+                val key = nameKey(o.optString("title"), o.optString("artist"))
+                val id = byName[key] ?: continue
+                matched++
+                if (o.optBoolean("liked")) likes.add(id)
+                o.optInt("playCount").let { if (it > 0) plays[id] = maxOf(plays[id] ?: 0, it) }
+                o.optInt("incompleteCount").let { if (it > 0) incompletes[id] = maxOf(incompletes[id] ?: 0, it) }
+                o.optLong("totalPlayedMs").let { if (it > 0) totals[id] = maxOf(totals[id] ?: 0L, it) }
+                o.optLong("lastPlayed").let { if (it > 0) lasts[id] = maxOf(lasts[id] ?: 0L, it) }
+            }
+
+            // 明细
+            val rows = HashMap<Long, HashMap<Long, Long>>()
+            val listenArr = root.optJSONArray("listen") ?: JSONArray()
+            for (i in 0 until listenArr.length()) {
+                val o = listenArr.optJSONObject(i) ?: continue
+                val id = byName[o.optString("key")] ?: continue
+                val day = o.optLong("day", -1L)
+                val ms = o.optLong("ms", 0L)
+                if (day < 0L || ms <= 0L) continue
+                rows.getOrPut(day) { HashMap() }[id] = maxOf(rows[day]?.get(id) ?: 0L, ms)
+            }
+            if (rows.isNotEmpty()) ListenStats.mergeImported(rows)
+
+            // 歌单未收编曲目（keys 为 \u0002 分隔的 titleKey）
+            val plArr = root.optJSONArray("playlists") ?: JSONArray()
+            for (i in 0 until plArr.length()) {
+                val o = plArr.optJSONObject(i) ?: continue
+                val name = o.optString("name")
+                val keys = o.optString("keys").split("\u0002").filter { it.isNotBlank() }
+                val target = Playlists.all().firstOrNull { it.name == name }?.id ?: continue
+                keys.forEach { key -> byName[key]?.let { Playlists.addSong(target, it) } }
+            }
+
+            PlayHistory.mergeImported(likes, plays, incompletes, totals, lasts)
+            matched
+            clearOrphans(context)
+        }
+    }
 
     /** 标题+作者归一化键：忽略大小写与首尾空白，跨设备匹配用 */
     private fun nameKey(title: String, artist: String): String =
