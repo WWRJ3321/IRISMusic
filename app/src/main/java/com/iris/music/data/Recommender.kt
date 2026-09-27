@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.data
 
 import kotlin.math.sqrt
@@ -196,7 +213,7 @@ object Recommender {
      * 与 [preferenceScores] 用同一套输入和同样的算式——不另写一份近似逻辑，
      * 否则解释和真实排序迟早会对不上，那比没有解释更糟。
      */
-    fun explain(song: Song, allSongs: List<Song>): Explanation {
+    fun explain(song: Song, allSongs: List<Song>, exploration: Float = 0f): Explanation {
         val playCounts = PlayHistory.getPlayCounts()
         val totalPlayedMs = PlayHistory.getTotalPlayedMs()
         val incompleteCounts = PlayHistory.getIncompleteCounts()
@@ -230,6 +247,7 @@ object Recommender {
         return Explanation(
             score = getOrCreateScores(allSongs)[song.id] ?: 1f,
             isColdStart = isNew,
+            exploration = exploration.coerceIn(0f, 1f),
             factors = factors.sortedByDescending { kotlin.math.abs(it.weight) }
         )
     }
@@ -240,10 +258,13 @@ object Recommender {
     /**
      * @param isColdStart 新导入且无任何行为记录：这类歌只拿基准分 1.0，
      *   既不会被历史压住，也不会凭空加分；提高探索度可以让它们更容易出现。
+     * @param exploration 当前探索度 0-1。>0 时最终排序含随机成分，
+     *   解释里的偏好因子只反映固定部分，随机运气无法回溯，需向用户点明。
      */
     data class Explanation(
         val score: Float,
         val isColdStart: Boolean,
+        val exploration: Float = 0f,
         val factors: List<Factor>
     )
 }

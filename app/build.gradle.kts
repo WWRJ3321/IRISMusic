@@ -18,12 +18,12 @@ android {
     namespace = "com.iris.music"
     compileSdk = 34
 
-    // 按 ABI 拆分：每个架构单独出 APK，只装 arm64-v8a 那份，安装占用更小
+    // 只出 arm64-v8a：现代 Android 设备均为 64 位，不再单独产 armeabi-v7a 包。
     splits {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "armeabi-v7a")
+            include("arm64-v8a")
             isUniversalApk = false
         }
     }
@@ -46,8 +46,8 @@ android {
         applicationId = "com.iris.music"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3700
-        versionName = "3.7.0Beta"
+        versionCode = 4134
+        versionName = "3.11.0"
 
         // 只保留中英文资源，去掉其它语言的 Compose/AndroidX 字符串，减小体积
         resourceConfigurations += listOf("en", "zh")

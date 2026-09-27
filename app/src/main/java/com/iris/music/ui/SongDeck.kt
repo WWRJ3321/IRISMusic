@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.ui
 
 import androidx.compose.animation.core.Animatable
@@ -36,6 +53,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PageSize
+import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -48,17 +67,25 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
@@ -72,6 +99,7 @@ import com.iris.music.ui.theme.*
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.haze
+import dev.chrisbanes.haze.hazeChild
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -128,6 +156,9 @@ fun SongDeck(
     val lyricsHazeState = remember { HazeState() }
 
     var showLyrics by remember { mutableStateOf(false) }
+
+    // 卡片模式的歌词层同样要吃掉返回键，否则直接退出应用
+    androidx.activity.compose.BackHandler(enabled = showLyrics) { showLyrics = false }
     var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricLoading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -189,6 +220,7 @@ fun SongDeck(
                 onOpenPlaylists = onOpenPlaylists,
                 onReload = onReload,
                 contentTick = contentTick,
+                autoHide = state.topBarAutoHide,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
@@ -213,7 +245,8 @@ fun SongDeck(
                     onOpenReport = onOpenReport,
                     onOpenSettings = onOpenSettings,
                     onOpenPlaylists = onOpenPlaylists,
-                    onReload = onReload
+                    onReload = onReload,
+                    autoHide = state.topBarAutoHide
                 )
 
                 Box(
@@ -231,6 +264,59 @@ fun SongDeck(
                             textAlign = TextAlign.Center
                         )
                     } else if (state.layout == IrisLayout.STACK) {
+                        val stackLandscape = LocalConfiguration.current.orientation ==
+                            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                        val stackCur = state.queue.getOrNull(state.currentIndex)
+                        if (stackLandscape) {
+                            // 横屏：左侧封面堆叠（复用原手势），右侧固定控制区
+                            LandscapeDeckPlayer(
+                                title = stackCur?.title ?: "未选择",
+                                artist = stackCur?.artist ?: "",
+                                positionMs = state.positionMs,
+                                durationMs = state.durationMs,
+                                shuffle = state.shuffle,
+                                repeatMode = state.repeatMode,
+                                progress = state.progress,
+                                isPlaying = state.isPlaying,
+                                onToggle = onToggle,
+                                onPrev = onPrev,
+                                onNext = onNext,
+                                onSeek = onSeek,
+                                onCyclePlayMode = onCyclePlayMode,
+                                onToggleLike = { stackCur?.let { onToggleLike(it.id) } },
+                                liked = stackCur?.id in state.likedSongIds,
+                                colors = colors,
+                                sleepTimerMs = state.sleepTimerMs,
+                                sleepTimerEndMs = state.sleepTimerEndMs,
+                                onOpenSleepTimer = onOpenSleepTimer,
+                                eqActive = eqActive,
+                                onOpenEqualizer = onOpenEqualizer,
+                                audioFormat = stackCur?.formatLabel ?: "",
+                                visualizerEnabled = state.visualizerEnabled,
+                                onToggleVisualizer = onToggleVisualizer,
+                                tiltSpectrum = state.tiltSpectrum,
+                                // 堆叠往右后方，舞台留出余量给后面几层露头
+                                coverAspect = 1.30f
+                            ) {
+                                DeckStack(
+                                    state = state,
+                                    colors = colors,
+                                    onToggle = onToggle,
+                                    onPrev = onPrev,
+                                    onNext = onNext,
+                                    onSeek = onSeek,
+                                    onSelect = onSelect,
+                                    onToggleLike = onToggleLike,
+                                    onCyclePlayMode = onCyclePlayMode,
+                                    onToggleVisualizer = onToggleVisualizer,
+                                    onOpenEqualizer = onOpenEqualizer,
+                                    onOpenSleepTimer = onOpenSleepTimer,
+                                    onClickArtwork = openLyrics,
+                                    eqActive = eqActive,
+                                    landscape = true
+                                )
+                            }
+                        } else {
                         DeckStack(
                             state = state,
                             colors = colors,
@@ -247,6 +333,7 @@ fun SongDeck(
                             onClickArtwork = openLyrics,
                             eqActive = eqActive
                         )
+                        }
                     } else {
                         DeckCarousel(
                             state = state,
@@ -274,11 +361,14 @@ fun SongDeck(
                 lines = lyricLines,
                 loading = lyricLoading,
                 positionMs = state.positionMs,
+                durationMs = state.durationMs,
                 title = state.currentSong?.title ?: "",
                 artist = state.currentSong?.artist ?: "",
                 colors = colors,
                 hazeState = lyricsHazeState,
                 backdrops = lyricsBackdrops,
+                onSeek = onSeek,
+                lyricAlign = state.lyricAlign,
                 onDismiss = { showLyrics = false }
             )
         }
@@ -299,8 +389,12 @@ private fun DeckTopBar(
     onReload: () -> Unit,
     /** 内容区（非顶栏）交互计数：>0 时顶栏升到中档透明度 */
     contentTick: Int = 0,
+    /** 开启后：完全静止时顶栏淡到全透明（关=停在半透明 30%） */
+    autoHide: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    // 静止时的回落透明度：开关开启则完全透明。
+    val idleAlpha = if (autoHide) 0f else 0.3f
     // 与主界面上栏完全一致：左 IRIS MUSIC 标题、右五个同款按钮，唯一区别是没有搜索框。
     // 三档透明度：静止 2 秒淡到 30%；交互内容区（拖动海报墙等）升到 50%；
     // 点顶栏本身升到 90%。任一交互都重置 2 秒回落计时。
@@ -315,12 +409,12 @@ private fun DeckTopBar(
         barScope.launch { barAlpha.animateTo(target, animationSpec = tween(250)) }
         idleJob = barScope.launch {
             delay(2000)
-            barAlpha.animateTo(0.3f, animationSpec = tween(300))
+            barAlpha.animateTo(idleAlpha, animationSpec = tween(300))
         }
     }
-    LaunchedEffect(Unit) {
-        // 进场：2 秒无操作淡到 30%
-        idleJob = barScope.launch { delay(2000); barAlpha.animateTo(0.3f, animationSpec = tween(300)) }
+    LaunchedEffect(autoHide) {
+        // 进场 / 开关切换：2 秒无操作淡到静止档（默认 30%，开关开则全透明）
+        idleJob = barScope.launch { delay(2000); barAlpha.animateTo(idleAlpha, animationSpec = tween(300)) }
     }
     // 点顶栏与"动别处"会在同一次按下里同时 ++（覆盖全屏的海报墙观察层 requireUnconsumed=false
     // 必须穿透海报墙自身消费，故点顶栏也会 contentTick++）。用时间戳让"点顶栏"压制同帧的
@@ -336,7 +430,9 @@ private fun DeckTopBar(
         modifier
             .fillMaxWidth()
             .graphicsLayer { this.alpha = barAlpha.value }
-            .padding(top = 48.dp)
+            // 上栏离顶太远：statusBarsPadding 已经避开状态栏，这里再叠 48dp
+            // 就把上栏压到屏幕偏中间。收到 20dp，视觉上贴近顶部但不顶到状态栏。
+            .padding(top = 20.dp)
             .padding(horizontal = 22.dp)
             // 唤醒：顶栏范围内任意按下（requireUnconsumed=false → 点按钮也算）都重置计时，
             // 但不消费事件，子按钮照常响应。
@@ -428,6 +524,19 @@ internal fun LayoutButton(onClick: () -> Unit, colors: IrisColors, plain: Boolea
 /** 两侧留给邻卡的宽度：小了看不出旁边还有卡，大了当前卡就被挤得太窄 */
 private val CAROUSEL_PEEK = 38.dp
 
+/**
+ * 横屏封面 Pager 的页宽占舞台宽度的比例。
+ *
+ * 舞台宽 = 封面高 × 1.30（见 coverAspect），当前封面是正方形（宽=高），
+ * 所以当前页宽应占舞台的 1/1.30 ≈ 0.77，剩下的 23% 左右均分给邻曲露头。
+ */
+private val CoverPageSize = object : PageSize {
+    override fun Density.calculateMainAxisPageSize(
+        availableSpace: Int,
+        pageSpacing: Int
+    ): Int = (availableSpace * 0.77f).toInt()
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DeckCarousel(
@@ -475,6 +584,115 @@ private fun DeckCarousel(
                     onSelect(page)
                 }
             }
+    }
+
+    val isLandscape = LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    if (isLandscape) {
+        // 横屏：封面 Pager（露左右邻曲）在左，固定控制区在右
+        val cur = queue.getOrNull(state.currentIndex)
+        LandscapeDeckPlayer(
+            title = cur?.title ?: "未选择",
+            artist = cur?.artist ?: "",
+            positionMs = state.positionMs,
+            durationMs = state.durationMs,
+            shuffle = state.shuffle,
+            repeatMode = state.repeatMode,
+            progress = state.progress,
+            isPlaying = state.isPlaying,
+            onToggle = onToggle,
+            onPrev = onPrev,
+            onNext = onNext,
+            onSeek = onSeek,
+            onCyclePlayMode = onCyclePlayMode,
+            onToggleLike = { cur?.let { onToggleLike(it.id) } },
+            liked = cur?.id in state.likedSongIds,
+            colors = colors,
+            sleepTimerMs = state.sleepTimerMs,
+            sleepTimerEndMs = state.sleepTimerEndMs,
+            onOpenSleepTimer = onOpenSleepTimer,
+            eqActive = eqActive,
+            onOpenEqualizer = onOpenEqualizer,
+            audioFormat = cur?.formatLabel ?: "",
+            visualizerEnabled = state.visualizerEnabled,
+            onToggleVisualizer = onToggleVisualizer,
+            tiltSpectrum = state.tiltSpectrum,
+            // 舞台比封面宽 30%：多出的部分左右均分，正好给邻曲露头
+            coverAspect = 1.30f
+        ) {
+            // 封面 Pager：封面本体清晰。左右边界做「向背景柔化淡出」——
+            // 用横向 DstIn 渐变只在最外侧约 24% 范围把封面 alpha 平滑降到 0，
+            // 中间全清晰。静止时中间露清晰封面、两侧本就无封面或已淡净，没有方块/色条，
+            // 滑动时封面滑到边界连续消失，不是糊成一坨。
+            // （注：曾用 haze 做两侧局部高斯模糊，但当前 haze 版本的 hazeChild 用独立
+            //  RenderEffect 层，外部 DstIn 蒙版擦不掉它，导致整片糊，故弃用。）
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth()
+                    // 整层裁成圆角矩形，圆角方向与封面一致；
+                    // 两侧淡出的渐变在圆角处也随之柔化，形成"沿圆角淡出"。
+                    .clip(RoundedCornerShape(18.dp))
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        // 两端淡出、中段全保留。多 stop 近似 smoothstep，
+                        // 落点更柔、无折角硬边。
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                0.00f to Color.Black.copy(alpha = 0f),
+                                0.06f to Color.Black.copy(alpha = 0.35f),
+                                0.13f to Color.Black.copy(alpha = 0.70f),
+                                0.20f to Color.Black.copy(alpha = 0.90f),
+                                0.27f to Color.Black.copy(alpha = 1f),
+                                0.73f to Color.Black.copy(alpha = 1f),
+                                0.80f to Color.Black.copy(alpha = 0.90f),
+                                0.87f to Color.Black.copy(alpha = 0.70f),
+                                0.94f to Color.Black.copy(alpha = 0.35f),
+                                1.00f to Color.Black.copy(alpha = 0f)
+                            ),
+                            blendMode = BlendMode.DstIn
+                        )
+                    },
+                pageSize = CoverPageSize,
+                snapPosition = SnapPosition.Center,
+                contentPadding = PaddingValues(0.dp),
+                pageSpacing = 0.dp,
+                beyondViewportPageCount = 1,
+                verticalAlignment = Alignment.CenterVertically
+            ) { page ->
+                val song = queue.getOrNull(page)
+                if (song != null) {
+                    PlayerCoverArt(
+                        artworkPath = song.filePath,
+                        positionMs = if (page == state.currentIndex) state.positionMs else 0L,
+                        isDark = colors.isDark,
+                        vizAlpha = 0f,
+                        shake = rememberShakeState(false),
+                        coverLyricEnabled = state.coverLyric,
+                        interactive = page == state.currentIndex,
+                        coverLyrics = emptyList(),
+                        onClickArtwork = { if (page == state.currentIndex) onClickArtwork() else onSelect(page) },
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(1f)
+                            .graphicsLayer {
+                                // 邻曲轻微景深：越靠边越小越暗。封面本体不模糊。
+                                val dist = abs((page - pagerState.currentPage) - pagerState.currentPageOffsetFraction)
+                                    .coerceIn(0f, 1f)
+                                val near = 1f - dist
+                                val s = lerp(0.92f, 1f, near)
+                                scaleX = s
+                                scaleY = s
+                                alpha = lerp(0.72f, 1f, near)
+                            }
+                    )
+                }
+            }
+        }
+        return
     }
 
     HorizontalPager(
@@ -580,7 +798,8 @@ private fun DeckStack(
     onOpenEqualizer: () -> Unit,
     onOpenSleepTimer: () -> Unit,
     onClickArtwork: () -> Unit,
-    eqActive: Boolean
+    eqActive: Boolean,
+    landscape: Boolean = false
 ) {
     val queue = state.queue
     val base = state.currentIndex.coerceAtLeast(0).coerceAtMost(queue.lastIndex.coerceAtLeast(0))
@@ -588,9 +807,16 @@ private fun DeckStack(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val stepY = with(density) { STACK_STEP_Y.toPx() }
-        val flyOut = with(density) { maxWidth.toPx() }
+        // 飞出行程。
+        // 竖屏：舞台就是整屏宽，走满一屏即彻底离场。
+        // 横屏：舞台只是左侧那块正方形，走满 maxWidth 只飞到舞台边缘，
+        // 卡片还留在画面里（就是"没飞出去、上一曲停在屏幕上"）。
+        // 再加 60% 余量，确保飞到舞台外并被 clipToBounds 裁掉。
+        val flyOut = with(density) { maxWidth.toPx() } * (if (landscape) 1.6f else 1f)
         val throwPx = maxOf(
-            flyOut * STACK_THROW_FRACTION,
+            // 阈值按舞台实宽算，不跟着 flyOut 的余量放大，
+            // 否则横屏要多划 60% 距离才切歌。
+            with(density) { maxWidth.toPx() } * STACK_THROW_FRACTION,
             with(density) { STACK_THROW_MIN.toPx() }
         )
         // 切歌最小位移门槛：低于它无论甩多快都不切，直接弹回
@@ -645,6 +871,9 @@ private fun DeckStack(
         Box(
             Modifier
                 .fillMaxSize()
+                // 横屏：堆叠舞台是左侧那块正方形，飞出的卡必须裁在舞台内，
+                // 否则会横穿到右边的控制区上面。
+                .then(if (landscape) Modifier.clipToBounds() else Modifier)
                 .draggable(
                     state = dragState,
                     orientation = Orientation.Horizontal,
@@ -774,8 +1003,15 @@ private fun DeckStack(
 
                 Box(
                     Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = STACK_SIDE_PADDING)
+                        .then(
+                            // 横屏：堆在正方形封面舞台里。留出右侧一点余量给
+                            // 后面几层露头（往右后方堆），所以不是铺满而是稍缩。
+                            // 竖屏：整卡堆叠，两侧留白同列表播放页
+                            if (landscape) Modifier
+                                .fillMaxHeight(0.88f)
+                                .aspectRatio(1f)
+                            else Modifier.fillMaxWidth().padding(horizontal = STACK_SIDE_PADDING)
+                        )
                         .graphicsLayer {
                             // 手势进度：-1 = 左划满（下一首），+1 = 右划满（上一首）
                             val t = (cardX / throwPx).coerceIn(-1f, 1f)
@@ -816,7 +1052,17 @@ private fun DeckStack(
                             // d=0 也参与：右划是"把这张塞回去"，它该退到第二层，
                             // 而不是跟着手指跑出屏幕。
                             val eff = (depth + t).coerceAtLeast(0f)
-                            translationY = -stepY * eff
+                            if (landscape) {
+                                // 横屏：舞台是矮而方的一块，沿用竖屏的"往上堆"
+                                // 会把后面的卡顶出上边界，再被 clipToBounds 裁掉
+                                // ——看着就是卡片从上面凭空消失。
+                                // 改成往右后方堆（也正是这个布局原本的设计），
+                                // 右移的同时轻微下沉，层次靠 X 位移体现。
+                                translationX = stepY * 1.35f * eff
+                                translationY = stepY * 0.28f * eff
+                            } else {
+                                translationY = -stepY * eff
+                            }
                             val s = 1f - STACK_SCALE_STEP * eff
                             scaleX = s
                             scaleY = s
@@ -827,6 +1073,21 @@ private fun DeckStack(
                                 .coerceIn(0f, 1f)
                         }
                 ) {
+                    if (landscape) {
+                        // 横屏：只堆封面，控制区在外层固定。
+                        PlayerCoverArt(
+                            artworkPath = song.filePath,
+                            positionMs = if (d == 0) state.positionMs else 0L,
+                            isDark = colors.isDark,
+                            vizAlpha = 0f,
+                            shake = rememberShakeState(false),
+                            coverLyricEnabled = state.coverLyric,
+                            interactive = d == 0,
+                            coverLyrics = emptyList(),
+                            onClickArtwork = { if (d == 0) onClickArtwork() else onSelect(index) },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
                     DeckCard(
                         song = song,
                         // 最上面那张就是"正在放的那首"。不写 index == state.currentIndex：
@@ -848,6 +1109,7 @@ private fun DeckStack(
                         eqActive = eqActive,
                         fullWidth = false
                     )
+                    }
                     // 其它卡整块不接受点击——露出来的那条边误触一下就跳歌，比它带来的便利更烦。
                     // 抽卡手势已经覆盖切歌，非当前卡不需要任何交互。
                 }

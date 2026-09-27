@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.player
 
 import android.app.Application
@@ -32,7 +49,9 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
 import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.RangeEnhancer
+import com.iris.music.audio.SafeLimiter
 import com.iris.music.audio.VirtualBass
+import com.iris.music.audio.TrackGain
 import com.iris.music.audio.VirtualSurround
 import com.iris.music.audio.FadeController
 import com.iris.music.audio.SilenceSkipper
@@ -140,9 +159,15 @@ data class PlayerUiState(
     /** 实验性：摇动手机封面跟着一晃（duangduang） */
     val coverShake: Boolean = false,
     /** 封面左下角单行歌词（锁在封面上，换词时模糊渐隐渐出） */
-    val coverLyric: Boolean = false,
+val coverLyric: Boolean = false,
+    /** 全屏歌词对齐：0=靠左 1=居中 2=靠右 */
+    val lyricAlign: Int = 1,
+    /** 上栏（卡片模式顶栏）完全静止时是否淡到完全透明（关=停在半透明 30%） */
+    val topBarAutoHide: Boolean = false,
     /** 全局圆角基准值（dp），驱动所有卡片/列表/徽章的圆角 */
     val cornerBase: Float = 38f,
+    /** 全局字号缩放倍率，1.0 为系统默认 */
+    val fontScale: Float = 1f,
     /** 音乐渐入渐出开关 */
     val fadeEnabled: Boolean = false,
     /** 渐变时长（毫秒），默认 2 秒 */
@@ -175,6 +200,14 @@ data class PlayerUiState(
     val virtualSurround: Boolean = false,
     /** 虚拟环绕强度 0-100 */
     val virtualSurroundStrength: Int = 40,
+    /** 防失真限幅（V3.10）：防止推高/增强后削波撕裂 */
+    val safeLimiter: Boolean = false,
+    /** 防失真限幅强度 0-100（越大余量越足、越安全） */
+    val safeLimiterStrength: Int = 30,
+    /** 曲间响度均衡（V3.11）：在线测响度、按曲拉平 */
+    val loudnorm: Boolean = false,
+    /** 拉平力度 0-100（100=完全对齐 -14 LUFS） */
+    val loudnormStrength: Int = 70,
     /** 自定义主题主色（ARGB_8888，仅 theme==CUSTOM 时生效） */
     val customPrimaryArgb: Long = 0xFF00F0FFL,
     /** 自定义主题次色（ARGB_8888，仅 theme==CUSTOM 时生效） */
@@ -212,7 +245,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             tiltSpectrum = prefs.getBoolean(KEY_TILT_SPECTRUM, false),
             coverShake = prefs.getBoolean(KEY_COVER_SHAKE, false),
             coverLyric = prefs.getBoolean(KEY_COVER_LYRIC, false),
+            lyricAlign = prefs.getInt(KEY_LYRIC_ALIGN, 1).coerceIn(0, 2),
+            topBarAutoHide = prefs.getBoolean(KEY_TOPBAR_AUTOHIDE, false),
             cornerBase = prefs.getFloat(KEY_CORNER_BASE, 38f),
+            fontScale = prefs.getFloat(KEY_FONT_SCALE, 1f).coerceIn(0.85f, 1.30f),
             fadeEnabled = prefs.getBoolean(FadeController.KEY_ENABLED, false),
             fadeMs = prefs.getLong(FadeController.KEY_FADE_MS, FadeController.DEFAULT_FADE_MS),
             hapticsEnabled = prefs.getBoolean(Haptics.KEY_ENABLED, true),
@@ -230,6 +266,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             rangeEnhancerStrength = prefs.getInt(RangeEnhancer.KEY_STRENGTH, 70).coerceIn(0, 100),
             virtualSurround = prefs.getBoolean(VirtualSurround.KEY_ENABLED, false),
             virtualSurroundStrength = prefs.getInt(VirtualSurround.KEY_STRENGTH, 40).coerceIn(0, 100),
+            safeLimiter = prefs.getBoolean(SafeLimiter.KEY_ENABLED, false),
+            safeLimiterStrength = prefs.getInt(SafeLimiter.KEY_STRENGTH, 30).coerceIn(0, 100),
+            loudnorm = prefs.getBoolean(TrackGain.KEY_ENABLED, false),
+            loudnormStrength = prefs.getInt(TrackGain.KEY_STRENGTH, 70).coerceIn(0, 100),
             customPrimaryArgb = prefs.getLong(KEY_CUSTOM_PRIMARY, 0xFF00F0FFL),
             customSecondaryArgb = prefs.getLong(KEY_CUSTOM_SECONDARY, 0xFFFF2E97L),
             customBackgroundUri = prefs.getString(KEY_CUSTOM_BG_URI, null),
@@ -518,10 +558,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshRecommendations() {
         if (_state.value.refreshing) return
         _state.value = _state.value.copy(refreshing = true)
-        val allSongs = _state.value.allSongs
+        val pool = recommendationPool()
         val exploration = _state.value.exploration
         // 纯元数据排序，毫秒级
-        val recs = Recommender.recommend(allSongs, exploration = exploration)
+        val recs = Recommender.recommend(pool, exploration = exploration)
         // 延迟 500ms 后重置（保证旋转动画可见）
         viewModelScope.launch {
             kotlinx.coroutines.delay(500)
@@ -549,6 +589,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(selectedFolders = next)
         saveSelectedFolders(next)
         applyFilters(resetToFirst = true)
+        // 推荐候选池跟随筛选范围，选了文件夹推荐也要跟着收窄
+        updateRecommendations()
     }
 
     /** 清空文件夹选择（回到全部音乐） */
@@ -556,6 +598,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(selectedFolders = emptySet())
         saveSelectedFolders(emptySet())
         applyFilters(resetToFirst = true)
+        updateRecommendations()
     }
 
     // ==================== 自定义歌单 ====================
@@ -732,10 +775,21 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(tiltSpectrum = enabled, coverShake = enabled)
     }
 
+    /** 全屏歌词对齐：0=靠左 1=居中 2=靠右 */
+    fun setLyricAlign(align: Int) {
+        val a = align.coerceIn(0, 2)
+        prefs.edit().putInt(KEY_LYRIC_ALIGN, a).apply()
+        _state.value = _state.value.copy(lyricAlign = a)
+    }
     /** 封面左下角单行歌词开关。 */
     fun setCoverLyric(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_COVER_LYRIC, enabled).apply()
         _state.value = _state.value.copy(coverLyric = enabled)
+    }
+    /** 上栏静止时是否淡到完全透明。 */
+    fun setTopBarAutoHide(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TOPBAR_AUTOHIDE, enabled).apply()
+        _state.value = _state.value.copy(topBarAutoHide = enabled)
     }
 
     /** 设置全局圆角基准（dp），0=直角，44=接近胶囊 */
@@ -743,6 +797,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val v = dp.coerceIn(0f, 44f)
         prefs.edit().putFloat(KEY_CORNER_BASE, v).apply()
         _state.value = _state.value.copy(cornerBase = v)
+    }
+    fun setFontScale(scale: Float) {
+        val v = scale.coerceIn(0.85f, 1.30f)
+        prefs.edit().putFloat(KEY_FONT_SCALE, v).apply()
+        _state.value = _state.value.copy(fontScale = v)
     }
 
     /**
@@ -869,6 +928,33 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putInt(VirtualSurround.KEY_STRENGTH, x).apply()
         VirtualSurround.setStrength(x)
         _state.value = _state.value.copy(virtualSurroundStrength = x)
+    }
+
+    /** 防失真限幅（V3.10）：防止推高/增强后削波撕裂 */
+    fun setSafeLimiter(enabled: Boolean) {
+        prefs.edit().putBoolean(SafeLimiter.KEY_ENABLED, enabled).apply()
+        SafeLimiter.setEnabled(enabled)
+        _state.value = _state.value.copy(safeLimiter = enabled)
+    }
+    /** 防失真限幅强度 0-100 */
+    fun setSafeLimiterStrength(v: Int) {
+        val x = v.coerceIn(0, 100)
+        prefs.edit().putInt(SafeLimiter.KEY_STRENGTH, x).apply()
+        SafeLimiter.setStrength(x)
+        _state.value = _state.value.copy(safeLimiterStrength = x)
+    }
+    /** 曲间响度均衡（V3.11）开关 */
+    fun setLoudnorm(enabled: Boolean) {
+        prefs.edit().putBoolean(TrackGain.KEY_ENABLED, enabled).apply()
+        TrackGain.setEnabled(enabled)
+        _state.value = _state.value.copy(loudnorm = enabled)
+    }
+    /** 响度均衡拉平力度 0-100 */
+    fun setLoudnormStrength(v: Int) {
+        val x = v.coerceIn(0, 100)
+        prefs.edit().putInt(TrackGain.KEY_STRENGTH, x).apply()
+        TrackGain.setStrength(x)
+        _state.value = _state.value.copy(loudnormStrength = x)
     }
 
     // ==================== 点赞 ====================
@@ -1114,16 +1200,27 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         // 切歌后不自动刷新推荐——推荐保持稳定，手动刷新或点赞时才更新
     }
 
-    /** 基于用户行为生成推荐（全库独立打分，不依赖当前歌曲） */
+    /** 基于用户行为生成推荐（独立打分，不依赖当前歌曲）。候选池跟随选中文件夹。 */
     private fun updateRecommendations() {
-        val allSongs = _state.value.allSongs
-        if (allSongs.isEmpty()) return
+        val pool = recommendationPool()
+        if (pool.isEmpty()) return
         val exploration = _state.value.exploration
-        val recs = Recommender.recommend(allSongs, exploration = exploration)
+        val recs = Recommender.recommend(pool, exploration = exploration)
         _state.value = _state.value.copy(
             recommendations = recs,
             recommendationsVersion = _state.value.recommendationsVersion + 1
         )
+    }
+
+    /**
+     * 推荐候选池：选了文件夹就只从那几个文件夹里出。
+     * 推荐区应当反映"我正在看的范围"——用户圈定 L1 后还总推荐别目录的歌，
+     * 体验上就像推荐不认筛选。排行/点赞等打分逻辑不变，只是候选集收窄。
+     */
+    private fun recommendationPool(): List<Song> {
+        val all = _state.value.allSongs
+        val sel = _state.value.selectedFolders
+        return if (sel.isEmpty()) all else all.filter { it.folderPath in sel }
     }
 
     /** 库加载完成/刷新后调用 */
@@ -1153,7 +1250,31 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun loadLibrary() {
+        // 秒开：先只读元数据缓存直接出歌（毫秒级），不等全盘扫描。
+        val cached = MusicRepository.loadFromCache(getApplication())
+        if (cached.isNotEmpty()) {
+            _state.value = _state.value.copy(
+                allSongs = cached,
+                folders = MusicRepository.buildFolders(cached),
+                loading = false
+            )
+            applyFilters(resetToFirst = true)
+            if (_state.value.shuffle) shuffleQueueByPreference()
+            updateRecommendations()
+            refreshReportIfNeeded()
+        }
+
+        // 后台校正：完整扫盘一次（增删改会在这里被纠正并回写缓存）。
+        // 缓存为空（首次安装/清过数据）时这就是唯一数据来源，需要显示加载态。
+        if (cached.isEmpty()) _state.value = _state.value.copy(loading = true)
         val songs = MusicRepository.loadSongs(getApplication())
+        // 扫描结果与缓存版一致时不重建队列，避免"进来又跳一下/闪一下"。
+        if (cached.isNotEmpty() && songs.size == cached.size &&
+            songs.map { it.id }.toSet() == cached.map { it.id }.toSet()
+        ) {
+            _state.value = _state.value.copy(loading = false)
+            return
+        }
         _state.value = _state.value.copy(
             allSongs = songs,
             folders = MusicRepository.buildFolders(songs),
@@ -1389,7 +1510,10 @@ private const val KEY_THEME = "theme"
         const val KEY_TILT_SPECTRUM = "tilt_spectrum"
         const val KEY_COVER_SHAKE = "cover_shake"
         const val KEY_COVER_LYRIC = "cover_lyric"
+        const val KEY_LYRIC_ALIGN = "lyric_align"
+        const val KEY_TOPBAR_AUTOHIDE = "topbar_autohide"
         const val KEY_CORNER_BASE = "corner_base"
+        const val KEY_FONT_SCALE = "font_scale"
         const val KEY_EXPLORATION = "exploration"
         const val KEY_SELECTED_FOLDERS = "selected_folders"
         const val KEY_SHUFFLE = "shuffle_enabled"

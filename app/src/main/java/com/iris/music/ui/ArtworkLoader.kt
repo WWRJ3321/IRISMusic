@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.ui
 
 import android.content.Context
@@ -51,17 +68,17 @@ object ArtworkLoader {
     private const val DISK_TARGET_PX = 256       // 磁贴显示尺寸，够用且解码快
     // 海报墙 6 格外扩余量下，同屏唯一封面可达 150~250 张；旧值 192 会在
     // 滚动中把刚解析完的封面挤出 LRU，再滚动时重新走 MediaMetadataRetriever
-    // ——"卡片瞬间加载"的直接来源。384 张 × 256px RGB_565 ≈ 50MB，可承受。
-    private const val MEM_CACHE_MAX = 384
+    // ——"卡片瞬间加载"的直接来源。256 张 × 256px RGB_565 ≈ 33MB，兼顾流畅与内存。
+    private const val MEM_CACHE_MAX = 256
 
     /**
      * 磁盘缓存容量上限。缓存键带文件指纹（路径+长度+mtime），文件一旦改动
      * 就会产生新键的副本，旧副本若无回收会永久残留、缓存只增不减。这里给出
      * 硬上限：超出后按 lastModified 淘汰最旧的封面，缩到目标的 [DISK_TRIM_RATIO]。
-     * 12MB 约可容纳数千张 256px webp，覆盖绝大多数曲库；系统也可随时整体清空
-     * cacheDir，因此这只是主动控容，不影响正确性。
+     * 6MB 约可容纳上千张 256px webp，覆盖常规曲库首屏与常听歌；系统也可随时整体
+     * 清空 cacheDir，因此这只是主动控容，不影响正确性。压缩用 WEBP q65 进一步省空间。
      */
-    private const val DISK_MAX_BYTES = 12L * 1024 * 1024
+    private const val DISK_MAX_BYTES = 6L * 1024 * 1024
     private const val DISK_TRIM_RATIO = 0.8      // 超限后删到 80%，留出余量避免频繁触发
 
     /** 磁盘缓存目录（延迟初始化，避免在类加载时触碰 Context） */
@@ -108,6 +125,20 @@ object ArtworkLoader {
             size > MEM_CACHE_MAX
     }
     private val lock = Any()
+
+    // ===== 高清层：仅供播放大卡 / 全屏等大图场景，先显缩略再无缝换高清 =====
+    // 大图占内存（1080² ARGB_8888 ≈ 4.6MB），只留很小的 LRU；且绝不落磁盘——
+    // 高清是"当前在看的这一张"的即时需求，不是要长期堆积的缓存，落磁盘会把
+    // 刚压下去的存储又顶回来。切歌换图时旧的自然被挤出。
+    private const val HIRES_TARGET_PX = 1080
+    private const val HIRES_CACHE_MAX = 3
+    private val hiResCache = object : LinkedHashMap<String, Bitmap>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean =
+            size > HIRES_CACHE_MAX
+    }
+    private val hiResLock = Any()
+    private val hiResInFlight =
+        java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<Bitmap?>>()
 
     /** 解析失败的文件路径集合：同一会话内不再重试 */
     private val failedPaths = mutableSetOf<String>()
@@ -176,6 +207,46 @@ object ArtworkLoader {
         }
     }
 
+    /**
+     * 高清封面：按需读取原图内嵌封面、解码到 [HIRES_TARGET_PX]（相对磁贴缓存的
+     * 256px 大得多），只给播放大卡 / 全屏等大图场景。
+     *
+     * 用法配合：UI 先用 [peek]/[load] 拿到缩略图立即显示（不割裂），再异步调本函数
+     * 拿高清并在就绪后无缝替换（清晰）。缩略图来自磁盘缓存，高清只在内存、绝不落盘。
+     *
+     * 找不到高清（无封面/解码失败）时返回 null，UI 应继续沿用缩略图。
+     */
+    suspend fun loadHiRes(filePath: String?): Bitmap? = withContext(Dispatchers.IO) {
+        if (filePath.isNullOrEmpty()) return@withContext null
+        synchronized(hiResLock) {
+            hiResCache[filePath]?.let { return@withContext it }
+        }
+        if (filePath in failedPaths) return@withContext null
+
+        val mine = kotlinx.coroutines.CompletableDeferred<Bitmap?>(null)
+        val existing = hiResInFlight.putIfAbsent(filePath, mine)
+        if (existing != null) return@withContext existing.await()
+
+        try {
+            val bytes = readPictureBytes(filePath)
+            val bmp = if (bytes == null) null else decodeSampled(bytes, HIRES_TARGET_PX)
+            if (bmp != null) synchronized(hiResLock) { hiResCache[filePath] = bmp }
+            mine.complete(bmp)
+            bmp
+        } catch (e: Throwable) {
+            mine.completeExceptionally(e)
+            throw e
+        } finally {
+            hiResInFlight.remove(filePath, mine)
+        }
+    }
+
+    /** 同步窥高清缓存：切歌前若这张已看过高清则首帧直接命中，避免再走一次缩略→高清过渡。 */
+    fun peekHiRes(filePath: String?): Bitmap? {
+        if (filePath.isNullOrEmpty()) return null
+        synchronized(hiResLock) { return hiResCache[filePath] }
+    }
+
     private fun loadUncached(filePath: String, key: String): Bitmap? {
         // 磁盘缓存命中：直接读图，跳过音频解析
         val df = diskFile(filePath)
@@ -203,7 +274,7 @@ object ArtworkLoader {
                         runCatching {
                             val existed = df.length()
                             val out = java.io.FileOutputStream(df)
-                            bmp.compress(Bitmap.CompressFormat.WEBP, 75, out)
+                            bmp.compress(Bitmap.CompressFormat.WEBP, 65, out)
                             out.flush(); out.close()
                             diskBytes.addAndGet(df.length() - existed)
                         }
@@ -238,20 +309,26 @@ object ArtworkLoader {
         trimmedSinceOverLimit = diskBytes.get() > DISK_MAX_BYTES
     }
 
-    private fun decodeSampled(bytes: ByteArray): Bitmap? {
+    /**
+     * 解码封面到目标边长。
+     * @param targetPx 目标边长；小图（磁贴）走 RGB_565 省内存，大图（高清）走 ARGB_8888
+     *   保色深避免渐变带状。
+     */
+    private fun decodeSampled(bytes: ByteArray, targetPx: Int = DISK_TARGET_PX): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
-        while (bounds.outWidth / (sample * 2) >= DISK_TARGET_PX &&
-            bounds.outHeight / (sample * 2) >= DISK_TARGET_PX
+        while (bounds.outWidth / (sample * 2) >= targetPx &&
+            bounds.outHeight / (sample * 2) >= targetPx
         ) {
             sample *= 2
         }
-                // RGB_565：海报墙封面是 ≤256px 的小图，565 相对 ARGB_8888 内存减半，
-        // 满屏几十张卡片的位图占用直接腰斩；肉眼在缩略尺寸下几乎看不出带状。
+        // 小图（≤256px 磁贴）用 RGB_565：内存减半，满屏几十张卡片占用腰斩，肉眼在缩略
+        // 尺寸下几乎看不出带状；高清大图用 ARGB_8888 保色深，全屏观感更干净。
+        val hiRes = targetPx > DISK_TARGET_PX
         val opts = BitmapFactory.Options().apply {
             inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.RGB_565
+            inPreferredConfig = if (hiRes) Bitmap.Config.ARGB_8888 else Bitmap.Config.RGB_565
         }
         return runCatching {
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)

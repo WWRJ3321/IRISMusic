@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.ui
 
 import androidx.compose.animation.core.animateFloatAsState
@@ -132,6 +149,14 @@ fun EqualizerSheet(
     virtualSurroundStrength: Int = 40,
     onVirtualSurroundChange: (Boolean) -> Unit = {},
     onVirtualSurroundStrengthChange: (Int) -> Unit = {},
+    safeLimiter: Boolean = false,
+    safeLimiterStrength: Int = 30,
+    onSafeLimiterChange: (Boolean) -> Unit = {},
+    onSafeLimiterStrengthChange: (Int) -> Unit = {},
+    loudnorm: Boolean = false,
+    loudnormStrength: Int = 70,
+    onLoudnormChange: (Boolean) -> Unit = {},
+    onLoudnormStrengthChange: (Int) -> Unit = {},
     colors: IrisColors
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
@@ -218,7 +243,8 @@ fun EqualizerSheet(
             // 等响曲线补偿：和三档增强是两个维度，可以同时开
             LoudnessRow(state.loudness, state.loudnessStrength, colors, { onToggleLoudness(!state.loudness) }, onLoudnessStrengthChange)
             Spacer(Modifier.height(6.dp))
-            // V2.2 虚拟低音：心理声学谐波合成，为小喇叭补低音存在感
+            // V3.10 声音增强：四个效果做成扁平行（点行展开滑条），整体更紧凑
+            // 虚拟低音：心理声学谐波合成，为小喇叭补低音存在感
             EnhancerRow(
                 title = "虚拟低音",
                 subtitle = "",
@@ -230,7 +256,7 @@ fun EqualizerSheet(
                 onStrengthChange = onVirtualBassStrengthChange
             )
             Spacer(Modifier.height(6.dp))
-            // V2.2 动态范围增强：压缩 + 化妆增益
+            // 动态范围增强：压缩 + 化妆增益
             EnhancerRow(
                 title = "动态范围增强",
                 subtitle = "",
@@ -242,16 +268,40 @@ fun EqualizerSheet(
                 onStrengthChange = onRangeEnhancerStrengthChange
             )
             Spacer(Modifier.height(6.dp))
-            // V2.2 虚拟环绕：M/S 侧边增强，静态声场展宽（非 3D 旋转）
+            // 虚拟环绕：M/S 侧边增强，静态声场展宽（非 3D 旋转）；v3.11 单声道自动去相关成伪立体声
             EnhancerRow(
                 title = "虚拟环绕",
-                subtitle = "",
+                subtitle = "单声道歌曲也会自动展宽",
                 checked = virtualSurround,
                 strength = virtualSurroundStrength,
                 strengthLabel = "扩展强度",
                 colors = colors,
                 onToggle = { onVirtualSurroundChange(!virtualSurround) },
                 onStrengthChange = onVirtualSurroundStrengthChange
+            )
+            Spacer(Modifier.height(6.dp))
+            // V3.10 防失真：前瞻峰值限幅，防推高/增强后削波撕裂。强度越大余量越足越安全
+            EnhancerRow(
+                title = "防失真保护",
+                subtitle = "只防破音撕裂，不影响正常音量与鼓点",
+                checked = safeLimiter,
+                strength = safeLimiterStrength,
+                strengthLabel = "保护余量",
+                colors = colors,
+                onToggle = { onSafeLimiterChange(!safeLimiter) },
+                onStrengthChange = onSafeLimiterStrengthChange
+            )
+            Spacer(Modifier.height(6.dp))
+            // 曲间响度均衡：在线测响度、按曲拉平（解决现场版巨响/老录音听不清）
+            EnhancerRow(
+                title = "响度均衡",
+                subtitle = "让每首歌的音量听起来差不多（新歌首次听完自动测好）",
+                checked = loudnorm,
+                strength = loudnormStrength,
+                strengthLabel = "拉平力度",
+                colors = colors,
+                onToggle = { onLoudnormChange(!loudnorm) },
+                onStrengthChange = onLoudnormStrengthChange
             )
             Spacer(Modifier.height(14.dp))
 
@@ -880,24 +930,38 @@ private fun LoudnessRow(
             Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(colors.surface))
         }
         }
-        // 开启时展开补偿强度滑条（结构同 EnhancerRow）
+        // 开启时展开补偿强度滑条（与 EnhancerRow 同款：标签+滑条并排一行）
         AnimatedVisibility(
             visible = checked,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
-            Column(Modifier.padding(horizontal = 14.dp).padding(bottom = 10.dp)) {
+// 开启时展开补偿强度滑条（与 EnhancerRow 同款：标签+滑条并排，行高 = 36dp 命中区）
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
                     "补偿强度 · $strength%",
                     color = onSheet.copy(alpha = 0.6f),
-                    fontSize = 10.sp
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    // 固定宽度：数字 5→50→100 位数变化时标签不再变宽，
+                    // 否则同 Row 内 weight 滑条会被左右挤压、拖动时整条长大长小
+                    modifier = Modifier.width(88.dp).padding(end = 8.dp)
                 )
                 CompactSlider(
                     value = strength.toFloat(),
                     onValueChange = { onStrengthChange(it.toInt()) },
                     valueRange = 0f..100f,
+                    // 25/50/75 磁吸阻尼：常用档位更容易停准
+                    detents = listOf(25f, 50f, 75f),
                     activeColor = colors.primary,
-                    inactiveColor = colors.surface
+                    inactiveColor = colors.surface,
+                    modifier = Modifier.weight(1f)
                 )
             }
         }
@@ -930,26 +994,27 @@ private fun EnhancerRow(
             Modifier
                 .fillMaxWidth()
                 .clickable { Haptics.tap(); onToggle() }
-                .padding(horizontal = 14.dp, vertical = 11.dp),
+                // 扁平化：行高压缩（垂直 11→7dp），标题字号 13→12.5sp，
+                // 四个效果叠在一起时整体更紧凑、少占屏
+                .padding(horizontal = 14.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, color = onSheet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(title, color = onSheet, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                 if (subtitle.isNotEmpty()) {
-                    Spacer(Modifier.height(2.dp))
                     Text(
                         subtitle,
-                        color = onSheet.copy(alpha = 0.6f),
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp
+                        color = onSheet.copy(alpha = 0.55f),
+                        fontSize = 9.5.sp,
+                        lineHeight = 12.sp
                     )
                 }
             }
             Spacer(Modifier.width(10.dp))
             Box(
                 Modifier
-                    .size(40.dp, 24.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .size(36.dp, 21.dp)
+                    .clip(RoundedCornerShape(11.dp))
                     .background(if (checked) colors.primary else onSheet.copy(alpha = 0.22f))
                     .padding(2.dp),
                 contentAlignment = androidx.compose.ui.BiasAlignment(
@@ -957,27 +1022,42 @@ private fun EnhancerRow(
                     verticalBias = 0f
                 )
             ) {
-                Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(colors.surface))
+                Box(Modifier.size(17.dp).clip(RoundedCornerShape(9.dp)).background(colors.surface))
             }
         }
-        // 开启时展开强度滑条
-        AnimatedVisibility(
-            visible = checked,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Column(Modifier.padding(horizontal = 14.dp).padding(bottom = 10.dp)) {
+        // 开启时展开强度滑条：标签与滑条并排一行（原先上下两行 ~58dp）。
+            // 上下不加 padding——CompactSlider 自带 36dp 命中区（视觉轨道 16dp），
+            // 行高即命中区，展开增量从 ~58dp 压到 36dp，拖动手感不变。
+            AnimatedVisibility(
+                visible = checked,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
                     "$strengthLabel · $strength",
                     color = onSheet.copy(alpha = 0.6f),
-                    fontSize = 10.sp
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    // 固定宽度：数字 5→50→100 位数变化时标签不再变宽，
+                    // 否则同 Row 内 weight 滑条会被左右挤压、拖动时整条长大长小
+                    modifier = Modifier.width(84.dp).padding(end = 8.dp)
                 )
                 CompactSlider(
                     value = strength.toFloat(),
                     onValueChange = { onStrengthChange(it.toInt()) },
                     valueRange = 0f..100f,
+                    // 25/50/75 磁吸阻尼：常用档位更容易停准
+                    detents = listOf(25f, 50f, 75f),
                     activeColor = colors.primary,
-                    inactiveColor = colors.surface
+                    inactiveColor = colors.surface,
+                    modifier = Modifier.weight(1f)
                 )
             }
         }
