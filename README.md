@@ -45,7 +45,7 @@ IRIS Music 是个**个人项目**：没有团队、没有 KPI，也不商业化�
 <td align="center"><img src="docs/screenshots/Playcard2_f.png" width="200"><br><sub>播放卡片</sub></td>
 </tr>
 <tr>
-<td align="center"><img src="docs/screenshots/Playcard3_f.png" width="200"><br><sub>播放卡片 · 堆叠</sub></td>
+<td align="center"><img src="docs/screenshots/Playcard3_f.png" width="200"><br><sub>堆叠</sub></td>
 <td align="center"><img src="docs/screenshots/Report_f.png" width="200"><br><sub>听歌报告</sub></td>
 <td align="center"><img src="docs/screenshots/Recordwall1_f.png" width="200"><br><sub>唱片墙</sub></td>
 </tr>
