@@ -4,7 +4,7 @@
 
 ### A local music player
 
-True refractive liquid glass · 4 layouts · custom palettes · fully offline · no account
+True refractive liquid glass · 4 layouts · custom palettes · offline by default · no account
 
 *A player I wanted, so I built it.*
 
@@ -33,7 +33,7 @@ IRIS Music is a **personal project**: no team, no KPIs, not commercial. It just 
 | 🧭 **One library, four layouts** | Vertical list / horizontal cards / stacked / record wall. Layout, palette, light-dark and material are each an independent axis — mix freely, nothing hardcoded. The record-wall interaction is inspired by [Folia](https://github.com/chthollyphile/folia-major), used with the original author's permission; the code is an independent implementation. |
 | ✨ **Novel touches** | Bass-driven haptic heartbeat, a year-long listening heatmap report, an equalizer you drag by anchors on the frequency-response curve, jelly spring animations, and more. |
 
-> 🔒 **Offline by default.** Playlists, favorites and listening stats stay on your device. No ads, no telemetry. The only exception is the opt-in “Check for updates” switch (Settings → About, off by default): when enabled and manually tapped, it makes a single one-way GET to the GitHub API to read the latest version number — nothing is uploaded. Turning it off restores full offline mode.
+> 🔒 **Offline by default.** The only network touch is a one-shot GitHub API GET when you manually enable "check for updates" (off by default) in settings — no telemetry. Playlists, favorites and listening stats stay on your device, no ads, no tracking. Fully offline when the switch is off.
 
 ## 📸 Screenshots
 
@@ -52,7 +52,7 @@ IRIS Music is a **personal project**: no team, no KPIs, not commercial. It just 
 
 ## 📥 Install
 
-Grab `IRISMusic-v3.7.0-arm64-v8a.apk` from **[Releases](releases/latest)** (arm64 — most phones from the last few years) and install it.
+Grab the latest `IRISMusic-*-arm64-v8a.apk` from **[Releases](https://github.com/WWRJ3321/IRISMusic/releases/latest)** (arm64 — most phones from the last few years) and install it.
 
 Grant the "read audio" permission on first launch. For floating lyrics, also enable "display over other apps" in system settings.
 
