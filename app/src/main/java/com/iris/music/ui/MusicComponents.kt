@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.ui
 
 import androidx.compose.animation.*
@@ -59,6 +76,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.window.Dialog
 import com.iris.music.data.Recommender
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
@@ -128,7 +146,9 @@ internal fun RecommendationSection(
     colors: IrisColors,
     onSelect: (Song) -> Unit,
     /** 全库，用于算"为什么推荐这首"。为空时长按不显示解释。 */
-    allSongs: List<Song> = emptyList()
+    allSongs: List<Song> = emptyList(),
+    /** 当前探索度 0-1，解释弹窗据此提示随机成分 */
+    exploration: Float = 0f
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
     val scrollState = rememberScrollState()
@@ -194,6 +214,7 @@ internal fun RecommendationSection(
         RecommendExplainDialog(
             song = song,
             allSongs = allSongs,
+            exploration = exploration,
             colors = colors,
             onDismiss = { explainSong = null }
         )
@@ -210,10 +231,13 @@ internal fun RecommendationSection(
 private fun RecommendExplainDialog(
     song: Song,
     allSongs: List<Song>,
+    exploration: Float = 0f,
     colors: IrisColors,
     onDismiss: () -> Unit
 ) {
-    val explanation = remember(song.id, allSongs) { Recommender.explain(song, allSongs) }
+    val explanation = remember(song.id, allSongs, exploration) {
+        Recommender.explain(song, allSongs, exploration)
+    }
     val onSheet = if (colors.isDark) Color.White else Color.Black
 
     Dialog(onDismissRequest = onDismiss) {
@@ -271,6 +295,25 @@ private fun RecommendExplainDialog(
                         color = colors.subText, fontSize = 11.sp, lineHeight = 17.sp
                     )
                 }
+            }
+
+            // 探索度 > 0：最终排序含随机成分，上面的偏好因子只是固定部分。
+            // 那次推荐用的随机值不落盘、无法回溯，所以据实点明而不伪造精确百分比。
+            if (explanation.exploration > 0.01f) {
+                Spacer(Modifier.height(10.dp))
+                val pct = (explanation.exploration * 100f).toInt()
+                val hint = when {
+                    explanation.exploration >= 0.8f ->
+                        "当前探索度 $pct%（接近全随机）：这首能出现主要靠随机抽取，上面的偏好因素基本只作参考。"
+                    explanation.exploration >= 0.5f ->
+                        "当前探索度 $pct%（探索为主）：排序含较大随机成分，偏好因素只占一部分。"
+                    else ->
+                        "当前探索度 $pct%：排序里混入了随机成分，这首的位置未必完全由上面的偏好因素决定。"
+                }
+                Text(
+                    hint,
+                    color = colors.subText, fontSize = 11.sp, lineHeight = 17.sp
+                )
             }
 
             Spacer(Modifier.height(16.dp))
@@ -442,6 +485,8 @@ visible: Boolean = true,
     val dragWpx = with(density) { 14.dp.toPx() }
 
     var isDragging by remember { mutableStateOf(false) }
+    // 拖动时 thumb 跟手指的即时分数，不回读列表 scrollProgress（那有量化+延迟，会抽动）
+    var dragFraction by remember { mutableStateOf(0f) }
     var trackH by remember { mutableStateOf(0f) }
     var dragIndex by remember { mutableStateOf(0) }
     LaunchedEffect(isDragging) { onDraggingChange(isDragging) }
@@ -489,22 +534,41 @@ visible: Boolean = true,
     val maxThumbPx = (trackH * 0.35f).coerceAtLeast(minThumbPx)
     val thumbHpx = if (trackH > 0f)
         (trackH / totalItems.coerceAtLeast(1)).coerceIn(minThumbPx, maxThumbPx) else minThumbPx
-    val thumbYpx = scrollProgress * (trackH - thumbHpx).coerceAtLeast(0f)
+    val thumbYpx = (if (isDragging) dragFraction else scrollProgress) * (trackH - thumbHpx).coerceAtLeast(0f)
     val thumbWpx = idleWpx + (activeWpx - idleWpx) * expand + (dragWpx - activeWpx) * dragT
 
-    // 拖动：把手指 y 坐标换算成列表索引并跳转
-    fun scrollToFraction(y: Float) {
+    // 拖动：只把手指 y 坐标换算成目标分数写入 dragFraction，不在这里启动滚动。
+    // 真正的滚动由下方单一消费者 LaunchedEffect 驱动——每次拖动事件都 launch 一个
+    // scrollToItem 协程会导致几十个协程并发竞争、乱序打断，这才是抽动的根因。
+    fun updateDragFraction(y: Float) {
         if (trackH <= 0f) return
         val total = listState.layoutInfo.totalItemsCount
         if (total <= 1) return
         val span = trackH - thumbHpx
         val f = if (span > 1f) ((y - thumbHpx / 2f) / span).coerceIn(0f, 1f)
                 else (y / trackH).coerceIn(0f, 1f)
-        val targetIndex = (f * (total - 1)).toInt().coerceIn(0, total - 1)
-        // 只在跨行时给一次刻度震动，滑过同一行不重复触发
-        if (targetIndex != dragIndex) Haptics.tick()
-        dragIndex = targetIndex
-        scope.launch { listState.scrollToItem(targetIndex) }
+        dragFraction = f
+        // 跨行刻度震动（滑过同一行不重复）
+        val idx = (f * (total - 1)).toInt().coerceIn(0, total - 1)
+        if (idx != dragIndex) Haptics.tick()
+        dragIndex = idx
+    }
+
+    // 单一消费者：拖动中订阅 dragFraction，用 collectLatest 让过时的滚动请求
+    // 被自动取消，任何时刻只执行最新目标。scrollBy 走 UI 帧同步、无跳变。
+    LaunchedEffect(isDragging) {
+        if (!isDragging) return@LaunchedEffect
+        snapshotFlow { dragFraction }
+            .collectLatest { f ->
+                val total = listState.layoutInfo.totalItemsCount
+                if (total <= 1) return@collectLatest
+                val exact = f * (total - 1)
+                val targetIndex = exact.toInt().coerceIn(0, total - 1)
+                val avgItemPx = listState.layoutInfo.visibleItemsInfo
+                    .firstOrNull()?.size?.toFloat() ?: 0f
+                val offsetPx = ((exact - targetIndex) * avgItemPx).toInt()
+                listState.scrollToItem(targetIndex, offsetPx)
+            }
     }
 
     // 触摸区：40dp 宽贴右缘，滑块绘制在最右侧
@@ -517,18 +581,22 @@ visible: Boolean = true,
              .clickable(
                  interactionSource = remember { MutableInteractionSource() },
                  indication = null,
+                 enabled = visible,
                  onClick = onClick
              )
-             .pointerInput(Unit) {
+             .pointerInput(visible) {
+                // 不可见时（翻到播放页/歌词页覆盖）不注册手势，避免这条右缘热区
+                // 拦截点击（误触震动）或吞掉歌词页的关闭点击
+                if (!visible) return@pointerInput
                 detectVerticalDragGestures(
                     onDragStart = { offset ->
                         isDragging = true
                         Haptics.click()
-                        scrollToFraction(offset.y)
+                        updateDragFraction(offset.y)
                     },
                     onVerticalDrag = { change, _ ->
                         change.consume()
-                        scrollToFraction(change.position.y)
+                        updateDragFraction(change.position.y)
                     },
                     onDragEnd = { isDragging = false },
                     onDragCancel = { isDragging = false }

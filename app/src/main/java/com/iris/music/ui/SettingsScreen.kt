@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.ui
 
 import com.iris.music.BuildConfig
@@ -138,6 +155,7 @@ internal fun SettingsPanel(
     onLikedFilterChange: (Boolean) -> Unit,
     onExplorationChange: (Float) -> Unit,
     onCornerBaseChange: (Float) -> Unit,
+    onFontScaleChange: (Float) -> Unit,
     onSurfaceStyleChange: (IrisSurfaceStyle) -> Unit,
     onLayoutChange: (IrisLayout) -> Unit,
     onGlassBlurChange: (Float) -> Unit,
@@ -150,6 +168,8 @@ internal fun SettingsPanel(
     onSilenceSkipChange: (Boolean) -> Unit,
     onPhysicsFxChange: (Boolean) -> Unit,
     onCoverLyricChange: (Boolean) -> Unit,
+    onTopBarAutoHideChange: (Boolean) -> Unit,
+    onLyricAlignChange: (Int) -> Unit,
     onBassHapticsChange: (Boolean) -> Unit,
     onBassHapticsIntensityChange: (Int) -> Unit,
     onBassHapticsPulseMsChange: (Int) -> Unit,
@@ -205,7 +225,7 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(10.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(IrisTheme.MONO, IrisTheme.MAGENTA, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).chunked(4).forEach { row ->
+            listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).chunked(4).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { theme ->
                         ThemeSwatch(
@@ -395,7 +415,32 @@ internal fun SettingsPanel(
             activeColor = colors.primary,
             inactiveColor = colors.surface
         )
+        Spacer(Modifier.height(14.dp))
 
+        // ---- 字号大小 ----
+        // 拖动时只改本地值，松手才提交全局——否则每次 onValueChange 都切 Density，
+        // 触发整树重测量打断手势，表现为"拉不动"。
+        var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
+        Text("字号大小", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            when {
+                pendingFontScale < 0.92f -> "偏小：紧凑省地"
+                pendingFontScale < 1.05f -> "标准（推荐）"
+                pendingFontScale < 1.18f -> "偏大：清晰易读"
+                else -> "特大：醒目护眼"
+            } + " · ${(pendingFontScale * 100).toInt()}%",
+            color = colors.subText, fontSize = 11.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        CompactSlider(
+            value = pendingFontScale,
+            onValueChange = { pendingFontScale = it },
+            onValueChangeFinished = { onFontScaleChange(pendingFontScale) },
+            valueRange = 0.85f..1.30f,
+            activeColor = colors.primary,
+            inactiveColor = colors.surface
+        )
         Spacer(Modifier.height(14.dp))
 
         // ---- 界面排布 ----
@@ -500,6 +545,15 @@ internal fun SettingsPanel(
             subtitle = "自动跳过歌曲开头和结尾没有声音的部分"
         ) { onSilenceSkipChange(!state.silenceSkip) }
 
+        Spacer(Modifier.height(10.dp))
+
+        SettingToggleRow(
+            "上栏静止时隐藏",
+            state.topBarAutoHide,
+            colors,
+            subtitle = "完全静止时上栏淡到全透明，碰一下即回"
+        ) { onTopBarAutoHideChange(!state.topBarAutoHide) }
+
         Spacer(Modifier.height(18.dp))
 
         // ==================== 歌词 ====================
@@ -512,7 +566,19 @@ internal fun SettingsPanel(
             colors,
             subtitle = "封面左下角单行歌词，换句时模糊渐隐渐出"
         ) { onCoverLyricChange(!state.coverLyric) }
-
+        Spacer(Modifier.height(14.dp))
+        Column {
+            Text("歌词对齐", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModeSwatch("靠左", state.lyricAlign == 0, colors,
+                    modifier = Modifier.weight(1f)) { onLyricAlignChange(0) }
+                ModeSwatch("居中", state.lyricAlign == 1, colors,
+                    modifier = Modifier.weight(1f)) { onLyricAlignChange(1) }
+                ModeSwatch("靠右", state.lyricAlign == 2, colors,
+                    modifier = Modifier.weight(1f)) { onLyricAlignChange(2) }
+            }
+        }
         Spacer(Modifier.height(14.dp))
 
         // ---- 悬浮歌词 ----
@@ -1367,17 +1433,20 @@ private fun CustomColorSection(
     colors: IrisColors,
     onColorsChange: (Long, Long) -> Unit
 ) {
-    // HSV 草稿，无 key：拖动期间不回写重建（避免 HSV↔ARGB 往返量化抖动）。
-    // 进入「自定义」时本 section 由外层 AnimatedVisibility 重新组合，此处从外部 argb 自然同步一次。
-    val primaryHsv = remember { hsvOf(primaryArgb) }
-    val secondaryHsv = remember { hsvOf(secondaryArgb) }
+    // HSV 草稿：改成「持有 FloatArray 的 mutableStateOf」，每次改动写入一个**新数组**。
+    // 原来用无 key 的 remember { FloatArray } 原地改 + 一个从未被读取的 bump，
+    // 拖动时本节根本不重组，预览/滑块只能靠上层回传的间接重组刷新，
+    // 表现为「拖动不跟手、要重进设置才看到颜色变」。
+    // 用新数组引用触发重组：滑块 value 读当前数组，引用一变就重绘，且不重建滑块子树，
+    // 拖动手势状态得以保留（比 key(bump) 更安全）。
+    var primaryHsv by remember { mutableStateOf(hsvOf(primaryArgb)) }
+    var secondaryHsv by remember { mutableStateOf(hsvOf(secondaryArgb)) }
     var editSecondary by remember { mutableStateOf(false) }
     val activeHsv = if (editSecondary) secondaryHsv else primaryHsv
-    // FloatArray 原地改动不触发重组，用 bump 强制刷新预览与滑块位置。
-    var bump by remember { mutableIntStateOf(0) }
     val onSlider: (Int, Float) -> Unit = { index, v ->
-        activeHsv[index] = v.coerceIn(0f, if (index == 0) 360f else 1f)
-        bump++
+        val updated = activeHsv.copyOf()
+        updated[index] = v.coerceIn(0f, if (index == 0) 360f else 1f)
+        if (editSecondary) secondaryHsv = updated else primaryHsv = updated
         onColorsChange(argbOf(primaryHsv), argbOf(secondaryHsv))
     }
 
@@ -1389,7 +1458,6 @@ private fun CustomColorSection(
     }
     Spacer(Modifier.height(12.dp))
 
-    val tag = bump
     Text("色相 · ${activeHsv[0].toInt()}", color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     CompactSlider(value = activeHsv[0], onValueChange = { onSlider(0, it) },
         valueRange = 0f..360f, activeColor = colors.primary, inactiveColor = colors.surface)

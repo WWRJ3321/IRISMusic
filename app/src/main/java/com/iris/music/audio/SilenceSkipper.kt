@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.audio
 
 import android.content.Context
@@ -58,6 +75,13 @@ object SilenceSkipper {
     /** 单首最长保护：超过 20 秒不再判静音（防止纯音乐/白噪音被误跳） */
     private const val MAX_PROTECT_MS = 20_000L
 
+    /**
+     * 探测冷却：一次 seek 之后要等音频管线真正解码出新位置的 PCM，
+     * 才能再读 rms 做下一次判定。没有这个冷却的话，seek 后的几拍读到的
+     * 还是旧缓冲（依然是静音），于是每 50ms 又跳 1 秒——一秒能跳出去 20 秒。
+     */
+    private const val PROBE_COOLDOWN_MS = 250L
+
     fun init(context: Context) {
         enabled = context.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
             .getBoolean(KEY_ENABLED, false)
@@ -87,6 +111,9 @@ object SilenceSkipper {
     private var headDone = false
     private var tailDone = false
 
+    /** 探测 seek 之后的静默期终点（SystemClock.uptimeMillis 时间轴） */
+    private var probeCooldownUntil = 0L
+
     /** attach 的播放器引用（主线程） */
     private var playerRef: androidx.media3.common.Player? = null
 
@@ -101,6 +128,7 @@ object SilenceSkipper {
         silentMsAtHead = 0L
         headDone = false
         tailDone = false
+        probeCooldownUntil = 0L
     }
 
     private val poll = object : Runnable {
@@ -114,45 +142,66 @@ object SilenceSkipper {
                 resetState()
             }
 
+            // 判定窗口：曲首只看前 MAX_PROTECT_MS，曲尾只看最后 TAIL_WINDOW_MS。
+            // 两段都结束后本首歌已无事可做，降到 IDLE_POLL_MS 只为感知切歌。
+            var busy = false
+
             if (player.isPlaying && item != null) {
+                val now = android.os.SystemClock.uptimeMillis()
                 val pos = player.currentPosition
                 val dur = player.duration
-                val rms = SpectrumAnalyzer.rms
-                val silent = rms < SILENCE_RMS
+                // 暂停/解码中断时 rms 会冻结在最后一帧，必须用 isFresh 过滤，
+                // 否则停掉的旁路数据会被当成"一直静音"而触发误跳。
+                val silent = SpectrumAnalyzer.isFresh() && SpectrumAnalyzer.rms < SILENCE_RMS
 
-                // ---- 曲首：累计静音够长就开始步进探测，出声即停 ----
-                // 每次往前跳 1 秒：跳过头了（出声）就立刻停在那里，
-                // 误差最多一个探测步长 + 解码起播延迟。
+                // ---- 曲首：累计静音够长就步进探测，出声即停 ----
                 if (!headDone) {
                     if (pos > MAX_PROTECT_MS) {
                         headDone = true // 出发晚了，放弃曲首判定
-                    } else if (silent) {
-                        silentMsAtHead += POLL_MS
-                        if (silentMsAtHead >= MIN_HEAD_MS) {
-                            player.seekTo(pos + PROBE_STEP_MS)
-                        }
                     } else {
-                        headDone = true // 出声了（含首次就出声/跳过头）：定格
+                        busy = true
+                        if (now < probeCooldownUntil) {
+                            // 冷却中：上一跳的 PCM 还没解出来，这一拍不判定
+                        } else if (silent) {
+                            silentMsAtHead += POLL_MS
+                            if (silentMsAtHead >= MIN_HEAD_MS) {
+                                player.seekTo((pos + PROBE_STEP_MS).coerceAtMost(MAX_PROTECT_MS))
+                                probeCooldownUntil = now + PROBE_COOLDOWN_MS
+                            }
+                        } else {
+                            headDone = true // 出声了：定格
+                        }
                     }
                 }
 
                 // ---- 曲尾 ----
                 if (!tailDone && dur > 0) {
                     val remaining = dur - pos
-                    if (remaining < TAIL_WINDOW_MS && silent && remaining > TAIL_MARGIN_MS) {
-                        tailDone = true
-                        player.seekToNextMediaItem()
-                    } else if (remaining > TAIL_WINDOW_MS) {
+                    if (remaining <= TAIL_WINDOW_MS) {
+                        busy = true
+                        if (silent && remaining > TAIL_MARGIN_MS) {
+                            tailDone = true
+                            player.seekToNextMediaItem()
+                        }
+                    } else {
                         tailDone = false
                     }
                 }
             }
-            handler.postDelayed(this, POLL_MS)
+            // 不在判定窗口内（歌曲中段/暂停）时空转没有意义，直接降频
+            handler.postDelayed(this, if (busy) POLL_MS else IDLE_POLL_MS)
         }
     }
 
+    /** 判定窗口内的轮询间隔：要压住 50ms 级的探测精度 */
     private const val POLL_MS = 50L
 
-    /** 曲首探测步长：每跳一步停 200ms 听一拍，出声即停 */
+    /**
+     * 窗口外的轮询间隔。歌曲中段既不判曲首也不判曲尾，
+     * 50ms 空转纯属浪费主线程唤醒，降到 500ms 只用来感知切歌/进入曲尾窗口。
+     */
+    private const val IDLE_POLL_MS = 500L
+
+    /** 曲首探测步长：每跳一步等一个冷却周期听一拍，出声即停 */
     private const val PROBE_STEP_MS = 1_000L
 }

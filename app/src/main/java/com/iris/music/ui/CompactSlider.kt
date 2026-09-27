@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.ui
 
 import androidx.compose.foundation.Canvas
@@ -57,6 +74,13 @@ fun CompactSlider(
     modifier: Modifier = Modifier,
     steps: Int = 0,
     onValueChangeFinished: (() -> Unit)? = null,
+    /**
+     * 磁吸刻度（阻尼）：手指经过这些值附近时会被"吸"住，要拖出捕获半径才脱离，
+     * 更容易精确停在这些位置（如 25/50/75）。空列表=无磁吸。单位同 value。
+     */
+    detents: List<Float> = emptyList(),
+    /** 磁吸捕获半径，单位同 value（默认 span 的 3%）。 */
+    detentRadius: Float = (valueRange.endInclusive - valueRange.start) * 0.03f,
     activeColor: Color,
     inactiveColor: Color
 ) {
@@ -71,13 +95,29 @@ fun CompactSlider(
         }
         return raw
     }
-    // 拖动中的本地值（拖动时先更新本地，避免外层 state 回流迟滞）
-    var dragging by remember { mutableFloatStateOf(Float.NaN) }
-    val current = if (dragging.isNaN()) value else dragging
+    // 磁吸最近刻度查询。
+    fun nearestDetent(v: Float): Float? =
+        if (detents.isEmpty() || detentRadius <= 0f) null
+        else detents.minByOrNull { kotlin.math.abs(it - v) }
+    // 拖动中的原始位置（未吸附），累加用；输出时套磁吸。
+    var rawFraction by remember { mutableFloatStateOf(Float.NaN) }
+    // 当前吸住的刻度值（NaN=自由）。用【迟滞】而非单阈值吸附：
+    // 捕获半径 = detentRadius，释放半径 = 1.6×。旧实现只有一个阈值——手指停在
+    // 阈值边缘时，指针的亚像素抖动会让 raw 反复跨过边界，吸附值在"刻度↔原值"之间
+    // 来回翻，填充条就来回跳（用户看到的"抽动"）。迟滞下：吸住后要拖出更大的
+    // 释放半径才脱离，边界不再翻抖。
+    var snappedDetent by remember { mutableFloatStateOf(Float.NaN) }
+    // 上一次向外发出的值（避免重复回调）
+    var lastEmitted by remember { mutableFloatStateOf(Float.NaN) }
+    val current = when {
+        !snappedDetent.isNaN() -> snappedDetent
+        !rawFraction.isNaN() -> start + rawFraction * span
+        else -> value
+    }
     val fraction = ((current - start) / span).coerceIn(0f, 1f)
     // pointerInput 的 lambda 只在 key 变化时重建，直接捕获 fraction 会拿到
     // 首次组合的旧值（外部值变化后第一次拖动从旧位置起跳）——用最新值快照
-    val latestFraction by rememberUpdatedState(fraction)
+    val latestFraction by rememberUpdatedState(((value - start) / span).coerceIn(0f, 1f))
 
     Box(
         modifier
@@ -87,7 +127,7 @@ fun CompactSlider(
             // 手指按下带的竖直漂移会撞上列表滚动/底部过滚；命中区太小就"按住拖不动"。
             // 加高命中区后落点容错大幅提升，Initial pass 消费 + 大命中区 = 稳拖。
             .height(36.dp)
-            .pointerInput(start, end, steps) {
+            .pointerInput(start, end, steps, detents, detentRadius) {
                 // 自带手势循环，不用 detectHorizontalDragGestures / detectDragGestures。
                 //
                 // 根因：这两个工具在 touch-slop 判定阶段【不消费】position change。
@@ -109,15 +149,36 @@ fun CompactSlider(
                         // 抢占：消费位置变化，阻止父级 verticalScroll 接管为滚动
                         move.consume()
                         val dx = move.position.x - move.previousPosition.x
-                        val base = if (dragging.isNaN()) latestFraction else (dragging - start) / span
-                        val f = (base + dx / size.width).coerceIn(0f, 1f)
-                        val v = coerce(start + f * span)
-                        if (v != dragging) {
-                            dragging = v
+                        val base = if (rawFraction.isNaN()) latestFraction else rawFraction
+                        // 原始位置正常累加（不受磁吸影响），保证能拖出刻度
+                        val rf = (base + dx / size.width).coerceIn(0f, 1f)
+                        rawFraction = rf
+                        val rawVal = start + rf * span
+                        // 迟滞磁吸：
+                        //  · 未吸住时，raw 进入捕获半径 → 吸住
+                        //  · 已吸住时，raw 拖出更大的释放半径（1.6×）才脱离
+                        // 单阈值会在边界反复翻，导致填充条抽动；迟滞消除边界抖动。
+                        val releaseRadius = detentRadius * 1.6f
+                        if (!snappedDetent.isNaN()) {
+                            if (kotlin.math.abs(rawVal - snappedDetent) > releaseRadius) {
+                                snappedDetent = Float.NaN
+                            }
+                        } else {
+                            val n = nearestDetent(rawVal)
+                            if (n != null && kotlin.math.abs(n - rawVal) <= detentRadius) {
+                                snappedDetent = n
+                            }
+                        }
+                        val outVal = if (!snappedDetent.isNaN()) snappedDetent else rawVal
+                        val v = coerce(outVal)
+                        if (v != lastEmitted) {
+                            lastEmitted = v
                             onValueChange(v)
                         }
                     }
-                    dragging = Float.NaN
+                    rawFraction = Float.NaN
+                    snappedDetent = Float.NaN
+                    lastEmitted = Float.NaN
                     onValueChangeFinished?.invoke()
                 }
             }

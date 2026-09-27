@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.playback
 
 import androidx.annotation.OptIn
@@ -36,8 +53,10 @@ import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
 import com.iris.music.audio.FadeController
 import com.iris.music.audio.RangeEnhancer
+import com.iris.music.audio.SafeLimiter
 import com.iris.music.audio.SilenceSkipper
 import com.iris.music.audio.SpectrumAnalyzer
+import com.iris.music.audio.TrackGain
 import com.iris.music.audio.VirtualBass
 import com.iris.music.audio.VirtualSurround
 import com.iris.music.data.ListenStats
@@ -111,17 +130,22 @@ class MusicService : MediaSessionService() {
         ): AudioSink = DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            // DSP 链顺序：动态范围增强 → 虚拟环绕 → 虚拟低音 → 频谱旁路。
+            // DSP 链顺序：曲间响度均衡 → 动态范围增强 → 虚拟环绕 → 虚拟低音 → 防失真限幅 → 频谱旁路。
+            // TrackGain 放最前：测原始信号，校正后电平让后级（含频谱/震动）看到真实输出。
             // RangeEnhancer 先抬响度会让 VirtualBass 的低频检测跟着抬高，
             // 两者对响度的影响会互相叠加；让 VirtualBass 看到原始低频
             // 更接近"补低音"而非"补已被增强的低音"。VirtualSurround 基于
             // 原始 L/R 差分做声场展宽，放在 VirtualBass 前（低音谐波是
             // 单声道注入，若先注入再展宽会把谐波也摊到两侧、破坏居中）。
-            // 频谱放最后，UI 显示与低音震动看到的都是处理后的实际输出。
+            // SafeLimiter 放最后一道处理：前级所有增强叠加后可能顶过 0dBFS，
+            // 由它统一把峰值压回安全线，杜绝硬削波（撕裂/破音）。
+            // 频谱放限幅之后，UI 显示与低音震动看到的都是处理后的实际输出。
             .setAudioProcessors(arrayOf<AudioProcessor>(
+                TrackGain,
                 RangeEnhancer,
                 VirtualSurround,
                 VirtualBass,
+                SafeLimiter,
                 TeeAudioProcessor(SpectrumAnalyzer)
             ))
             .build()
@@ -171,12 +195,19 @@ class MusicService : MediaSessionService() {
         VirtualBass.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         RangeEnhancer.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         VirtualSurround.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
-
+        SafeLimiter.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
+        TrackGain.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // 自动切歌不经过 play()，需要在这里重置音量闸门，否则新曲目会继承上一首的渐出值。
                 // soft：不直接跳满音量——首帧从 0 快速渐入，消除切歌爆音
                 FadeController.resetVolume(soft = true)
+                // 响度均衡：切歌后把当前曲路径交给链首处理器（查库/开始测量）。
+                // path 必须与 Song.filePath 同一口径（extras 里的 file_path），
+                // mediaId 是 stableId hash、content uri 的 path 都对不上 store key。
+                val path = mediaItem?.mediaMetadata?.extras?.getString("file_path")
+                    ?: mediaItem?.localConfiguration?.uri?.takeIf { it.scheme == "file" }?.path
+                TrackGain.setCurrentSong(path)
             }
         })
 

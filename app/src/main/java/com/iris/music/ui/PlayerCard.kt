@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.ui
 
 import android.graphics.Bitmap
@@ -149,6 +166,9 @@ fun PlayerCard(
     val onCard = if (colors.isDark) Color.White else Color.Black
     // 主题色在卡片背景上的可读版本（霓虹黄/青落在白卡上会看不清）
     val readableAccent = btnColor
+    // 次要文字：0.55 太淡，提到 0.72 保证小字也看得清
+    val subOnCard = onCard.copy(alpha = 0.72f)
+
     // 实验性：封面摇动。仅在活动卡 + 开关开启时注册加速度计。
     val shake = rememberShakeState(coverShakeEnabled && interactive)
     // 封面左下角单行歌词：仅在开启 + 活动卡解析。解析放 IO，切歌时重载。
@@ -158,8 +178,6 @@ fun PlayerCard(
         coverLyrics = if (artworkPath == null) emptyList()
         else withContext(Dispatchers.IO) { runCatching { LyricParser.loadLyrics(artworkPath, durationMs) }.getOrDefault(emptyList()) }
     }
-    // 次要文字：0.55 太淡，提到 0.72 保证小字也看得清
-    val subOnCard = onCard.copy(alpha = 0.72f)
 
     // 可视化模式的过渡进度。
     // 关键：新卡片实例直接从当前开关状态起步（Animatable 构造值）——
@@ -175,257 +193,438 @@ fun PlayerCard(
         )
     }
 
+    val isLandscape = LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .irisSurface(GlassLevel.PLAYER, colors, IrisShape.card, solid = cardColor)
             .padding(horizontal = 18.dp, vertical = 18.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-
-            // 横屏/矮屏下给封面一个高度上限：正方形封面在宽屏上会把整张卡撑出屏幕，
-            // 控制行被挤没。取屏幕高的 46% 封顶，竖屏时该值远大于卡宽、不生效。
-            val screenHeightDp = LocalConfiguration.current.screenHeightDp.dp
-            val coverMaxHeight = screenHeightDp * 0.46f
-
-            // 封面：点击显示歌词。
-            // 底色不用死黑（0xFF1B1024）：封面解码间隙或无封面文件露出来的就是这块底，
-            // 深色底下像"内黑"色块。改成按歌曲路径派生的 HSV 占位色，和歌单行/推荐卡一致。
-            // 整张封面卡作为一个整体随摇动旋转/平移：clip+底色+点击都在同一层，
-            // 旋转的是带圆角的整卡，露出的是播放器卡背景（不是纯色底）。
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = coverMaxHeight)
-                    .aspectRatio(1f)
-                    .coverShake(shake)
-                    .clip(IrisShape.item)
-                    .background(Color.hsv(
-                        hue = (artworkPath?.hashCode()?.mod(360) ?: 0).toFloat(),
-                        saturation = 0.35f,
-                        value = if (colors.isDark) 0.18f else 0.92f
-                    ))
-                    .clickable { Haptics.tap(); onClickArtwork() }
-            ) {
-                AlbumArt(filePath = artworkPath)
-                // 压暗层：固定盖满整卡，让频谱清晰可辨
-                if (vizT.value > 0.01f) {
-                    Box(
-                        Modifier
-                            .matchParentSize()
-                            .background(Color.Black.copy(alpha = 0.3f * vizT.value))
-                    )
-                }
-                // 封面左下角单行歌词：锁在封面上（随 shake 一起动），换词时模糊渐隐渐出。
-                // 只在活动卡显示：非活动卡 positionMs 恒 0，显示也无意义还徒增解析开销。
-                if (coverLyricEnabled && interactive) {
-                    val curIdx = LyricParser.currentIndex(coverLyrics, positionMs)
-                    val curText = if (curIdx in coverLyrics.indices) coverLyrics[curIdx].text else ""
-                    CoverLyricLine(
-                        text = curText,
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(start = 14.dp, bottom = 14.dp)
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // 信息区 ↔ 频谱区：叠在同一个固定高度容器里做交叉淡变。
-            // 不能让两者各占布局空间——过渡中期两块同时存在会把下方内容顶开再收回，
-            // 就是"突然变、移上又回来"的来源。固定高度 + Box 叠放彻底消除重排。
-            // 高度 58dp：22sp 标题(约 28dp) + 4dp 间距 + 13sp 艺术家(约 17dp) ≈ 49dp，
-            // 部分字体的行高更大，g/y/j 的降部在 52dp 时会被 Box 底边裁掉一截。
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(58.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                // 标题 / 作者：淡出并微微上移
-                if (vizT.value < 0.995f) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                alpha = 1f - vizT.value
-                                translationY = -10.dp.toPx()  * vizT.value
-                            }
-                    ) {
-                        Text(
-                            title,
-                            color = onCard,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            artist,
-                            color = readableAccent,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                // 频谱：淡入并从下方微微升起
-                if (vizT.value > 0.005f) {
-                    SpectrumBars(
-                        accent = readableAccent,
-                        playing = isPlaying,
-                        tiltEnabled = tiltSpectrum,
-                        height = 52.dp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .graphicsLayer {
-                                alpha = vizT.value
-                                translationY = 10.dp.toPx() * (1f - vizT.value)
-                            }
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(18.dp))
-
-            // 进度条
-            NeonProgressBar(
-                progress = progress,
-                onSeek = onSeek,
-                accent = readableAccent,
-                track = trackColor,
-                glass = glass,
-                isDark = colors.isDark,
-                interactive = interactive,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp)
-            )
-
-            Spacer(Modifier.height(6.dp))
-
-            // 当前时间 / 总时长
+        if (isLandscape) {
+            // 横屏：左封面 + 右控制，垂直居中，控制区高度克制不铺满
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                Text(
-                    formatDuration(positionMs),
-                    color = subOnCard,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+                PlayerCoverArt(
+                    artworkPath = artworkPath,
+                    positionMs = positionMs,
+                    isDark = colors.isDark,
+                    vizAlpha = vizT.value,
+                    // 横屏禁用摇动封面物理：横屏时加速度计轴向变了，
+                    // 摇晃检测会误触发。整个物理效果横屏一律关掉。
+                    shake = rememberShakeState(false),
+                    coverLyricEnabled = coverLyricEnabled,
+                    interactive = interactive,
+                    coverLyrics = coverLyrics,
+                    onClickArtwork = onClickArtwork,
+                    modifier = Modifier
+                        // 横屏按屏高定尺寸，正方形自然收窄宽度，不撑爆
+                        .fillMaxHeight(0.72f)
+                        .aspectRatio(1f)
                 )
-                Text(
-                    formatDuration(durationMs),
-                    color = subOnCard,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+                PlayerControls(
+                    title = title,
+                    artist = artist,
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    shuffle = shuffle,
+                    repeatMode = repeatMode,
+                    progress = progress,
+                    isPlaying = isPlaying,
+                    onToggle = onToggle,
+                    onPrev = onPrev,
+                    onNext = onNext,
+                    onSeek = onSeek,
+                    onCyclePlayMode = onCyclePlayMode,
+                    onToggleLike = onToggleLike,
+                    liked = liked,
+                    sleepTimerMs = sleepTimerMs,
+                    sleepTimerEndMs = sleepTimerEndMs,
+                    onOpenSleepTimer = onOpenSleepTimer,
+                    eqActive = eqActive,
+                    onOpenEqualizer = onOpenEqualizer,
+                    audioFormat = audioFormat,
+                    visualizerEnabled = visualizerEnabled,
+                    onToggleVisualizer = onToggleVisualizer,
+                    tiltSpectrum = tiltSpectrum,
+                    vizAlpha = vizT.value,
+                    onCard = onCard,
+                    subOnCard = subOnCard,
+                    readableAccent = readableAccent,
+                    btnColor = btnColor,
+                    trackColor = trackColor,
+                    glass = glass,
+                    isDark = colors.isDark,
+                    interactive = interactive,
+                    compact = true,
+                    modifier = Modifier.weight(1f)
                 )
             }
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                PlayerCoverArt(
+                    artworkPath = artworkPath,
+                    positionMs = positionMs,
+                    isDark = colors.isDark,
+                    vizAlpha = vizT.value,
+                    shake = shake,
+                    coverLyricEnabled = coverLyricEnabled,
+                    interactive = interactive,
+                    coverLyrics = coverLyrics,
+                    onClickArtwork = onClickArtwork,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // 竖屏/矮屏封面高度上限：屏高 46%，竖屏时该值远大于卡宽、不生效
+                        .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.46f)
+                        .aspectRatio(1f)
+                )
 
-            Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(20.dp))
 
-            // 主控制：上一曲 / 播放 / 下一曲（图标本身圆角，无底，按压缩放动画）
+                PlayerControls(
+                    title = title,
+                    artist = artist,
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    shuffle = shuffle,
+                    repeatMode = repeatMode,
+                    progress = progress,
+                    isPlaying = isPlaying,
+                    onToggle = onToggle,
+                    onPrev = onPrev,
+                    onNext = onNext,
+                    onSeek = onSeek,
+                    onCyclePlayMode = onCyclePlayMode,
+                    onToggleLike = onToggleLike,
+                    liked = liked,
+                    sleepTimerMs = sleepTimerMs,
+                    sleepTimerEndMs = sleepTimerEndMs,
+                    onOpenSleepTimer = onOpenSleepTimer,
+                    eqActive = eqActive,
+                    onOpenEqualizer = onOpenEqualizer,
+                    audioFormat = audioFormat,
+                    visualizerEnabled = visualizerEnabled,
+                    onToggleVisualizer = onToggleVisualizer,
+                    tiltSpectrum = tiltSpectrum,
+                    vizAlpha = vizT.value,
+                    onCard = onCard,
+                    subOnCard = subOnCard,
+                    readableAccent = readableAccent,
+                    btnColor = btnColor,
+                    trackColor = trackColor,
+                    glass = glass,
+                    isDark = colors.isDark,
+                    interactive = interactive,
+                    compact = false,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 封面块（点击开歌词、频谱压暗层、封面歌词），从 PlayerCard 抽出以便横屏时
+ * 单独承担翻页/堆叠而控制区固定。尺寸由外部 modifier 决定（竖屏按宽、横屏按高）。
+ */
+@Composable
+internal fun PlayerCoverArt(
+    artworkPath: String?,
+    positionMs: Long,
+    isDark: Boolean,
+    vizAlpha: Float,
+    shake: CoverShake,
+    coverLyricEnabled: Boolean,
+    interactive: Boolean,
+    coverLyrics: List<LyricLine>,
+    onClickArtwork: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .coverShake(shake)
+            .clip(IrisShape.item)
+            .background(Color.hsv(
+                hue = (artworkPath?.hashCode()?.mod(360) ?: 0).toFloat(),
+                saturation = 0.35f,
+                value = if (isDark) 0.18f else 0.92f
+            ))
+            .clickable { Haptics.tap(); onClickArtwork() }
+    ) {
+        AlbumArt(filePath = artworkPath)
+        // 压暗层：固定盖满整卡，让频谱清晰可辨
+        if (vizAlpha > 0.01f) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = 0.3f * vizAlpha))
+            )
+        }
+        // 封面左下角单行歌词：锁在封面上（随 shake 一起动），换词时模糊渐隐渐出。
+        if (coverLyricEnabled && interactive) {
+            val curIdx = LyricParser.currentIndex(coverLyrics, positionMs)
+            val curText = if (curIdx in coverLyrics.indices) coverLyrics[curIdx].text else ""
+            CoverLyricLine(
+                text = curText,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 14.dp, bottom = 14.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 控制块（信息/频谱、进度、时间、主控制、副控制），从 PlayerCard 抽出。
+ * compact=true 为横屏紧凑排布：间距收窄、按钮略小、居中不铺满。
+ */
+@Composable
+private fun PlayerControls(
+    title: String,
+    artist: String,
+    positionMs: Long,
+    durationMs: Long,
+    shuffle: Boolean,
+    repeatMode: RepeatMode,
+    progress: Float,
+    isPlaying: Boolean,
+    onToggle: () -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onCyclePlayMode: () -> Unit,
+    onToggleLike: () -> Unit,
+    liked: Boolean,
+    sleepTimerMs: Long,
+    sleepTimerEndMs: Long,
+    onOpenSleepTimer: () -> Unit,
+    eqActive: Boolean,
+    onOpenEqualizer: () -> Unit,
+    audioFormat: String,
+    visualizerEnabled: Boolean,
+    onToggleVisualizer: () -> Unit,
+    tiltSpectrum: Boolean,
+    vizAlpha: Float,
+    onCard: Color,
+    subOnCard: Color,
+    readableAccent: Color,
+    btnColor: Color,
+    trackColor: Color,
+    glass: Boolean,
+    isDark: Boolean,
+    interactive: Boolean,
+    compact: Boolean,
+    infoFade: Float = 1f,
+    modifier: Modifier = Modifier
+) {
+    // 横屏紧凑：信息区更矮、间距更小、主控制按钮略缩。
+    // 信息区要能完整放下标题(17sp≈23dp) + 间距4 + 艺术家(13sp≈18dp)，
+    // 给到 48dp 才不会被下面的进度条压住第二行。
+    val infoHeight = if (compact) 52.dp else 60.dp
+    val titleSize = if (compact) 17.sp else 22.sp
+    val prevNextBtn = if (compact) 48.dp else 62.dp
+    val prevNextIcon = if (compact) 26.dp else 34.dp
+    val playBtn = if (compact) 58.dp else 76.dp
+    val gapAfterCover = if (compact) 14.dp else 18.dp
+    val gapAfterInfo = if (compact) 2.dp else 6.dp
+    val gapBeforeMain = if (compact) 6.dp else 16.dp
+    val gapBeforeMini = if (compact) 8.dp else 14.dp
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 信息区 ↔ 频谱区：叠在同一个固定高度容器里做交叉淡变。
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(infoHeight),
+            contentAlignment = Alignment.Center
+        ) {
+            if (vizAlpha < 0.995f) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // blur 要 API 31，minSdk 24 上低版本机型完全看不到效果
+                        // （就是"切换非常直接、没有模糊"）。所以过渡不依赖 blur：
+                        // 用透明度 + 轻微缩放 + 纵向位移复合，任何版本都柔和。
+                        // 有 blur 的机型再叠一层真模糊，锦上添花。
+                        .then(
+                            if (infoFade < 0.999f && android.os.Build.VERSION.SDK_INT >= 31)
+                                Modifier.blur(
+                                    ((1f - infoFade) * 10).dp,
+                                    edgeTreatment = androidx.compose.ui.draw.BlurredEdgeTreatment.Unbounded
+                                )
+                            else Modifier
+                        )
+                        .graphicsLayer {
+                            alpha = (1f - vizAlpha) * infoFade
+                            // 只做频谱切换的纵向位移；切歌过渡不再纵向移动——
+                            // 之前的 +8dp 下移会把艺术家那行推出固定高度的信息区被裁掉。
+                            translationY = -10.dp.toPx() * vizAlpha
+                            val s = 0.94f + 0.06f * infoFade
+                            scaleX = s
+                            scaleY = s
+                        }
+                ) {
+                    Text(
+                        title,
+                        color = onCard,
+                        fontSize = titleSize,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        artist,
+                        color = readableAccent,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (vizAlpha > 0.005f) {
+                SpectrumBars(
+                    accent = readableAccent,
+                    playing = isPlaying,
+                    // 横屏(compact)禁用倾斜频谱：横屏时设备本就横放，
+                    // 加速度计分量与竖屏不同轴，倾斜增益会乱跳影响可视化。
+                    tiltEnabled = tiltSpectrum && !compact,
+                    height = if (compact) 40.dp else 52.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            alpha = vizAlpha
+                            translationY = 10.dp.toPx() * (1f - vizAlpha)
+                        }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(gapAfterCover))
+
+        // 进度条
+        NeonProgressBar(
+            progress = progress,
+            onSeek = onSeek,
+            accent = readableAccent,
+            track = trackColor,
+            glass = glass,
+            isDark = isDark,
+            interactive = interactive,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp)
+        )
+
+        Spacer(Modifier.height(gapAfterInfo))
+
+        // 当前时间 / 总时长
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                formatDuration(positionMs),
+                color = subOnCard,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                formatDuration(durationMs),
+                color = subOnCard,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        Spacer(Modifier.height(gapBeforeMain))
+
+        // 主控制：上一曲 / 播放 / 下一曲
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            PressableIconButton(size = prevNextBtn, onClick = onPrev) {
+                Icon(Icons.Play, contentDescription = null, tint = onCard, modifier = Modifier.size(prevNextIcon).graphicsLayer { scaleX = -1f })
+            }
+            PressableIconButton(size = playBtn, onClick = onToggle) {
+                PlayPauseIcon(isPlaying, btnColor)
+            }
+            PressableIconButton(size = prevNextBtn, onClick = onNext) {
+                Icon(Icons.Play, contentDescription = null, tint = onCard, modifier = Modifier.size(prevNextIcon))
+            }
+        }
+
+        Spacer(Modifier.height(gapBeforeMini))
+
+        // 副控制行：随机 / 循环 / 点赞 / 睡眠 / 均衡器 + 音频格式徽章
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val glyph = with(LocalDensity.current) { 11.sp.toDp() } * 0.72f
+            val badgeReserve =
+                if (audioFormat.isEmpty()) 0.dp else glyph * audioFormat.length + 20.dp
+            val gap = ((maxWidth - MINI_BTN_SIZE * 5 - badgeReserve) / 5)
+                .coerceIn(3.dp, 12.dp)
+
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                PressableIconButton(size = 62.dp, onClick = onPrev) {
-                    Icon(Icons.Play, contentDescription = null, tint = onCard, modifier = Modifier.size(34.dp).graphicsLayer { scaleX = -1f })
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(gap)
+                ) {
+                    MiniControlButton(shuffle || repeatMode != RepeatMode.OFF, onCyclePlayMode, btnColor, onCard) {
+                        PlayModeIcon(shuffle, repeatMode, it)
+                    }
+                    MiniControlButton(liked, onToggleLike, btnColor, onCard) {
+                        Icon(if (liked) Icons.Favorite else Icons.FavoriteBorder, null, Modifier.size(20.dp), it)
+                    }
+                    SleepTimerButton(
+                        active = sleepTimerMs > 0,
+                        totalMs = sleepTimerMs,
+                        endMs = sleepTimerEndMs,
+                        onClick = onOpenSleepTimer,
+                        accent = btnColor,
+                        onCard = onCard
+                    )
+                    MiniControlButton(eqActive, onOpenEqualizer, btnColor, onCard) { Icon(Icons.Tune, null, Modifier.size(20.dp), it) }
                 }
-                PressableIconButton(size = 76.dp, onClick = onToggle) {
-                    // 播放↔暂停图标切换：同点旋转 + 缩放淡变，不硬切。
-                    // 两个三角形/双竖条都不是轴对称图形，直接 Crossfade 会有
-                    // 突兀感，加上旋转 90° 的"翻面"动作观感更自然。
-                    PlayPauseIcon(isPlaying, btnColor)
-                }
-                PressableIconButton(size = 62.dp, onClick = onNext) {
-                    Icon(Icons.Play, contentDescription = null, tint = onCard, modifier = Modifier.size(34.dp))
+                if (audioFormat.isNotEmpty()) {
+                    val badgeBg = if (visualizerEnabled) readableAccent
+                                  else readableAccent.copy(alpha = if (isDark) 0.22f else 0.16f)
+                    val badgeFg = if (visualizerEnabled) readableAccent.readableTextOn()
+                                  else readableAccent
+                    Box(
+                        Modifier
+                            .clip(IrisShape.chip)
+                            .background(badgeBg)
+                            .clickable { Haptics.tap(); onToggleVisualizer() }
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            audioFormat,
+                            color = badgeFg,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.6.sp,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
                 }
             }
-
-            Spacer(Modifier.height(14.dp))
-
-            // 副控制行：随机 / 循环 / 点赞 / 睡眠 / 均衡器 + 音频格式徽章
-            //
-            // 间距不能写死。五枚按钮是 5×38dp=190dp 的死宽，卡片模式下卡片要给邻卡
-            // 或错位留边，内容区比列表模式窄 20~25dp，固定 12dp 间距会把最右边的
-            // 徽章压到只剩一个字符（"OGG" 变成 "O"）。
-            // 这里按可用宽度反算：徽章先按文字长度拿到自然宽度，剩下的才分给按钮间隙。
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                // 徽章预留宽度。用 11.sp.toDp() 而不是常数：系统字体放大后徽章会变宽，
-                // 按 dp 常数估算会重新出现挤压。
-                val glyph = with(LocalDensity.current) { 11.sp.toDp() } * 0.72f
-                val badgeReserve =
-                    if (audioFormat.isEmpty()) 0.dp else glyph * audioFormat.length + 20.dp
-                // 除以 5 而不是 4：留一份给"均衡器 ↔ 徽章"之间的空隙，
-                // 剩余空间由外层 SpaceBetween 补到那里，宽卡上观感与原来一致。
-                val gap = ((maxWidth - MINI_BTN_SIZE * 5 - badgeReserve) / 5)
-                    .coerceIn(3.dp, 12.dp)
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(gap)
-                    ) {
-                        // 播放模式四合一：关 → 随机 → 列表循环 → 单曲循环 → 关
-                        MiniControlButton(shuffle || repeatMode != RepeatMode.OFF, onCyclePlayMode, btnColor, onCard) {
-                            PlayModeIcon(shuffle, repeatMode, it)
-                        }
-                        // 点赞：已点赞显示实心爱心（主题色），未点赞空心
-                        MiniControlButton(liked, onToggleLike, btnColor, onCard) {
-                            Icon(if (liked) Icons.Favorite else Icons.FavoriteBorder, null, Modifier.size(20.dp), it)
-                        }
-                        // 睡眠定时器按钮：圆形计时器，激活时显示剩余时间进度环
-                        SleepTimerButton(
-                            active = sleepTimerMs > 0,
-                            totalMs = sleepTimerMs,
-                            endMs = sleepTimerEndMs,
-                            onClick = onOpenSleepTimer,
-                            accent = btnColor,
-                            onCard = onCard
-                        )
-                        // 均衡器：曲线非全平时点亮（原先写死 true，永远是"开"的样子）
-                        MiniControlButton(eqActive, onOpenEqualizer, btnColor, onCard) { Icon(Icons.Tune, null, Modifier.size(20.dp), it) }
-                    }
-                    // 音频格式徽章：同时是可视化开关。开启时填充主题色高亮
-                    if (audioFormat.isNotEmpty()) {
-                        val badgeBg = if (visualizerEnabled) readableAccent
-                                      else readableAccent.copy(alpha = if (colors.isDark) 0.22f else 0.16f)
-                        // 开启时文字落在实色主题底上，需要反算可读前景
-                        val badgeFg = if (visualizerEnabled) readableAccent.readableTextOn()
-                                      else readableAccent
-                        Box(
-                            Modifier
-                                .clip(IrisShape.chip)
-                                .background(badgeBg)
-                                .clickable { Haptics.tap(); onToggleVisualizer() }
-                                .padding(horizontal = 9.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                audioFormat,
-                                color = badgeFg,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Black,
-                                letterSpacing = 0.6.sp,
-                                maxLines = 1,
-                                // 宽度再不够也不折行、不裁字：宁可挤掉一点按钮间隙
-                                 softWrap = false
-                             )
-                         }
-                     }
-                 }
-             }
         }
     }
 }
@@ -972,18 +1171,31 @@ private fun AlbumArt(filePath: String?) {
     // 改成保留旧图、新图就绪才替换 + Crossfade 淡入。
     // 初始值先同步窥缓存：翻卡前这张封面就在旁边的卡上显示过、必在缓存里，
     // 首帧直接命中，连那一次 280ms 淡入都省了（淡入本身也是"闪"的一种）。
-    var bitmap by remember { mutableStateOf(ArtworkLoader.peek(filePath)) }
+    // 高清优先：若这张之前已在大卡看过、命中高清内存缓存，首帧直接上高清。
+    var bitmap by remember { mutableStateOf(ArtworkLoader.peekHiRes(filePath) ?: ArtworkLoader.peek(filePath)) }
     var loadedPath by remember { mutableStateOf<String?>(if (bitmap != null) filePath else null) }
+    // 当前显示的是否已是高清：避免高清就绪后又被后到的缩略图覆盖回去。
+    var hiResPath by remember { mutableStateOf<String?>(if (ArtworkLoader.peekHiRes(filePath) != null) filePath else null) }
 
     LaunchedEffect(filePath) {
-        if (filePath == loadedPath) return@LaunchedEffect
-        val bmp = if (filePath == null) null else ArtworkLoader.load(filePath)
-        if (bmp != null || filePath == null) {
-            bitmap = bmp
-            loadedPath = filePath
+        // 阶段一：缩略图立即到位（磁盘缓存命中≈瞬时），先保证"不割裂"。
+        if (filePath != loadedPath) {
+            val bmp = if (filePath == null) null else ArtworkLoader.load(filePath)
+            // 若高清已在阶段二先就位，别用低清盖回去。
+            if ((bmp != null || filePath == null) && hiResPath != filePath) {
+                bitmap = bmp
+                loadedPath = filePath
+            }
         }
-        // bmp == null 且 filePath != null：这首歌没封面，保留当前显示。
-        // 占位色块（卡片底色）只在冷启动第一张无封面歌时出现。
+        // 阶段二：后台解码高清原图，就绪后无缝换上，保证"又清"。
+        // 大图只在播放大卡这一处用，内存开销可控（见 ArtworkLoader.HIRES_CACHE_MAX）。
+        if (filePath != null && hiResPath != filePath) {
+            val hi = ArtworkLoader.loadHiRes(filePath)
+            if (hi != null && filePath == loadedPath) {
+                bitmap = hi
+                hiResPath = filePath
+            }
+        }
     }
 
     val bmp = bitmap
@@ -1079,6 +1291,151 @@ private fun NeonProgressBar(
                     cornerRadius = corner,
                     style = Stroke(width = 1f * density)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 横屏卡片模式播放器：左侧封面舞台由外部 [coverSlot] 提供（承担翻页/堆叠动画），
+ * 右侧是固定的控制区。切歌时右侧标题/艺术家做模糊淡变过渡（title/artist 变化触发）。
+ *
+ * 复用 PlayerControls（与竖屏/LIST 横屏同一套控件与动画），颜色/频谱过渡在此自算。
+ */
+@Composable
+internal fun LandscapeDeckPlayer(
+    title: String,
+    artist: String,
+    positionMs: Long,
+    durationMs: Long,
+    shuffle: Boolean,
+    repeatMode: RepeatMode,
+    progress: Float,
+    isPlaying: Boolean,
+    onToggle: () -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onCyclePlayMode: () -> Unit,
+    onToggleLike: () -> Unit,
+    liked: Boolean,
+    colors: IrisColors,
+    sleepTimerMs: Long,
+    sleepTimerEndMs: Long,
+    onOpenSleepTimer: () -> Unit,
+    eqActive: Boolean,
+    onOpenEqualizer: () -> Unit,
+    audioFormat: String,
+    visualizerEnabled: Boolean,
+    onToggleVisualizer: () -> Unit,
+    tiltSpectrum: Boolean,
+    modifier: Modifier = Modifier,
+    /**
+     * 封面舞台的宽高比。
+     *
+     * 舞台必须按高度算出宽度，不能用 weight 吃满剩余空间：
+     * 封面是正方形（宽=高），舞台却被拉到几百 dp 宽时，
+     * 页与页之间就空出一大条，邻曲被推到舞台边缘外。
+     * 1.0 = 刚好一张封面；大于 1 的部分就是留给邻曲/堆叠露头的余量。
+     */
+    coverAspect: Float = 1f,
+    coverSlot: @Composable () -> Unit
+) {
+    val cardColor = if (colors.isDark) Color(0xFF1E1E26) else Color(0xFFFFFFFF)
+    val glass = isLiquidGlass
+    val btnColor = colors.primary.readableOn(cardColor, 3.2f)
+    val trackColor = if (colors.isDark) Color(0xFF3A3A44) else Color(0xFFD8D8DE)
+    val onCard = if (colors.isDark) Color.White else Color.Black
+    val readableAccent = btnColor
+    val subOnCard = onCard.copy(alpha = 0.72f)
+
+    // 可视化过渡（同 PlayerCard）
+    val vizT = remember { Animatable(if (visualizerEnabled) 1f else 0f) }
+    LaunchedEffect(visualizerEnabled) {
+        vizT.animateTo(
+            targetValue = if (visualizerEnabled) 1f else 0f,
+            animationSpec = tween(420, easing = androidx.compose.animation.core.EaseInOut)
+        )
+    }
+
+    // 切歌时资料模糊淡变：title+artist 变化 → 淡出模糊 → 换字 → 淡入清晰。
+    // 用一个 Animatable 驱动 alpha 与 blur（同封面歌词的换词动画节奏）。
+    val infoFade = remember { Animatable(1f) }
+    val shownTitle = remember { mutableStateOf(title) }
+    val shownArtist = remember { mutableStateOf(artist) }
+    LaunchedEffect(title, artist) {
+        if (shownTitle.value == title && shownArtist.value == artist) return@LaunchedEffect
+        infoFade.animateTo(0f, tween(210, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+        shownTitle.value = title
+        shownArtist.value = artist
+        infoFade.animateTo(1f, tween(360, easing = androidx.compose.animation.core.EaseOutCubic))
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Row(
+            Modifier.fillMaxSize(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // 左：封面舞台（翻页/堆叠由外部提供）。
+            // 占满可用高度，宽度由 coverAspect 按高度算出——封面是正方形，
+            // 舞台宽度就该等于高度（加上邻曲露头的余量），不能吃满剩余宽度。
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(coverAspect),
+                contentAlignment = Alignment.Center
+            ) { coverSlot() }
+
+            // 右：控制区，拿走剩下的横向空间并居中。
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                contentAlignment = Alignment.Center
+            ) {
+            PlayerControls(
+                title = shownTitle.value,
+                artist = shownArtist.value,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                shuffle = shuffle,
+                repeatMode = repeatMode,
+                progress = progress,
+                isPlaying = isPlaying,
+                onToggle = onToggle,
+                onPrev = onPrev,
+                onNext = onNext,
+                onSeek = onSeek,
+                onCyclePlayMode = onCyclePlayMode,
+                onToggleLike = onToggleLike,
+                liked = liked,
+                sleepTimerMs = sleepTimerMs,
+                sleepTimerEndMs = sleepTimerEndMs,
+                onOpenSleepTimer = onOpenSleepTimer,
+                eqActive = eqActive,
+                onOpenEqualizer = onOpenEqualizer,
+                audioFormat = audioFormat,
+                visualizerEnabled = visualizerEnabled,
+                onToggleVisualizer = onToggleVisualizer,
+                tiltSpectrum = tiltSpectrum,
+                vizAlpha = vizT.value,
+                onCard = onCard,
+                subOnCard = subOnCard,
+                readableAccent = readableAccent,
+                btnColor = btnColor,
+                trackColor = trackColor,
+                glass = glass,
+                isDark = colors.isDark,
+                interactive = true,
+                compact = true,
+                infoFade = infoFade.value,
+                modifier = Modifier.fillMaxWidth()
+)
             }
         }
     }

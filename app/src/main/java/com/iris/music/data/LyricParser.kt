@@ -15,17 +15,49 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.data
 
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.ConcurrentHashMap
+
+/** 单字（词）歌词：逐字点亮用。startMs 为该字开始时间。 */
+data class LyricWord(
+    val startMs: Long,
+    val text: String
+)
 
 /** 单行歌词 */
 data class LyricLine(
     /** 该行开始时间（毫秒） */
     val timeMs: Long,
-    val text: String
-)
+    val text: String,
+    /**
+     * 词级时间戳（增强型 LRC 的 <mm:ss.xx> 行内标签）。
+     * 为空表示只有行级时间——展示层退回整行高亮，不做逐字。
+     */
+    val words: List<LyricWord> = emptyList()
+) {
+    /** 是否带词级时间，可做逐字点亮 */
+    val hasWords: Boolean get() = words.isNotEmpty()
+}
 
 object LyricParser {
 
@@ -38,6 +70,30 @@ object LyricParser {
      * @param durationMs 歌曲时长，纯文本歌词会按时间均匀分配，实现滚动高亮
      */
     fun loadLyrics(audioPath: String?, durationMs: Long): List<LyricLine> {
+        if (audioPath.isNullOrBlank()) return emptyList()
+
+        val key = cacheKey(audioPath, durationMs)
+        // 命中即返回：解析结果是不可变 List，多处共享安全
+        synchronized(cacheLock) { cache[key] }?.let { return it }
+
+        // 未命中：同一首歌的并发请求（封面歌词 / 全屏歌词 / 悬浮窗 / 唱片墙
+        // 常常同时发起）在这里收敛到同一把锁上，只让第一个真正去解析文件，
+        // 其余的等它做完直接读缓存，避免 N 次 RandomAccessFile 扫标签。
+        val gate = inFlight.computeIfAbsent(key) { Any() }
+        try {
+            synchronized(gate) {
+                synchronized(cacheLock) { cache[key] }?.let { return it }
+                val result = loadUncached(audioPath, durationMs)
+                synchronized(cacheLock) { cache[key] = result }
+                return result
+            }
+        } finally {
+            inFlight.remove(key, gate)
+        }
+    }
+
+    /** 真正的解析路径：内嵌标签优先，其次同名 .lrc */
+    private fun loadUncached(audioPath: String?, durationMs: Long): List<LyricLine> {
         // 1. 内嵌歌词
         extractEmbeddedLyrics(audioPath)?.let { raw ->
             val l = parseText(raw, durationMs)
@@ -49,6 +105,49 @@ object LyricParser {
             if (l.isNotEmpty()) return l
         }
         return emptyList()
+    }
+
+    // ---------- 解析结果缓存 ----------
+    /**
+     * 缓存上限。一条歌词几 KB 到几十 KB，8 首足够覆盖"当前曲 + 前后翻动"的
+     * 访问局部性；再多收益递减，白占内存。
+     */
+    private const val CACHE_MAX = 8
+
+    /**
+     * 缓存键带文件指纹（长度 + mtime）与 durationMs：
+     * - 指纹保证用户替换/重写歌词文件后不会读到旧结果；
+     * - durationMs 参与是因为纯文本歌词按时长均分时间戳，
+     *   时长不同解析结果就不同（首次拿到的 duration 可能是 0）。
+     * 注意 0 时长的结果同样会被缓存，但它的键与真实时长的键不同，
+     * 播放器拿到真实时长后自然会重新解析一次，不会永久卡在退化结果上。
+     */
+    private fun cacheKey(audioPath: String, durationMs: Long): String {
+        val f = File(audioPath)
+        val lrc = File(f.parent, f.nameWithoutExtension + ".lrc")
+        // 外挂 lrc 的指纹也要进键：改了歌词文件但没动音频时同样要失效
+        return buildString {
+            append(audioPath).append('|')
+            append(f.length()).append('|').append(f.lastModified()).append('|')
+            append(lrc.length()).append('|').append(lrc.lastModified()).append('|')
+            append(durationMs)
+        }
+    }
+
+    /** LRU：accessOrder=true，超出 [CACHE_MAX] 淘汰最久未访问的一首 */
+    private val cache = object : LinkedHashMap<String, List<LyricLine>>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, List<LyricLine>>?
+        ): Boolean = size > CACHE_MAX
+    }
+    private val cacheLock = Any()
+
+    /** 进行中的解析：同键并发只解析一次 */
+    private val inFlight = ConcurrentHashMap<String, Any>()
+
+    /** 清空歌词缓存（媒体库重扫后调用，避免读到已删除文件的残留结果） */
+    fun clearCache() {
+        synchronized(cacheLock) { cache.clear() }
     }
 
     /**
@@ -463,9 +562,73 @@ object LyricParser {
             }
         }
         if (times.isEmpty()) return null
-        val text = rest.trim()
+        // rest 里可能含增强型 LRC 的词级标签 <mm:ss.xx>，先拆词
+        val words = parseWords(rest, times.first())
+        val text = stripWordTags(rest).trim()
         if (text.isEmpty()) return null
-        return LyricLine(times.first(), text)
+        return LyricLine(times.first(), text, words)
+    }
+
+    /**
+     * 解析增强型 LRC 的词级时间标签：
+     *   <00:12.34>今<00:12.80>天<00:13.10>...
+     * 每个 <> 标签是紧随其后那段文字的开始时间。若行首没有标签，
+     * 用行时间 [lineStartMs] 作为第一段的起点。
+     * 行内没有任何 <> 标签时返回空列表（表示无词级信息）。
+     */
+    private fun parseWords(raw: String, lineStartMs: Long): List<LyricWord> {
+        if (raw.indexOf('<') < 0) return emptyList()
+        val words = mutableListOf<LyricWord>()
+        var i = 0
+        var curStart = lineStartMs
+        val sb = StringBuilder()
+        fun flush(start: Long) {
+            val t = sb.toString()
+            if (t.isNotEmpty()) words.add(LyricWord(start, t))
+            sb.setLength(0)
+        }
+        while (i < raw.length) {
+            val c = raw[i]
+            if (c == '<') {
+                val close = raw.indexOf('>', i)
+                if (close > i) {
+                    val tag = raw.substring(i + 1, close)
+                    val t = parseTime(tag)
+                    if (t != null) {
+                        // 结束上一段（用它的开始时间），开启新段
+                        flush(curStart)
+                        curStart = t
+                        i = close + 1
+                        continue
+                    }
+                }
+            }
+            sb.append(c)
+            i++
+        }
+        flush(curStart)
+        // 只有一段且和整行等价时没意义，直接判定为无词级
+        return if (words.size <= 1) emptyList() else words
+    }
+
+    /** 去掉行内的 <mm:ss.xx> 词级标签，得到纯文本 */
+    private fun stripWordTags(raw: String): String {
+        if (raw.indexOf('<') < 0) return raw
+        val sb = StringBuilder()
+        var i = 0
+        while (i < raw.length) {
+            val c = raw[i]
+            if (c == '<') {
+                val close = raw.indexOf('>', i)
+                if (close > i && parseTime(raw.substring(i + 1, close)) != null) {
+                    i = close + 1
+                    continue
+                }
+            }
+            sb.append(c)
+            i++
+        }
+        return sb.toString()
     }
 
     /** 解析 [mm:ss.xx] / [mm:ss] / [mm:ss:xx] 时间戳 */
@@ -501,5 +664,31 @@ object LyricParser {
             }
         }
         return ans
+    }
+
+    /**
+     * 逐字点亮进度：给定某行和当前播放时间，返回该行已唱到的字符数（0..text.length）。
+     * 用词级时间在相邻两词之间做线性插值，让高亮平滑扫过而不是一词一跳。
+     * 无词级信息时返回 -1，调用方退回整行高亮。
+     */
+    fun wordProgressChars(line: LyricLine, positionMs: Long): Int {
+        val words = line.words
+        if (words.isEmpty()) return -1
+        // 累计每个词结束时的字符数
+        var chars = 0
+        for (i in words.indices) {
+            val w = words[i]
+            val start = w.startMs
+            val end = if (i + 1 < words.size) words[i + 1].startMs else Long.MAX_VALUE
+            if (positionMs < start) return chars
+            if (positionMs < end) {
+                // 词内插值
+                val span = (end - start).coerceAtLeast(1)
+                val frac = ((positionMs - start).toFloat() / span).coerceIn(0f, 1f)
+                return chars + (w.text.length * frac).toInt()
+            }
+            chars += w.text.length
+        }
+        return chars
     }
 }

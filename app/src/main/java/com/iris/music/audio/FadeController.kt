@@ -15,6 +15,23 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music.audio
 
 import android.content.Context
@@ -82,6 +99,11 @@ object FadeController {
         enabled = prefs.getBoolean(KEY_ENABLED, false)
         fadeMs = prefs.getLong(KEY_FADE_MS, DEFAULT_FADE_MS).coerceIn(MIN_FADE_MS, MAX_FADE_MS)
     }
+
+    /** 上一帧是否真正在播放：用于捕捉「出声瞬间」——起播请求与首帧出声之间存在异步延迟，
+     *  爆音正是发生在首帧，anti-pop 渐入点必须以出声为准，而不是以 play() 调用为准。 */
+    @Volatile
+    private var wasPlaying = false
 
     /** attach/播放恢复的时刻（elapsedRealtime）。此后 ANTI_POP_MS 内强制从 0 渐入，
      *  消除进程重建后恢复播放时新 AudioTrack 首帧非零起点导致的爆音 */
@@ -166,6 +188,17 @@ object FadeController {
             val p = player ?: return
             var busy = false
 
+            // 捕捉「真正出声」这一帧：play()/resume 是异步的，调用到首帧出采样之间有解码延迟。
+            // 起播时 volume 已被压到 0，但若出声发生在下一拍 tick 之前，anti-pop 计时（从
+            // play() 时刻算）可能已跑到 1，导致 tick 再把音量从静音直接跳满——这个非零起点的
+            // 突跳就是概率性爆音。以「isPlaying 变 true」为准重置渐入点，音量便从首帧起 0→满
+            // 平滑渐入，突跳消失。
+            val nowPlaying = p.isPlaying
+            if (nowPlaying && !wasPlaying) {
+                playStartStamp = android.os.SystemClock.elapsedRealtime()
+            }
+            wasPlaying = nowPlaying
+
             if (!enabled) {
                 // 关闭状态下 gate 不参与计算，但要复位，避免开关切换时残留静音
                 gate = 1f
@@ -198,6 +231,11 @@ object FadeController {
     }
 
     private fun targetVolume(p: ExoPlayer): Float {
+        // 起播准备期锁 0（防爆音关键，enabled 两种模式都适用）：
+        // play() 到首帧出声之间是异步准备期，isPlaying 仍为 false。若在这段把音量
+        // 按渐入值设满，新 AudioTrack 首帧就以满音量播出 → 概率爆音。锁 0 直到
+        // 出声（ticker 下一拍检测到 isPlaying 变 true 并重置渐入点），再 0→满渐入。
+        if (p.playWhenReady && !p.isPlaying) return 0f
         val pos = p.currentPosition.coerceAtLeast(0L).toFloat()
         // 防爆音渐入：从起播时刻算（而非播放位置）——服务重建后 resume 的位置
         // 通常已过 150ms，按位置算会跳过渐入直接满音量，新 AudioTrack 首帧爆音

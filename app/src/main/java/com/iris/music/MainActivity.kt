@@ -15,11 +15,32 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+/*
+ * This file is part of IRIS Music.
+ * Copyright (C) 2026 WWRJ
+ *
+ * IRIS Music is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.iris.music
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +61,12 @@ class MainActivity : ComponentActivity() {
             viewModel.reloadLibrary()
         }
 
+    // 用户从「所有文件访问」设置页返回后重新建库
+    private val allFilesLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            viewModel.reloadLibrary()
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNeededPermissions()
@@ -47,7 +74,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
-
+            val baseDensity = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+                    density = baseDensity.density,
+                    fontScale = baseDensity.fontScale * state.fontScale
+                )
+            ) {
             IRISMusicTheme(
                 theme = state.theme,
                 mode = state.mode,
@@ -74,6 +107,7 @@ class MainActivity : ComponentActivity() {
                     onExplorationChange = viewModel::setExploration
                 )
             }
+            }
         }
     }
 
@@ -89,6 +123,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestNeededPermissions() {
+        // targetSdk 30+：优先申请「所有文件访问」(MANAGE_EXTERNAL_STORAGE)。
+        // 曲库直扫文件系统需要它才能用 File API 遍历共享存储；未授予时
+        // 仅靠 READ_MEDIA_AUDIO 只能读进 MediaStore 的音频，会漏掉被系统
+        // 误判成 video/image 的 mjpeg 封面歌。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            runCatching {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+                allFilesLauncher.launch(intent)
+            }.onFailure {
+                // 个别 ROM 不支持带包名的定向页，退回总列表页
+                runCatching {
+                    allFilesLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                }
+            }
+            return
+        }
+
         val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms += Manifest.permission.READ_MEDIA_AUDIO
@@ -96,6 +150,12 @@ class MainActivity : ComponentActivity() {
         } else {
             perms += Manifest.permission.READ_EXTERNAL_STORAGE
         }
-        permissionLauncher.launch(perms.toTypedArray())
+        // 只在确有未授予的权限时才弹窗。否则权限回调会触发 reloadLibrary()（完整扫盘），
+        // 导致每次冷启动都强制重扫一遍——这正是"重新进应用又重新加载"的来源。
+        // 权限齐全时什么都不做：ViewModel init 里的 loadLibrary() 已经走"缓存秒开"路径。
+        val missing = perms.filter {
+            checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) permissionLauncher.launch(missing.toTypedArray())
     }
 }
