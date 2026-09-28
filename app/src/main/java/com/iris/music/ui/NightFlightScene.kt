@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.ui
 
 import androidx.compose.animation.core.Animatable
@@ -62,9 +28,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.PathParser
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -85,13 +48,7 @@ import kotlinx.coroutines.withContext
 private const val SC_W = 1000f
 private const val SC_H = 500f
 
-private object NfIcons {
-    private fun icon(path: String): ImageVector = ImageVector.Builder(
-        defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f
-    ).apply { addPath(pathData = PathParser().parsePathString(path).toNodes(), fill = SolidColor(Color.Black)) }.build()
-    val Play by lazy { icon("M8,5.14v13.72c0,0.79 0.87,1.27 1.54,0.84l10.79,-6.86c0.62,-0.39 0.62,-1.29 0,-1.69L9.54,4.29C8.87,3.87 8,4.34 8,5.14z") }
-    val Pause by lazy { icon("M8,19c1.1,0 2,-0.9 2,-2V7c0,-1.1 -0.9,-2 -2,-2S6,5.9 6,7v10C6,18.1 6.9,19 8,19zM16,19c1.1,0 2,-0.9 2,-2V7c0,-1.1 -0.9,-2 -2,-2s-2,0.9 -2,2v10C14,18.1 14.9,19 16,19z") }
-}
+/** 播放/暂停图标见全局 [IrisIcons]（唯一来源，全进程 lazy 复用）。 */
 
 @Composable
 fun NightFlightScene(state: PlayerUiState, onToggle: () -> Unit, onPrev: () -> Unit, onNext: () -> Unit) {
@@ -205,13 +162,13 @@ fun NightFlightScene(state: PlayerUiState, onToggle: () -> Unit, onPrev: () -> U
                 horizontalArrangement = Arrangement.spacedBy(30.dp), verticalAlignment = Alignment.CenterVertically
             ) {
                 SceneCircle(onClick = onPrev, size = 52) {
-                    Icon(NfIcons.Play, null, tint = Color(0xFFE6F0FA), modifier = Modifier.size(24.dp).graphicsLayer { scaleX = -1f })
+                    Icon(IrisIcons.Play, null, tint = Color(0xFFE6F0FA), modifier = Modifier.size(24.dp).graphicsLayer { scaleX = -1f })
                 }
                 SceneCircle(onClick = onToggle, size = 74, ring = true) {
-                    Icon(if (state.isPlaying) NfIcons.Pause else NfIcons.Play, null, tint = Color.White, modifier = Modifier.size(34.dp))
+                    Icon(if (state.isPlaying) IrisIcons.Pause else IrisIcons.Play, null, tint = Color.White, modifier = Modifier.size(34.dp))
                 }
                 SceneCircle(onClick = onNext, size = 52) {
-                    Icon(NfIcons.Play, null, tint = Color(0xFFE6F0FA), modifier = Modifier.size(24.dp))
+                    Icon(IrisIcons.Play, null, tint = Color(0xFFE6F0FA), modifier = Modifier.size(24.dp))
                 }
             }
         }

@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.audio
 
 import androidx.annotation.OptIn
@@ -205,6 +171,32 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
     var beatLevel: Float = 0f
         private set
 
+    // ---------- 三段频谱通量（供低音震动分层触发） ----------
+    // 鼓点的本质是能量"突增"（瞬态），而非绝对高低。频谱通量 = 每帧相对上一帧
+    // 的正向能量增量，天生只捕捉瞬态、无视持续铺底音——这是"精准跟鼓点"的关键。
+    // 按频段拆三路，让底鼓/军鼓/踩镲能分别触发不同触感原语（脆 vs 闷）：
+    // - low  (≤band LOW_MAX_BAND，约 40–254Hz)：底鼓 kick（含 200–250Hz 厚底鼓）
+    // - mid  (≤band MID_MAX_BAND，约 254Hz–2kHz)：军鼓 snare 主体
+    // - high (其余，约 2k–16kHz)：踩镲 hi-hat / 军鼓脆响
+    /** band 索引上界：低频段（约 ≤254Hz）。抬到 11 是为了把 200–250Hz 的厚底鼓归入低音走长闷震 */
+    private const val LOW_MAX_BAND = 11
+    /** band 索引上界：中频段（约 ≤2kHz） */
+    private const val MID_MAX_BAND = 23
+
+    @Volatile var lowFlux: Float = 0f
+        private set
+    @Volatile var midFlux: Float = 0f
+        private set
+    @Volatile var highFlux: Float = 0f
+        private set
+
+    /** 分析帧序号：每完成一次 FFT 自增。轮询方据此判断是否有新帧，避免重复处理同一帧 */
+    @Volatile var analysisFrame: Long = 0L
+        private set
+
+    /** 上一帧各频段幅值，用于算通量 */
+    private val prevBands = FloatArray(BANDS)
+
     private val EMPTY = FloatArray(BANDS)
 
     // ==================== AudioBufferSink ====================
@@ -215,6 +207,7 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         pcmEncoding = encoding
         writeIndex = 0
         published = FloatArray(BANDS)
+        java.util.Arrays.fill(prevBands, 0f)
         buildBins()
     }
 
@@ -274,10 +267,12 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         fft()
 
         // 频段计算范围：频谱开着算全部；只开旁路（无声略过/低音震动）时
-        // 只算低频那几段——BASS_BANDS 覆盖 40Hz 起的低音区，够用了。
+        // 原本只算低频 12 段，但分层鼓点检测需要中高频通量（军鼓/踩镲），
+        // 所以旁路时也算全 36 段。FFT 本身已经算完，这里只是多几十次分箱取峰，
+        // 开销可忽略，换来"跟得准、分得清"。
         val bandCount = when {
             enabled -> BANDS
-            sidechainEnabled -> BASS_BANDS
+            sidechainEnabled -> BANDS
             else -> 0
         }
 
@@ -328,6 +323,31 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         var rmsNorm = ((rmsDb - DB_FLOOR) / -DB_FLOOR).coerceIn(0f, 1f)
         rmsNorm = rmsNorm.pow(0.85f)
         beatLevel = maxOf(bassLevel, rmsNorm)
+
+        // ---- 三段频谱通量：只取正向增量（能量突增=瞬态/鼓点），累加各段 ----
+        // 相比"绝对电平过阈值"，通量对持续铺底的贝斯/合成器几乎不响应，
+        // 只在鼓 attack 那一帧突跳——这直接解决"没鼓点也震"和"有鼓点没跟上"。
+        if (bandCount >= BANDS) {
+            var lo = 0f; var mid = 0f; var hi = 0f
+            for (b in 0 until BANDS) {
+                val diff = out[b] - prevBands[b]
+                if (diff > 0f) {
+                    when {
+                        b <= LOW_MAX_BAND -> lo += diff
+                        b <= MID_MAX_BAND -> mid += diff
+                        else -> hi += diff
+                    }
+                }
+                prevBands[b] = out[b]
+            }
+            // 归一化到各段频段数，使三路量纲可比（否则宽的高频段天然占优）
+            lowFlux = lo / (LOW_MAX_BAND + 1)
+            midFlux = mid / (MID_MAX_BAND - LOW_MAX_BAND)
+            highFlux = hi / (BANDS - 1 - MID_MAX_BAND)
+        } else {
+            lowFlux = 0f; midFlux = 0f; highFlux = 0f
+        }
+        analysisFrame++
     }
 
     /** 迭代式 radix-2 Cooley-Tukey，输入已按位反转重排，原地计算 */

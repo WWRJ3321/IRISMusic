@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.player
 
 import android.app.Application
@@ -536,11 +502,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.refreshing) return
         viewModelScope.launch {
             _state.value = _state.value.copy(refreshing = true)
-            // 刷新 = 触发媒体扫描（新文件可被索引）+ 重新读库
+            // 刷新 = 触发媒体扫描（新文件可被索引）+ 重新读库。
+            // rescanAndReload 内部走 IO；文件夹聚合也一并放到 IO，避免大库在主线程算。
             val songs = MusicRepository.rescanAndReload(getApplication())
+            val folders = withContext(Dispatchers.Default) { MusicRepository.buildFolders(songs) }
             _state.value = _state.value.copy(
                 allSongs = songs,
-                folders = MusicRepository.buildFolders(songs),
+                folders = folders,
                 loading = false,
                 refreshing = false
             )
@@ -549,8 +517,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             updateRecommendations()
             // 报告里的歌名来自 allSongs，库换了要跟着重算
             refreshReportIfNeeded()
-            // 曲库就绪：收编空库导入时暂存的孤儿数据（点赞/明细/歌单）
-            DataTransfer.attachOrphans(getApplication(), songs)
+            // 收编孤儿数据：JSON 解析 + 归并较重，放 IO 线程，别卡刷新动画收尾那一帧
+            withContext(Dispatchers.IO) { DataTransfer.attachOrphans(getApplication(), songs) }
         }
     }
 
@@ -1205,11 +1173,17 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val pool = recommendationPool()
         if (pool.isEmpty()) return
         val exploration = _state.value.exploration
-        val recs = Recommender.recommend(pool, exploration = exploration)
-        _state.value = _state.value.copy(
-            recommendations = recs,
-            recommendationsVersion = _state.value.recommendationsVersion + 1
-        )
+        // 打分在大库下不算便宜，放后台算，别和刷新/筛选挤在主线程同一帧——
+        // 那正是"刷新时转圈先卡住、结果才一次性刷出来"的主线程阻塞来源。
+        viewModelScope.launch {
+            val recs = withContext(Dispatchers.Default) {
+                Recommender.recommend(pool, exploration = exploration)
+            }
+            _state.value = _state.value.copy(
+                recommendations = recs,
+                recommendationsVersion = _state.value.recommendationsVersion + 1
+            )
+        }
     }
 
     /**

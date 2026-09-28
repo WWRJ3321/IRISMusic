@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.ui.theme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -108,8 +74,8 @@ enum class IrisLayout(val label: String) {
     CAROUSEL("横向排布"),
     /** 堆叠排布：卡片叠成一沓，拖走最上面那张切歌 */
     STACK("堆叠排布"),
-    /** 紧凑排布：整屏紧凑歌单 + 底部常驻迷你播放条（Folia 式） */
-    COMPACT("紧凑排布");
+    /** 紧凑排布：整屏唱片墙（磁贴铺满） */
+    COMPACT("唱片墙");
 
     /** 是否为卡片模式（没有歌单页，只有播放卡片） */
     val isDeck: Boolean get() = this != LIST

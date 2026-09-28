@@ -17,3 +17,11 @@
     @androidx.annotation.Keep <fields>;
 }
 -keep @androidx.annotation.Keep class * { *; }
+
+# ---- 按字符串名持久化的枚举 ----
+# 这些枚举通过 valueOf(prefs 里的存储名) 反序列化（主题/模式/排布/循环等）。
+# R8 fullMode 下需保住枚举名与 values()/valueOf()，否则升级后读旧偏好会抛异常。
+-keepclassmembers enum com.iris.music.** {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}

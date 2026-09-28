@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.ui
 
 import androidx.compose.animation.*
@@ -761,15 +727,26 @@ private fun LibraryPage(
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
-                // 上栏按列表实际滚动量 1:1 跟随：上滑滑出、下滑拉回。
+                // 上栏跟随列表实际滚动量：上滑滑出、下滑拉回。
                 // consumed 只含列表自己吃掉的量（不含 onPreScroll 的消费，也不含 overscroll
                 // 拉伸），所以到底/到顶硬拖时上栏不会白走一截。惯性阶段同样计入，
                 // 否则 fling 时列表飞很远而上栏停着，松手后两者位置就对不上了。
                 val delta = consumed.y
-                if (delta != 0f) {
-                    barSettleJob?.cancel()
-                    barOffset.value =
-                        (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
+                if (delta == 0f) return Offset.Zero
+                barSettleJob?.cancel()
+                if (delta > 0f) {
+                    // 下滑露出上栏。区分手指与惯性：
+                    // - 手指主动下拉（UserInput）：任何位置都跟手滑入——这是"在列表任何
+                    //   地方下拉都能唤出上栏功能区"的入口，不能限制。
+                    // - fling 惯性：仅在接近顶部（前两条内）才跟手，否则一次长距离甩动会把
+                    //   上栏在列表还远没到顶时就整块拉出来提前遮挡内容。
+                    val byFinger = source == NestedScrollSource.UserInput
+                    if (byFinger || listState.firstVisibleItemIndex <= 1) {
+                        barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
+                    }
+                } else {
+                    // 上滑隐藏：任何位置都 1:1 收起，保证滚动时不挡内容
+                    barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
                 }
                 return Offset.Zero
             }
@@ -1030,8 +1007,6 @@ private fun LibraryPage(
                         LayoutButton(onClick = onCycleLayout, colors = colors)
                         Spacer(Modifier.width(8.dp))
                         ReportButton(onClick = onReport, colors = colors)
-                        Spacer(Modifier.width(8.dp))
-                        RefreshButton(onClick = onReload, colors = colors, isRefreshing = state.refreshing)
                         Spacer(Modifier.width(8.dp))
                         SettingsButton(onClick = onSettings, colors = colors)
                     }

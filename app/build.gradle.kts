@@ -46,8 +46,8 @@ android {
         applicationId = "com.iris.music"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4134
-        versionName = "3.11.0"
+        versionCode = 4225
+        versionName = "4.2.5"
 
         // 只保留中英文资源，去掉其它语言的 Compose/AndroidX 字符串，减小体积
         resourceConfigurations += listOf("en", "zh")
