@@ -420,6 +420,7 @@ onPhysicsFxChange = viewModel::setPhysicsFx,
                             onBassHapticsIntensityChange = viewModel::setBassHapticsIntensity,
                             onBassHapticsPulseMsChange = viewModel::setBassHapticsPulseMs,
                             onBassHapticsSensitivityChange = viewModel::setBassHapticsSensitivity,
+                            onBassHapticsLowCutoffChange = viewModel::setBassHapticsLowCutoff,
                             onBassHapticsAdaptiveChange = viewModel::setBassHapticsAdaptive,
                             onCustomColorsChange = viewModel::setCustomColors,
                             onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
@@ -733,19 +734,24 @@ private fun LibraryPage(
                 // 否则 fling 时列表飞很远而上栏停着，松手后两者位置就对不上了。
                 val delta = consumed.y
                 if (delta == 0f) return Offset.Zero
-                barSettleJob?.cancel()
                 if (delta > 0f) {
                     // 下滑露出上栏。区分手指与惯性：
-                    // - 手指主动下拉（UserInput）：任何位置都跟手滑入——这是"在列表任何
-                    //   地方下拉都能唤出上栏功能区"的入口，不能限制。
+                    // - 手指主动下拉（UserInput）：任何位置都一次性动画完整滑出。
+                    //   之前按列表消费量逐帧累加，列表在中间能一直回滚吃掉位移，
+                    //   上栏每帧只涨一点，单次手势拉不满——得连拉几次才全露。改成
+                    //   检测到手指下拉就 settle 到 0，一拉到底。
                     // - fling 惯性：仅在接近顶部（前两条内）才跟手，否则一次长距离甩动会把
                     //   上栏在列表还远没到顶时就整块拉出来提前遮挡内容。
                     val byFinger = source == NestedScrollSource.UserInput
-                    if (byFinger || listState.firstVisibleItemIndex <= 1) {
+                    if (byFinger) {
+                        if (barOffset.value < 0f && barSettleJob?.isActive != true) settleBarTo(0f)
+                    } else if (listState.firstVisibleItemIndex <= 1) {
+                        barSettleJob?.cancel()
                         barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
                     }
                 } else {
                     // 上滑隐藏：任何位置都 1:1 收起，保证滚动时不挡内容
+                    barSettleJob?.cancel()
                     barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
                 }
                 return Offset.Zero

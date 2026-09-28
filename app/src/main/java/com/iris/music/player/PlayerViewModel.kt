@@ -152,6 +152,8 @@ val coverLyric: Boolean = false,
     val bassHapticsPulseMs: Int = 20,
     /** 触发灵敏度 1-10，越大越容易触发 */
     val bassHapticsSensitivity: Int = 5,
+    /** 低音截止频率 Hz：多少 Hz 以下算作低音，120–320，默认 250 */
+    val bassHapticsLowCutoff: Int = 250,
     /** 自适应：时长/灵敏度跟随音乐实时变化 */
     val bassHapticsAdaptive: Boolean = false,
     /** 虚拟低音（V2.2 · beta） */
@@ -225,6 +227,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             bassHapticsIntensity = prefs.getInt(BassHaptics.KEY_INTENSITY, 1).coerceIn(0, 2),
             bassHapticsPulseMs = prefs.getInt(BassHaptics.KEY_PULSE_MS, 20).coerceIn(1, 30),
             bassHapticsSensitivity = prefs.getInt(BassHaptics.KEY_SENSITIVITY, 5).coerceIn(1, 10),
+            bassHapticsLowCutoff = prefs.getInt(BassHaptics.KEY_LOW_CUTOFF, 250).coerceIn(120, 320),
             bassHapticsAdaptive = prefs.getBoolean(BassHaptics.KEY_ADAPTIVE, false),
             virtualBass = prefs.getBoolean(VirtualBass.KEY_ENABLED, false),
             virtualBassStrength = prefs.getInt(VirtualBass.KEY_STRENGTH, 50).coerceIn(0, 100),
@@ -849,6 +852,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putInt(BassHaptics.KEY_SENSITIVITY, v).apply()
         BassHaptics.setSensitivity(v)
         _state.value = _state.value.copy(bassHapticsSensitivity = v)
+    }
+
+    /** 低音截止频率 Hz：120–320，多少 Hz 以下算作低音走底鼓闷震 */
+    fun setBassHapticsLowCutoff(hz: Int) {
+        val v = hz.coerceIn(120, 320)
+        prefs.edit().putInt(BassHaptics.KEY_LOW_CUTOFF, v).apply()
+        BassHaptics.setLowCutoffHz(v)
+        _state.value = _state.value.copy(bassHapticsLowCutoff = v)
     }
 
     /** 自适应：时长/灵敏度跟随音乐实时变化 */
