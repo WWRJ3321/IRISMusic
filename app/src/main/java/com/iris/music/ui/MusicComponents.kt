@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.ui
 
 import androidx.compose.animation.*
@@ -530,12 +496,19 @@ visible: Boolean = true,
         label = "scrollerAlpha"
     )
 
-    // 滑块几何：在 composable 层算好，Canvas 与气泡共用
+    // 滑块几何：thumbHpx 只随 trackH/总数变化（低频），留在组合层。
+    // thumbYpx/thumbWpx 依赖每帧变化的 dragFraction / expand / dragT——
+    // 若在组合层求值，拖动时每帧都触发整块重组（Canvas + 气泡）。改为在
+    // 绘制/布局阶段（Canvas draw lambda、气泡 offset lambda）内读取这些状态，
+    // 让拖动只走重绘、不走重组，是这条滑条跟手流畅度的关键。
     val maxThumbPx = (trackH * 0.35f).coerceAtLeast(minThumbPx)
     val thumbHpx = if (trackH > 0f)
         (trackH / totalItems.coerceAtLeast(1)).coerceIn(minThumbPx, maxThumbPx) else minThumbPx
-    val thumbYpx = (if (isDragging) dragFraction else scrollProgress) * (trackH - thumbHpx).coerceAtLeast(0f)
-    val thumbWpx = idleWpx + (activeWpx - idleWpx) * expand + (dragWpx - activeWpx) * dragT
+    // 供 draw / offset 内复用的即时几何（读取快照状态，仅在对应阶段求值）
+    fun currentThumbY(): Float =
+        (if (isDragging) dragFraction else scrollProgress) * (trackH - thumbHpx).coerceAtLeast(0f)
+    fun currentThumbW(): Float =
+        idleWpx + (activeWpx - idleWpx) * expand + (dragWpx - activeWpx) * dragT
 
     // 拖动：只把手指 y 坐标换算成目标分数写入 dragFraction，不在这里启动滚动。
     // 真正的滚动由下方单一消费者 LaunchedEffect 驱动——每次拖动事件都 launch 一个
@@ -622,7 +595,10 @@ visible: Boolean = true,
                 cornerRadius = CornerRadius(trackW / 2f)
             )
 
-            // 滑块：药丸，拖动时变主题色并膨胀
+            // 滑块：药丸，拖动时变主题色并膨胀。几何在 draw 阶段实时求值，
+            // 读取 dragFraction/expand/dragT 快照——状态变化只让本 Canvas 重绘，不重组。
+            val thumbWpx = currentThumbW()
+            val thumbYpx = currentThumbY()
             val thumbColor = androidx.compose.ui.graphics.lerp(
                 onSheet.copy(alpha = 0.28f + 0.42f * expand),
                 colors.primary,
@@ -636,21 +612,24 @@ visible: Boolean = true,
             )
         }
 
-        // 拖动气泡：显示当前歌曲首字 + 序号，跟随滑块中心
+        // 拖动气泡：显示当前歌曲首字 + 序号，跟随滑块中心。
+        // dragT 只用于决定气泡是否存在（低频），位置在 offset lambda 内实时算——
+        // 拖动时只重跑布局偏移，不重组整个气泡。
         if (dragT > 0.01f) {
             val label = labelForIndex(dragIndex)
             // 只显示 A-Z 首字母，中文/日文/数字/符号统一归为 #
             val fc = label?.trim()?.firstOrNull()?.uppercaseChar()
             val head = if (fc != null && fc in 'A'..'Z') fc.toString() else "#"
             val bubbleSize = 58.dp
-            val bubbleYpx = thumbYpx + thumbHpx / 2f - with(density) { bubbleSize.toPx() } / 2f
+            val bubbleHalfPx = with(density) { bubbleSize.toPx() } / 2f
+            val bubbleXpx = with(density) { 24.dp.roundToPx() }
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
                     .offset {
                         IntOffset(
-                            x = -with(density) { 24.dp.roundToPx() },
-                            y = bubbleYpx.roundToInt()
+                            x = -bubbleXpx,
+                            y = (currentThumbY() + thumbHpx / 2f - bubbleHalfPx).roundToInt()
                         )
                     }
                     .graphicsLayer {

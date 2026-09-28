@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.ui
 
 import com.iris.music.BuildConfig
@@ -648,16 +614,16 @@ internal fun SettingsPanel(
 
                 Spacer(Modifier.height(10.dp))
 
-                // 自适应：震动时长与触发灵敏度跟随音乐旋律实时变化，开启后手动档位无效
+                // 自适应：震动强度跟随鼓点力度、时长跟随鼓点时长，开启后隐藏手动时长档
                 Spacer(Modifier.height(4.dp))
                 SettingToggleRow(
                     "自适应旋律",
                     state.bassHapticsAdaptive,
                     colors,
-                    subtitle = "鼓点越猛震得越久，歌曲起伏自动调节灵敏度"
+                    subtitle = "强度随鼓点力度、时长随鼓点长短自动变化"
                 ) { onBassHapticsAdaptiveChange(!state.bassHapticsAdaptive) }
 
-                // 手动档位仅在「自适应」关闭时显示
+                // 单次震动时长仅在「自适应」关闭时显示（自适应时由鼓点时长接管）
                 AnimatedVisibility(
                     visible = !state.bassHapticsAdaptive,
                     enter = fadeIn() + expandVertically(),
@@ -685,22 +651,22 @@ internal fun SettingsPanel(
                                 onBassHapticsPulseMsChange(30); BassHaptics.preview(state.bassHapticsIntensity)
                             }
                         }
-
-                        Spacer(Modifier.height(10.dp))
-
-                        // 触发灵敏度：三档（低/中/高）。越大越容易跟随鼓点。
-                        Text("触发灵敏度", color = colors.subText, fontSize = 11.sp)
-                        Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            val sens = state.bassHapticsSensitivity
-                            ModeSwatch("低", sens <= 3, colors,
-                                modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(3) }
-                            ModeSwatch("中", sens > 3 && sens < 7, colors,
-                                modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(5) }
-                            ModeSwatch("高", sens >= 7, colors,
-                                modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(8) }
-                        }
                     }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // 触发灵敏度：三档（低/中/高）。始终可单独调节，不受自适应影响。
+                Text("触发灵敏度", color = colors.subText, fontSize = 11.sp)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val sens = state.bassHapticsSensitivity
+                    ModeSwatch("低", sens <= 3, colors,
+                        modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(3) }
+                    ModeSwatch("中", sens > 3 && sens < 7, colors,
+                        modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(5) }
+                    ModeSwatch("高", sens >= 7, colors,
+                        modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(8) }
                 }
             }
         }
@@ -1313,45 +1279,24 @@ private fun LayoutSwatch(
                 }
 
 IrisLayout.COMPACT -> {
-                     // 紧凑排布：上面一列歌曲行（序号点 + 标题条 + 元信息条），
-                     // 底部一条常驻迷你播放条（圆点 + 长条 + 三个小方点控制键）
-                     val gap = 2.5.dp.toPx()
-                     val barH = h * 0.20f
-                     val listH = h - barH - gap * 5f
-                     val rowH = (listH - gap * 3f) / 4f
-                     for (row in 0 until 4) {
-                         val y = pad + row * (rowH + gap)
-                         // 序号圆点
-                         drawCircle(
-                             color = fill.copy(alpha = fill.alpha * 0.7f),
-                             radius = rowH * 0.28f,
-                             center = Offset(pad + rowH * 0.30f, y + rowH / 2f)
-                         )
-                         // 标题条（长）
-                         drawRoundRect(fill,
-                             Offset(pad + rowH * 0.75f, y + rowH * 0.10f),
-                             Size(w - rowH * 0.75f, rowH * 0.28f), inner)
-                         // 元信息条（短、淡）
-                         drawRoundRect(fill.copy(alpha = fill.alpha * 0.55f),
-                             Offset(pad + rowH * 0.75f, y + rowH * 0.60f),
-                             Size((w - rowH * 0.75f) * 0.62f, rowH * 0.22f), inner)
+                     // 唱片墙：手机框内铺满一格格方形封面卡（3 列 × 4 行网格）
+                     val cols = 3
+                     val rows = 4
+                     val cellGap = 1.6.dp.toPx()
+                     val cellW = (w - cellGap * (cols - 1)) / cols
+                     val cellH = (h - cellGap * (rows - 1)) / rows
+                     for (row in 0 until rows) {
+                         for (col in 0 until cols) {
+                             // 交替深浅让"一格格封面"更清楚，不是一块实心
+                             val a = if ((row + col) % 2 == 0) fill.alpha else fill.alpha * 0.6f
+                             drawRoundRect(
+                                 color = fill.copy(alpha = a),
+                                 topLeft = Offset(pad + col * (cellW + cellGap), pad + row * (cellH + cellGap)),
+                                 size = Size(cellW, cellH),
+                                 cornerRadius = inner
+                             )
+                         }
                      }
-                     // 底部迷你播放条
-                     val by = size.height - pad - barH
-                     drawRoundRect(fill.copy(alpha = fill.alpha * 0.85f),
-                         Offset(pad, by), Size(w, barH), inner)
-                     // 条内：控制点（上一首/播放/下一首）
-                     val dotR = barH * 0.16f
-                     val cy = by + barH / 2f
-                     val cxs = listOf(pad + barH * 0.5f, pad + barH * 0.95f, pad + barH * 1.4f)
-                     for (cx in cxs) drawCircle(frame, dotR, Offset(cx, cy))
-                     // 播放键中间实心
-                     drawCircle(frame.copy(alpha = frame.alpha * 0.9f), dotR * 0.55f,
-                         Offset(cxs[1], cy))
-                     // 进度条
-                     drawRoundRect(frame.copy(alpha = frame.alpha * 0.6f),
-                         Offset(pad + barH * 1.75f, cy - stroke / 2f),
-                         Size(w - barH * 1.75f - pad, stroke), CornerRadius.Zero)
                  }
             }
         }

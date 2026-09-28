@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.ui
 
 import android.content.Context
@@ -140,8 +106,16 @@ object ArtworkLoader {
     private val hiResInFlight =
         java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<Bitmap?>>()
 
-    /** 解析失败的文件路径集合：同一会话内不再重试 */
-    private val failedPaths = mutableSetOf<String>()
+    /**
+     * 解析失败的文件路径集合：同一会话内不再重试。
+     * 有界 LRU（access-order）：长会话 / 大曲库下自动淘汰最旧项，避免无上限增长。
+     * 值不重要，只用键做存在性判断；所有读写都在 [lock] 下串行化。
+     */
+    private const val FAILED_MAX = 512
+    private val failedPaths = object : LinkedHashMap<String, Unit>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?): Boolean =
+            size > FAILED_MAX
+    }
 
     /** 磁盘写入互斥：同一文件并发写保护，同时串行化容量计数与淘汰 */
     private val diskMutex = Mutex()
@@ -260,7 +234,7 @@ object ArtworkLoader {
 
         val bytes = readPictureBytes(filePath)
         if (bytes == null) {
-            synchronized(lock) { failedPaths.add(filePath) }
+            synchronized(lock) { failedPaths[filePath] = Unit }
             return null
         }
 

@@ -1,37 +1,3 @@
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-/*
- * This file is part of IRIS Music.
- * Copyright (C) 2026 WWRJ
- *
- * IRIS Music is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package com.iris.music.ui
 
 import androidx.compose.animation.core.Animatable
@@ -466,15 +432,13 @@ private fun DeckTopBar(
                 Spacer(Modifier.width(4.dp))
                 Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
             }
-            // 按钮组：与主界面上栏完全同款同序（无搜索框）
+            // 按钮组：与主界面上栏完全同款同序（无搜索框、无刷新——刷新走下拉手势）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = activePlaylist)
                 Spacer(Modifier.width(8.dp))
                 LayoutButton(onClick = onCycleLayout, colors = colors)
                 Spacer(Modifier.width(8.dp))
                 ReportButton(onClick = onOpenReport, colors = colors)
-                Spacer(Modifier.width(8.dp))
-                RefreshButton(onClick = onReload, colors = colors, isRefreshing = refreshing)
                 Spacer(Modifier.width(8.dp))
                 SettingsButton(onClick = onOpenSettings, colors = colors)
             }
