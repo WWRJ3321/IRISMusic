@@ -34,14 +34,15 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
     private const val FFT_SIZE = 1024
     private const val FFT_BITS = 10 // log2(1024)
 
+    /**
+     * 帧移（hop）：每累积这么多新样本就做一次 FFT，窗口之间 50% 重叠。
+     * 512 @44.1kHz ≈ 11.6ms 一帧（对比无重叠的 23ms），把鼓点 attack 的
+     * 判定延迟砍半、跟拍更准；代价是 FFT 调用翻倍，但单次 FFT 很轻，可接受。
+     */
+    private const val HOP_SIZE = 512
+
     /** 输出频段数 */
     const val BANDS = 36
-
-    /**
-     * 低音区频段数：约 40–200Hz（按对数分箱，前 [BASS_BANDS] 个频段）。
-     * 底鼓基频 50–120Hz、体感打击感延伸到 200Hz 左右，取 12 段才能盖全。
-     */
-    private const val BASS_BANDS = 12
 
     /** 分箱频率范围（Hz）：低于 40Hz 多是直流/隆隆声，高于 16kHz 基本听不到 */
     private const val FREQ_MIN = 40f
@@ -175,13 +176,31 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
     // 鼓点的本质是能量"突增"（瞬态），而非绝对高低。频谱通量 = 每帧相对上一帧
     // 的正向能量增量，天生只捕捉瞬态、无视持续铺底音——这是"精准跟鼓点"的关键。
     // 按频段拆三路，让底鼓/军鼓/踩镲能分别触发不同触感原语（脆 vs 闷）：
-    // - low  (≤band LOW_MAX_BAND，约 40–254Hz)：底鼓 kick（含 200–250Hz 厚底鼓）
-    // - mid  (≤band MID_MAX_BAND，约 254Hz–2kHz)：军鼓 snare 主体
+    // - low  (≤band lowMaxBand，截止频率可由用户设置)：底鼓 kick
+    // - mid  (≤band MID_MAX_BAND，约 ≤2kHz)：军鼓 snare 主体
     // - high (其余，约 2k–16kHz)：踩镲 hi-hat / 军鼓脆响
-    /** band 索引上界：低频段（约 ≤254Hz）。抬到 11 是为了把 200–250Hz 的厚底鼓归入低音走长闷震 */
-    private const val LOW_MAX_BAND = 11
+    /** band 索引上界：低频段（约 ≤254Hz）。默认对应 [LOW_CUTOFF_DEFAULT_HZ]，
+     *  可由 [setLowCutoffHz] 按用户设置的截止频率（Hz）动态重算，把多少 Hz 以下算作"低音"。 */
+    @Volatile
+    var lowMaxBand = 11
+        private set
     /** band 索引上界：中频段（约 ≤2kHz） */
     private const val MID_MAX_BAND = 23
+
+    /** 低音截止频率默认值（Hz）：把 40–250Hz 视为底鼓低音区 */
+    const val LOW_CUTOFF_DEFAULT_HZ = 250
+
+    /**
+     * 按截止频率（Hz）设定低音段上界 band。对数分箱下 band b 的下边界频率
+     * f(b) = FREQ_MIN × ratio^b，ratio = (FREQ_MAX/FREQ_MIN)^(1/BANDS)。
+     * 反解 b = log(hz/FREQ_MIN)/log(ratio)，取整即"最高一个下边界 ≤ hz 的 band"。
+     * 钳制在 [6, MID_MAX_BAND-2]，保证低/中两段都至少留几段、量纲归一化不塌。
+     */
+    fun setLowCutoffHz(hz: Int) {
+        val ratio = (FREQ_MAX / FREQ_MIN).toDouble().pow(1.0 / BANDS)
+        val idx = (kotlin.math.ln((hz / FREQ_MIN).toDouble()) / kotlin.math.ln(ratio)).toInt()
+        lowMaxBand = idx.coerceIn(6, MID_MAX_BAND - 2)
+    }
 
     @Volatile var lowFlux: Float = 0f
         private set
@@ -194,8 +213,71 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
     @Volatile var analysisFrame: Long = 0L
         private set
 
-    /** 上一帧各频段幅值，用于算通量 */
+    /** 上一帧各频段幅值（dB 归一化域），保留给可能的视觉用途 */
     private val prevBands = FloatArray(BANDS)
+
+    /**
+     * 检测专用的频段幅值：线性能量和 → 幂律压缩，与 UI 的 dB 峰值分开。
+     *
+     * 为什么不能复用 UI 那份：
+     * 1. UI 取段内 peak，而"空气感打击"（拍手/brush/镲片/宽频瞬态）能量摊在
+     *    整段的很多 bin 上，峰值并不突出——取峰会系统性低估它，再降阈值也捞不上来。
+     *    这里改成能量求和，宽频打击的真实能量才体现得出来。
+     * 2. dB 是对数域，衡量的是"相对变化"：响段落里的真打击(+6dB)和安静段的
+     *    小抖动(+6dB)，归一化后增量一模一样，检测器根本分不开。改用线性幅值
+     *    做 sqrt 幂律压缩（接近响度感知），保留"绝对能量增加"这个关键信息。
+     */
+    private val magBands = FloatArray(BANDS)
+    private val prevMag = FloatArray(BANDS)
+
+    /**
+     * 上涨频段占比 0-1：本帧有多少比例的频段在同时正向突增。
+     *
+     * 这是区分"真打击"和"噪声波动"最有效的单一特征：鼓/拍手/镲是宽频瞬态，
+     * 会让大片频段同时抬起来；而持续音的抖动、贝斯的包络起伏只有零星几段动。
+     * 检测侧据此动态松紧阈值——宽频放行（空气感打击能震），窄带收紧（小波动不乱震）。
+     */
+    @Volatile
+    var bandsRising: Float = 0f
+        private set
+
+    /** 判定某频段"在上涨"的最小增量，滤掉浮点噪声 */
+    private const val RISE_EPS = 0.002f
+
+    // ---------- 段落动态：相对音量 ----------
+    // 检测侧的 bestStrength 是局部自适应的（相对近期背景算超出量），
+    // 副歌的重击和主歌的轻击各自相对自己的局部背景都"同样突出"，
+    // 归一化后输出一样的强度——段落级起伏传递不到触感上。
+    // 用"当前段落音量 vs 全曲至今平均音量"补上这个盲区。
+
+    /** 短时程 RMS EMA 系数：≈300ms 时间常数 @11.6ms/帧，代表"这一段期间"的音量 */
+    private const val SHORT_RMS_K = 0.04f
+    /** 长时程 RMS EMA 系数：≈30s 时间常数，代表"整首歌至今"的平均音量 */
+    private const val LONG_RMS_K = 0.0004f
+    /** 计入长时程均值的最小 RMS：静音/间奏不计，否则会把全曲均值拉低、
+     *  导致间奏后的正常段落被误判成"超响" */
+    private const val LOUDNESS_GATE = 1e-4f
+
+    /** 短时程 RMS（≈300ms 窗）：当前段落的音量 */
+    @Volatile
+    var shortRms: Float = 0f
+        private set
+
+    /** 长时程 RMS（≈30s 窗）：整首歌至今的平均音量 */
+    @Volatile
+    var longRms: Float = 0f
+        private set
+
+    /**
+     * 相对音量（dB）：当前段落比整首歌至今的平均音量高出多少。
+     * 副歌/Drop 通常 +3~+8dB，主歌/间奏 -3~-8dB，钳制在 ±12dB。
+     *
+     * 流式播放拿不到"整首歌"的真实平均（后面还没解码），这里用长时程 EMA
+     * 近似"至今为止的平均"——与 ReplayGain 的实时近似思路相同。
+     */
+    @Volatile
+    var relativeLoudnessDb: Float = 0f
+        private set
 
     private val EMPTY = FloatArray(BANDS)
 
@@ -208,6 +290,16 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         writeIndex = 0
         published = FloatArray(BANDS)
         java.util.Arrays.fill(prevBands, 0f)
+        // 检测支路的历史也必须清，否则切歌首帧会拿上一首的残留值算差分，
+        // 得到一个巨大的假通量峰——又变回"切歌误震"。
+        java.util.Arrays.fill(prevMag, 0f)
+        java.util.Arrays.fill(magBands, 0f)
+        bandsRising = 0f
+        // 段落动态也要清零：否则新歌开头会拿上一首的平均音量当基准，
+        // 安静的开场被判成"远低于平均"而整段不震，或反之全程满力。
+        shortRms = 0f
+        longRms = 0f
+        relativeLoudnessDb = 0f
         buildBins()
     }
 
@@ -247,12 +339,15 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         }
     }
 
-    /** 累积单声道样本，满一窗就做一次 FFT */
+    /** 累积单声道样本；滑动窗：首次填满后每推进 [HOP_SIZE] 个新样本做一次 FFT（窗口 50% 重叠） */
     private fun push(sample: Float) {
         monoBuffer[writeIndex++] = sample
         if (writeIndex < FFT_SIZE) return
-        writeIndex = 0
         analyze()
+        // 保留窗口尾部 (FFT_SIZE - HOP_SIZE) 个样本，左移腾出 HOP_SIZE 空间给新样本。
+        // 下一次再累积满 HOP_SIZE 个新样本就又触发一次 FFT——相邻窗口重叠 50%。
+        System.arraycopy(monoBuffer, HOP_SIZE, monoBuffer, 0, FFT_SIZE - HOP_SIZE)
+        writeIndex = FFT_SIZE - HOP_SIZE
     }
 
     // ==================== DSP ====================
@@ -281,11 +376,15 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         val out = FloatArray(BANDS)
         for (b in 0 until bandCount) {
             var peak = 0f
+            var energyAcc = 0f
             var i = binStart[b]
             val end = binEnd[b]
             while (i < end) {
                 val mag = hypot(re[i], im[i])
                 if (mag > peak) peak = mag
+                // 能量和：宽频打击的能量摊在整段多个 bin 上，求和才抓得住；
+                // 取峰只反映最强的单根谱线，会把"空气感"打击算漏。
+                energyAcc += mag * mag
                 i++
             }
             // 归一化：FFT 输出需除以 N/2，Hann 窗再补偿 2 倍增益
@@ -295,12 +394,19 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
             // 轻微提升低电平段的视觉存在感
             v = v.pow(0.85f)
             out[b] = v
+
+            // 检测支路：线性幅值（能量和开方）再做 sqrt 幂律压缩。
+            // 停在线性域而不转 dB，"绝对能量增加"才不会被对数压平。
+            val lin = sqrt(energyAcc) / (FFT_SIZE / 4f)
+            magBands[b] = sqrt(lin.coerceAtLeast(0f))
         }
 
         published = out
         lastPublishMs = System.currentTimeMillis()
 
-        // 旁路电平：RMS 用加窗样本算；低频取前 BASS_BANDS 个频段均值
+        // 旁路电平：RMS 用加窗样本算；低频段跟随用户设定的低音截止频率，
+        // 不再写死前 BASS_BANDS 段——否则把截止拉到 128Hz 时，能量门仍按
+        // 295Hz 以下的能量判定，滑条调了却不起作用。
         var acc = 0f
         for (i in 0 until FFT_SIZE) {
             val x = monoBuffer[i] * window[i]
@@ -308,10 +414,27 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         }
         val rmsLin = sqrt(acc / FFT_SIZE)
         rms = rmsLin
-        if (bandCount >= BASS_BANDS) {
+
+        // 段落动态：短/长两条时程的 RMS EMA，相除得到"当前段落比全曲平均响多少"。
+        // 长时程加门限，静音和间奏不计入——否则全曲均值被拉低，
+        // 间奏结束后的正常段落会被误判成"超响"而全部满力震。
+        shortRms += SHORT_RMS_K * (rmsLin - shortRms)
+        if (rmsLin > LOUDNESS_GATE) {
+            if (longRms <= 0f) {
+                longRms = rmsLin   // 首帧直接落位，避免从 0 慢慢爬导致开头误判
+            } else {
+                longRms += LONG_RMS_K * (rmsLin - longRms)
+            }
+        }
+        relativeLoudnessDb = if (longRms > LOUDNESS_GATE && shortRms > LOUDNESS_GATE) {
+            (20f * log10(shortRms / longRms)).coerceIn(-12f, 12f)
+        } else 0f
+
+        val bassCount = (lowMaxBand + 1).coerceAtMost(bandCount)
+        if (bassCount > 0) {
             var bAcc = 0f
-            for (b in 0 until BASS_BANDS) bAcc += out[b]
-            bassLevel = bAcc / BASS_BANDS
+            for (b in 0 until bassCount) bAcc += out[b]
+            bassLevel = bAcc / bassCount
         } else {
             bassLevel = 0f
         }
@@ -325,27 +448,34 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         beatLevel = maxOf(bassLevel, rmsNorm)
 
         // ---- 三段频谱通量：只取正向增量（能量突增=瞬态/鼓点），累加各段 ----
-        // 相比"绝对电平过阈值"，通量对持续铺底的贝斯/合成器几乎不响应，
-        // 只在鼓 attack 那一帧突跳——这直接解决"没鼓点也震"和"有鼓点没跟上"。
+        // 关键：通量建立在 magBands（线性能量域）而非 out（dB 峰值域）之上。
+        // dB 域差分衡量的是"相对变化"，响段的真打击和安静段的小抖动数值一样大，
+        // 检测器分不开——这正是"空气感打击不震、小波动反而过敏"的根因。
         if (bandCount >= BANDS) {
             var lo = 0f; var mid = 0f; var hi = 0f
+            var rising = 0
+            val lowMax = lowMaxBand
             for (b in 0 until BANDS) {
-                val diff = out[b] - prevBands[b]
+                val diff = magBands[b] - prevMag[b]
                 if (diff > 0f) {
                     when {
-                        b <= LOW_MAX_BAND -> lo += diff
+                        b <= lowMax -> lo += diff
                         b <= MID_MAX_BAND -> mid += diff
                         else -> hi += diff
                     }
+                    if (diff > RISE_EPS) rising++
                 }
+                prevMag[b] = magBands[b]
                 prevBands[b] = out[b]
             }
             // 归一化到各段频段数，使三路量纲可比（否则宽的高频段天然占优）
-            lowFlux = lo / (LOW_MAX_BAND + 1)
-            midFlux = mid / (MID_MAX_BAND - LOW_MAX_BAND)
+            lowFlux = lo / (lowMax + 1)
+            midFlux = mid / (MID_MAX_BAND - lowMax).coerceAtLeast(1)
             highFlux = hi / (BANDS - 1 - MID_MAX_BAND)
+            // 宽频一致性：同时上涨的频段占比，供检测侧动态松紧阈值
+            bandsRising = rising.toFloat() / BANDS
         } else {
-            lowFlux = 0f; midFlux = 0f; highFlux = 0f
+            lowFlux = 0f; midFlux = 0f; highFlux = 0f; bandsRising = 0f
         }
         analysisFrame++
     }

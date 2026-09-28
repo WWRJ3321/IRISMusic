@@ -140,6 +140,7 @@ internal fun SettingsPanel(
     onBassHapticsIntensityChange: (Int) -> Unit,
     onBassHapticsPulseMsChange: (Int) -> Unit,
     onBassHapticsSensitivityChange: (Int) -> Unit,
+    onBassHapticsLowCutoffChange: (Int) -> Unit,
     onBassHapticsAdaptiveChange: (Boolean) -> Unit,
     onCustomColorsChange: (Long, Long) -> Unit,
     onPickBackground: () -> Unit,
@@ -638,17 +639,17 @@ internal fun SettingsPanel(
                         Spacer(Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             val dur = state.bassHapticsPulseMs
-                            ModeSwatch("短", dur <= 12, colors,
+                            ModeSwatch("短", dur <= 6, colors,
                                 modifier = Modifier.weight(1f)) {
-                                onBassHapticsPulseMsChange(8); BassHaptics.preview(state.bassHapticsIntensity)
+                                onBassHapticsPulseMsChange(4); BassHaptics.preview(state.bassHapticsIntensity)
                             }
-                            ModeSwatch("中", dur > 12 && dur < 25, colors,
+                            ModeSwatch("中", dur > 6 && dur < 15, colors,
                                 modifier = Modifier.weight(1f)) {
-                                onBassHapticsPulseMsChange(20); BassHaptics.preview(state.bassHapticsIntensity)
+                                onBassHapticsPulseMsChange(10); BassHaptics.preview(state.bassHapticsIntensity)
                             }
-                            ModeSwatch("长", dur >= 25, colors,
+                            ModeSwatch("长", dur >= 15, colors,
                                 modifier = Modifier.weight(1f)) {
-                                onBassHapticsPulseMsChange(30); BassHaptics.preview(state.bassHapticsIntensity)
+                                onBassHapticsPulseMsChange(18); BassHaptics.preview(state.bassHapticsIntensity)
                             }
                         }
                     }
@@ -668,6 +669,29 @@ internal fun SettingsPanel(
                     ModeSwatch("高", sens >= 7, colors,
                         modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(8) }
                 }
+
+                Spacer(Modifier.height(12.dp))
+
+                // 低音截止频率：多少 Hz 以下算作"低音"（走底鼓闷震），120–320Hz 可调。
+                // 调高 → 更多中低频鼓（如厚底鼓/低 tom）归入低音走沉震；调低 → 只有最低的底鼓算低音。
+                Text("低音范围（截止频率）", color = colors.subText, fontSize = 11.sp)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${state.bassHapticsLowCutoff}Hz 以下算作低音（走沉震），以上走脆震",
+                    color = colors.subText, fontSize = 10.sp
+                )
+                Spacer(Modifier.height(6.dp))
+                CompactSlider(
+                    value = (state.bassHapticsLowCutoff - 120) / 200f,
+                    onValueChange = {
+                        // 120–320Hz，步进 10Hz
+                        val hz = (120 + (it * 200f)).toInt().let { v -> (v / 10) * 10 }.coerceIn(120, 320)
+                        onBassHapticsLowCutoffChange(hz)
+                    },
+                    valueRange = 0f..1f,
+                    activeColor = colors.primary,
+                    inactiveColor = colors.surface
+                )
             }
         }
 
