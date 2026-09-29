@@ -127,7 +127,27 @@ fun SongDeck(
     androidx.activity.compose.BackHandler(enabled = showLyrics) { showLyrics = false }
     var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricLoading by remember { mutableStateOf(false) }
+    // 歌词层当前歌词所属文件：开着歌词层切歌时据此判断要重新加载
+    var lyricPath by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+
+    // 歌词层开着时自动切歌：旧词跟着走，路径一变先清空再按新歌重解析
+    LaunchedEffect(showLyrics, state.currentSong?.filePath, state.durationMs) {
+        val path = state.currentSong?.filePath
+        if (showLyrics && !path.isNullOrBlank() && path != lyricPath) {
+            lyricLines = emptyList()
+            lyricLoading = true
+            try {
+                lyricLines = withContext(Dispatchers.IO) {
+                    LyricParser.loadLyrics(path, state.durationMs)
+                }
+                lyricPath = path
+            } catch (_: Exception) {
+            } finally {
+                lyricLoading = false
+            }
+        }
+    }
 
     val openLyrics: () -> Unit = {
         val song = state.currentSong
@@ -139,6 +159,7 @@ fun SongDeck(
                         LyricParser.loadLyrics(song.filePath, state.durationMs)
                     }
                     lyricLines = lines
+                    lyricPath = song.filePath
                     showLyrics = true
                 } catch (_: Exception) {
                     // 文件读取异常静默忽略
@@ -335,6 +356,7 @@ fun SongDeck(
                 backdrops = lyricsBackdrops,
                 onSeek = onSeek,
                 lyricAlign = state.lyricAlign,
+                karaoke = state.karaokeLyric,
                 onDismiss = { showLyrics = false }
             )
         }

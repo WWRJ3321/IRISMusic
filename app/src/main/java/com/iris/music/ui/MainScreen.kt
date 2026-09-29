@@ -4,6 +4,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInOutCubic
 import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -414,6 +415,7 @@ onShowRecsChange = viewModel::setShowRecommendations,
                            onSilenceSkipChange = viewModel::setSilenceSkip,
 onPhysicsFxChange = viewModel::setPhysicsFx,
                              onCoverLyricChange = viewModel::setCoverLyric,
+                              onKaraokeLyricChange = viewModel::setKaraokeLyric,
                              onTopBarAutoHideChange = viewModel::setTopBarAutoHide,
                              onLyricAlignChange = viewModel::setLyricAlign,
                              onBassHapticsChange = viewModel::setBassHaptics,
@@ -1128,6 +1130,26 @@ private fun PlayerPage(
     // 正好匹配它在视觉上更靠上的层级。
     BackHandler(enabled = showLyrics) { showLyrics = false }
     val scope = rememberCoroutineScope()
+    // 歌词层当前显示的歌词属于哪个文件：用于"开着歌词层切歌"时判断需要重新加载。
+    var lyricPath by remember { mutableStateOf<String?>(null) }
+    // 歌词层开着时自动切歌：旧词必须跟着走，否则整屏还停在上一首。
+    // 路径一变先清空再按新歌重解析（LyricParser 自带缓存，重复加载只走内存）。
+    LaunchedEffect(showLyrics, state.currentSong?.filePath, state.durationMs) {
+        val path = state.currentSong?.filePath
+        if (showLyrics && !path.isNullOrBlank() && path != lyricPath) {
+            lyricLines = emptyList()
+            lyricLoading = true
+            try {
+                lyricLines = withContext(Dispatchers.IO) {
+                    LyricParser.loadLyrics(path, state.durationMs)
+                }
+                lyricPath = path
+            } catch (_: Exception) {
+            } finally {
+                lyricLoading = false
+            }
+        }
+    }
     // 歌词弹层毛玻璃：PlayerPage 作为模糊源，弹层作为模糊子层
     val lyricsHazeState = remember { HazeState() }
     val glass = isLiquidGlass
@@ -1154,6 +1176,7 @@ private fun PlayerPage(
                         LyricParser.loadLyrics(song.filePath, state.durationMs)
                     }
                     lyricLines = lines
+                    lyricPath = song.filePath
                     showLyrics = true
                 } catch (_: Exception) {
                     // 文件读取异常（路径不存在、权限问题等）静默忽略
@@ -1230,6 +1253,7 @@ visualizerEnabled = state.visualizerEnabled,
                 backdrops = lyricsBackdrops,
                 onSeek = onSeek,
                 lyricAlign = state.lyricAlign,
+                karaoke = state.karaokeLyric,
                 onDismiss = { showLyrics = false }
             )
         }
@@ -1237,6 +1261,12 @@ visualizerEnabled = state.visualizerEnabled,
 }
 
 /** 全屏歌词覆盖层：毛玻璃背景，当前行高亮，随播放进度滚动 */
+// 歌词专用缓动：起步利落、尾部长长地缓缓收住（easeOutQuint 风格贝塞尔）。
+// 比对称的 EaseInOutCubic 更"丝滑"——换行不是机械地加速又减速，
+// 而是干脆起步后优雅滑停，这是苹果那类歌词页顺滑感的关键。
+private val LyricEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+private const val LYRIC_ANIM_MS = 620
+
 @Composable
 internal fun LyricsOverlay(
     lines: List<LyricLine>,
@@ -1250,6 +1280,7 @@ internal fun LyricsOverlay(
     backdrops: List<IrisBackdrop>,
     onSeek: (Float) -> Unit,
     lyricAlign: Int = 1,
+    karaoke: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val listState = rememberLazyListState()
@@ -1277,20 +1308,27 @@ internal fun LyricsOverlay(
             backdrops = backdrops
         )
     } else Modifier
-    // 当前行滚到视觉正中：先滚到目标 item，再用 layoutInfo 精确校正到视口中心
+    // 跟踪：当前行始终平滑滑向焦点线。滚动曲线用 LyricEase（起步利落、
+    // 尾段长缓收住），和行的缩放/淡入/字色过渡同一条曲线、同一时长，节奏统一。
+    // 焦点不在正中而在视口偏上（约 38%）：当前行上方留窄、下方留宽，
+    // 视线自然落在偏上位置，且能预读更多下一句，接近主流歌词页的观感。
+    // 目标不在屏内时先无动画跳到附近，再由 tween 收尾到焦点线，避免跨很多行时滚动过久。
     LaunchedEffect(current) {
-        if (current >= 0) {
-            val target = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == current }
-            if (target == null) {
-                listState.animateScrollToItem(current)
-            }
-            val info = listState.layoutInfo
-            val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2f
-            val t = info.visibleItemsInfo.firstOrNull { it.index == current }
-            if (t != null) {
-                val itemCenter = t.offset + t.size / 2f
-                listState.animateScrollBy(itemCenter - viewportCenter)
-            }
+        if (current < 0) return@LaunchedEffect
+        val scrollSpec = tween<Float>(durationMillis = LYRIC_ANIM_MS, easing = LyricEase)
+        val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == current }
+        if (visible == null) {
+            listState.scrollToItem(current)
+        }
+        val info = listState.layoutInfo
+        val vpStart = info.viewportStartOffset
+        val vpEnd = info.viewportEndOffset
+        // 焦点线：视口内 38% 高度处（横屏空间矮，放到 42% 稍低一点避免贴顶）
+        val focusFrac = if (isLand) 0.42f else 0.38f
+        val focusLine = vpStart + (vpEnd - vpStart) * focusFrac
+        val t = info.visibleItemsInfo.firstOrNull { it.index == current }
+        if (t != null) {
+            listState.animateScrollBy(t.offset + t.size / 2f - focusLine, scrollSpec)
         }
     }
     Box(
@@ -1382,14 +1420,23 @@ internal fun LyricsOverlay(
                 ) {
                     itemsIndexed(lines, key = { index, _ -> "lyric-$index" }) { index, line ->
                         val isCurrent = index == current
+                        // 距当前行的行距：用它做连续衰减，离焦点越远越小越淡，
+                        // 不再是"当前行/其它行"的二值突变，整屏有纵深层次感。
+                        val dist = if (current < 0) 0 else kotlin.math.abs(index - current)
+                        // 缩放：当前行最大，随距离平滑收拢到 0.86。用统一字号 + scale
+                        // 承载大小差异，行高保持一致，跟踪滚动不会因字号跳变而抖。
+                        // 错落延迟：离焦点越远的行响应越晚一点点，整屏像波纹一样依次亮起，
+                        // 而不是所有行同一帧齐刷刷变化——这是消除"僵硬感"的关键。
+                        val stagger = (dist.coerceAtMost(6)) * 22
                         val scale by animateFloatAsState(
-                            targetValue = if (isCurrent) 1f else 0.92f,
-                            animationSpec = tween(durationMillis = 420, easing = EaseOutCubic),
+                            targetValue = if (isCurrent) 1f else (0.9f - (dist - 1).coerceAtLeast(0) * 0.015f).coerceAtLeast(0.86f),
+                            animationSpec = tween(durationMillis = LYRIC_ANIM_MS, delayMillis = stagger, easing = LyricEase),
                             label = "lyricScale"
                         )
+                        // 透明度：当前行全亮，两侧按行距阶梯淡出，最低 0.26
                         val rowAlpha by animateFloatAsState(
-                            targetValue = if (isCurrent) 1f else 0.62f,
-                            animationSpec = tween(durationMillis = 420, easing = EaseOutCubic),
+                            targetValue = if (isCurrent) 1f else (0.66f - (dist - 1).coerceAtLeast(0) * 0.12f).coerceAtLeast(0.26f),
+                            animationSpec = tween(durationMillis = LYRIC_ANIM_MS, delayMillis = stagger, easing = LyricEase),
                             label = "lyricAlpha"
                         )
                         Box(
@@ -1399,6 +1446,12 @@ internal fun LyricsOverlay(
                                     scaleX = scale
                                     scaleY = scale
                                     alpha = rowAlpha
+                                    // 缩放锚点跟随对齐方向，靠左/右时不从中心缩放
+                                    transformOrigin = when (lyricAlign) {
+                                        0 -> androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                                        2 -> androidx.compose.ui.graphics.TransformOrigin(1f, 0.5f)
+                                        else -> androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
+                                    }
                                 }
                                 .clickable(
                                     indication = null,
@@ -1415,10 +1468,22 @@ internal fun LyricsOverlay(
                                     onSeek((line.timeMs.toFloat() / durationMs).coerceIn(0f, 1f))
                                 }
                             }
-                            if (isCurrent && line.hasWords) {
+                            // 颜色随高亮平滑过渡，换行时字色渐变而非硬切
+                            val lineColor by animateColorAsState(
+                                targetValue = if (isCurrent) colors.primary else onCard,
+                                animationSpec = tween(durationMillis = LYRIC_ANIM_MS, easing = LyricEase),
+                                label = "lyricColor"
+                            )
+                            if (isCurrent && karaoke) {
+                                // 当前行走 KaraokeLine 做扫光：
+                                //  - 有词级时间（增强型 LRC）→ 真逐字，按每个字的时间戳点亮
+                                //  - 无词级时间（普通 LRC）→ 伪逐字，用「本行→下一行」时长按字符
+                                //    数均匀铺开模拟扫光。虽非真实咬字，但比整行硬高亮生动。
                                 KaraokeLine(
                                     line = line,
                                     positionMs = positionMs,
+                                    lineEndMs = lines.getOrNull(index + 1)?.timeMs
+                                        ?: (if (durationMs > 0) durationMs else line.timeMs + 4000),
                                     sungColor = colors.primary,
                                     unsungColor = onCard.copy(alpha = 0.42f),
                                     textAlign = textAlign,
@@ -1427,9 +1492,10 @@ internal fun LyricsOverlay(
                             } else {
                                 Text(
                                     line.text,
-                                    color = if (isCurrent) colors.primary else onCard,
-                                    fontSize = if (isCurrent) 20.sp else 15.sp,
-                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                    // 统一字号，大小差异交给 scale，行高恒定 → 跟踪更稳
+                                    color = lineColor,
+                                    fontSize = 20.sp,
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
                                     textAlign = textAlign,
                                     modifier = seekModifier
                                 )
@@ -1445,25 +1511,29 @@ internal fun LyricsOverlay(
     }
 }
 /**
- * 逐字点亮的当前行：已唱字符用 [sungColor]，未唱用 [unsungColor]。
+ * 逐字点亮的当前行：已唱→未唱之间是一道带柔边的渐变扫光，连续平滑推过整行，
+ * 不是一个字一个字地硬切。
  *
- * 播放位置每次重组都读一次 [LyricParser.wordProgressChars] 拿到已唱字符数，
- * 用 AnnotatedString 把整行拆成「已唱段 + 未唱段」两种色。交界随词级时间线性
- * 插值前移，视觉上就是高亮平滑扫过每个字（卡拉OK效果）。
+ * 两种进度来源自动切换：
+ *  - 有词级时间戳（增强型 LRC）→ 按每个字的真实时间算已唱比例。
+ *  - 无词级时间戳（普通 LRC，如 QQ 音乐内嵌歌词）→ 伪逐字：用「本行开始 [line.timeMs]
+ *    → 下一行开始 [lineEndMs]」这段时长线性推进比例。
+ *
+ * 着色用 horizontalGradient：已唱色 → 一段柔边 → 未唱色，柔边随进度平移，
+ * 视觉上就是一道模糊的光带匀速扫过文字。外部 positionMs 约 500ms 才更新一次，
+ * 用帧钟在两次更新之间线性外推，让光带每帧连续推进而不顿。
  */
 @Composable
 private fun KaraokeLine(
     line: LyricLine,
     positionMs: Long,
+    lineEndMs: Long,
     sungColor: Color,
     unsungColor: Color,
     textAlign: TextAlign = TextAlign.Center,
     modifier: Modifier = Modifier
 ) {
     val text = line.text
-    // 外部 positionMs 通常 500ms 才更新一次，直接用会一跳一跳。
-    // 用帧钟在两次外部更新之间线性外推：记录收到 positionMs 的墙钟时刻，
-    // 每帧的估算位置 = positionMs + (现在 - 收到时刻)。外部再更新时重新对齐。
     val baseWall = remember { mutableStateOf(0L) }
     val basePos = remember { mutableStateOf(0L) }
     LaunchedEffect(positionMs) {
@@ -1478,25 +1548,45 @@ private fun KaraokeLine(
             }
         }
     }
-    val sungChars = LyricParser.wordProgressChars(line, estMs)
-        .coerceIn(0, text.length)
-    val annotated = buildAnnotatedString {
-        if (sungChars > 0) {
-            withStyle(SpanStyle(color = sungColor, fontWeight = FontWeight.Bold)) {
-                append(text.substring(0, sungChars))
-            }
-        }
-        if (sungChars < text.length) {
-            withStyle(SpanStyle(color = unsungColor, fontWeight = FontWeight.Bold)) {
-                append(text.substring(sungChars))
-            }
-        }
+    // 已唱比例（0f..1f 连续，不取整）
+    val frac = if (line.hasWords && text.isNotEmpty()) {
+        LyricParser.wordProgressChars(line, estMs).coerceIn(0, text.length).toFloat() / text.length
+    } else {
+        // 伪逐字：分母不是"到下一句的整段间隔"（含唱完后的停顿），但也不能缩太多——
+        // 之前按 260ms/字 估算，短句扫到一半句就停了，僵在那里等下一句，很难看。
+        // 现在取两者折中：估算值与行间隔取小，但保底吃满间隔的 92%——
+        // 光带几乎匀速推到下一句进，只在句尾留一点点呼吸，不再出现"停住不动"。
+        val span = (lineEndMs - line.timeMs).coerceAtLeast(1L)
+        val est = (text.length * 300L).coerceAtLeast(600L)
+        val singMs = minOf(est, span).coerceAtLeast((span * 0.92f).toLong())
+        ((estMs - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
     }
+    // 柔边宽度（占整行比例）：过渡带越宽越"模糊"，越窄越"锐利"
+    val soft = 0.10f
+    // 渐变 4 个 stop 必须严格递增且落在 [0,1]，否则 coerceIn 会遇到空区间抛异常。
+    // 先夹紧过渡带中心，再由中心对称推出 start/end，最后统一收进合法区间。
+    val half = soft / 2f
+    val center = frac.coerceIn(half, 1f - half)   // 让柔边整体不越界
+    val start = (center - half).coerceIn(0f, 1f)
+    val end = (center + half).coerceIn(0f, 1f)
+    val sweep = androidx.compose.ui.graphics.Brush.horizontalGradient(
+        colorStops = arrayOf(
+            0f to sungColor,
+            start to sungColor,
+            end to unsungColor,
+            1f to unsungColor
+        )
+    )
     Text(
-        annotated,
-        fontSize = 17.sp,
+        text,
         textAlign = textAlign,
-        modifier = modifier
+        modifier = modifier,
+        style = androidx.compose.ui.text.TextStyle(
+            brush = sweep,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = textAlign
+        )
     )
 }
 

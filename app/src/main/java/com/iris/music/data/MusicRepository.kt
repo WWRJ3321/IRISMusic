@@ -200,6 +200,54 @@ object MusicRepository {
     }
 
     /**
+     * 移动文件侦测与 ID 迁移。
+     *
+     * 歌曲 ID 是路径哈希（[stableId]），直接把文件挪个文件夹，旧 ID 就成了孤儿：
+     * 点赞、播放历史、歌单、听歌明细全部对不上，排行榜显示"已移除的歌曲"。
+     * 这里对比上一轮缓存与本轮扫描：旧路径消失 + 新路径的元数据指纹（标题+艺术家+
+     * 曲长）完全一致 → 判定为同一文件被移动，产出 oldId→newId 映射，
+     * 把各存储里按 ID 记账的记录整体搬家。
+     *
+     * 指纹要求在"消失组"和"新出现组"里都唯一才映射——两杯同秒同长的翻唱
+     * 宁可漏迁也不错迁。纯删除（没有新路径认领）或纯新增都不触发。
+     */
+    private fun remapMovedSongs(oldCache: Map<String, MetaEntry>, current: Map<String, MetaEntry>) {
+        // 消失的旧路径 → 元数据指纹 → 旧 ID
+        val goneByKey = HashMap<String, MutableList<Long>>()
+        for ((path, meta) in oldCache) {
+            if (path in current) continue
+            val key = moveKey(meta) ?: continue
+            goneByKey.getOrPut(key) { ArrayList() }.add(stableId(path))
+        }
+        if (goneByKey.isEmpty()) return
+
+        // 新出现的路径认领指纹：只在候选唯一时建立映射，认领后划走防止多对一
+        val used = HashSet<Long>()
+        val idMap = HashMap<Long, Long>()
+        for ((path, meta) in current) {
+            if (path in oldCache) continue
+            val key = moveKey(meta) ?: continue
+            val cands = goneByKey[key] ?: continue
+            val cands2 = cands.filter { it !in used }
+            if (cands2.size == 1) {
+                idMap[cands2[0]] = stableId(path)
+                used += cands2[0]
+            }
+        }
+        if (idMap.isEmpty()) return
+
+        PlayHistory.remapIds(idMap)
+        Playlists.remapIds(idMap)
+        ListenStats.remapIds(idMap)
+    }
+
+    /** 移动判定指纹：标题+艺术家+曲长。移动不改这些；缺标题则不参与匹配 */
+    private fun moveKey(m: MetaEntry): String? {
+        if (m.title.isBlank() || m.durationMs <= 0L) return null
+        return m.title + ' ' + m.artist + ' ' + m.durationMs
+    }
+
+    /**
      * 扫盘 + 读元数据（命中缓存则跳过重读），构建完整曲库，
      * 按文件修改时间倒序（最近添加在前）。
      */
@@ -226,8 +274,11 @@ object MusicRepository {
             }.awaitAll().filterNotNull()
         }
 
+        val current = entries.toMap()
+        // 回写缓存前先做移动侦测：旧缓存还在，才能认出"同一首歌换了路径"
+        remapMovedSongs(cache, current)
         // 回写缓存：只含本轮存活文件，删掉的自然被淘汰
-        writeCache(entries.toMap())
+        writeCache(current)
 
         entries.map { (path, meta) -> meta.toSong(path) }
             .sortedByDescending { File(it.filePath).lastModified() }

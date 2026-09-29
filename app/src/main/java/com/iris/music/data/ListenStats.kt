@@ -188,6 +188,61 @@ object ListenStats {
         }
     }
 
+    // ==================== ID 迁移（文件被移动） ====================
+
+    /**
+     * 把听歌明细里的旧歌曲 ID 换成新 ID 并整文件重写。
+     * 同 (天, 新ID) 相加——移动场景下两段时长都真实发生过，与导入合并的
+     * "取较大值"语义不同：导入是同份数据重复搬运，移动是两段不同时间。
+     * 内存缓冲里的 pending 也要同步换，否则稍后 flush 又把旧 ID 写回去。
+     */
+    fun remapIds(idMap: Map<Long, Long>) {
+        val f = file ?: return
+        if (idMap.isEmpty()) return
+        synchronized(lock) {
+            flushLocked()
+            // 先换缓冲里未落盘的
+            if (pending.isNotEmpty()) {
+                val remapped = HashMap<Long, HashMap<Long, Long>>()
+                pending.forEach { (day, bySong) ->
+                    val dst = remapped.getOrPut(day) { HashMap() }
+                    bySong.forEach { (id, ms) ->
+                        val nid = idMap[id] ?: id
+                        dst[nid] = (dst[nid] ?: 0L) + ms
+                    }
+                }
+                pending.clear()
+                pending.putAll(remapped)
+            }
+            if (!f.exists()) return
+            val agg = HashMap<Long, HashMap<Long, Long>>()
+            runCatching {
+                f.forEachLine { line ->
+                    val c1 = line.indexOf(',')
+                    if (c1 <= 0) return@forEachLine
+                    val c2 = line.indexOf(',', c1 + 1)
+                    if (c2 <= c1) return@forEachLine
+                    val day = line.substring(0, c1).toLongOrNull() ?: return@forEachLine
+                    val id = line.substring(c1 + 1, c2).toLongOrNull() ?: return@forEachLine
+                    val ms = line.substring(c2 + 1).trim().toLongOrNull() ?: return@forEachLine
+                    if (ms <= 0L) return@forEachLine
+                    val bySong = agg.getOrPut(day) { HashMap() }
+                    val nid = idMap[id] ?: id
+                    bySong[nid] = (bySong[nid] ?: 0L) + ms
+                }
+            }
+            val cutoff = todayEpochDay() - KEEP_DAYS
+            val sb = StringBuilder()
+            agg.forEach { (day, bySong) ->
+                if (day < cutoff) return@forEach
+                bySong.forEach { (id, ms) ->
+                    sb.append(day).append(',').append(id).append(',').append(ms).append('\n')
+                }
+            }
+            runCatching { f.writeText(sb.toString()) }
+        }
+    }
+
     // ==================== 导出 / 导入 ====================
 
     /** 导出用：天 → (曲目 → 毫秒)。复用 [load] 的聚合结果，避免重复解析逻辑。 */

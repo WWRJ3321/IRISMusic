@@ -177,6 +177,57 @@ object PlayHistory {
         Recommender.invalidate()
     }
 
+    // ==================== ID 迁移（文件被移动） ====================
+
+    /**
+     * 把记账里的旧歌曲 ID 整体换成新 ID（文件移动后路径哈希变化）。
+     * 同值键合并规则与 [mergeImported] 一致：计数取较大、时间取较晚、
+     * 点赞取并集，保证重复执行幂等、不会把新位置已攒的数据冲掉。
+     */
+    fun remapIds(idMap: Map<Long, Long>) {
+        if (idMap.isEmpty()) return
+        synchronized(writeLock) {
+            fun remap(map: Map<Long, Int>): MutableMap<Long, Int> {
+                val out = LinkedHashMap<Long, Int>()
+                map.forEach { (id, v) ->
+                    val nid = idMap[id] ?: id
+                    out[nid] = maxOf(out[nid] ?: 0, v)
+                }
+                return out
+            }
+            fun remapL(map: Map<Long, Long>): MutableMap<Long, Long> {
+                val out = LinkedHashMap<Long, Long>()
+                map.forEach { (id, v) ->
+                    val nid = idMap[id] ?: id
+                    out[nid] = maxOf(out[nid] ?: 0L, v)
+                }
+                return out
+            }
+            val counts = remap(cachedPlayCounts ?: readCounts(KEY_PLAY_COUNTS))
+            val skips = remap(cachedSkipCounts ?: readCounts(KEY_SKIP_COUNTS))
+            val incomplete = remap(cachedIncomplete ?: readCounts(KEY_INCOMPLETE))
+            val totals = remapL(cachedTotalPlayedMs
+                ?: readCounts(KEY_TOTAL_PLAYED_MS).mapValues { it.value.toLong() })
+            val lasts = remapL(cachedLastPlayed ?: readLastPlayed())
+            val likes = (cachedLikes ?: readLikes()).map { idMap[it] ?: it }.toSet()
+            val edit = prefs.edit()
+            edit.putString(KEY_LIKES, likes.joinToString(";"))
+            writeCountsTo(edit, KEY_PLAY_COUNTS, counts)
+            writeCountsTo(edit, KEY_SKIP_COUNTS, skips)
+            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.toInt() })
+            writeCountsTo(edit, KEY_INCOMPLETE, incomplete)
+            writeLastPlayedTo(edit, lasts)
+            edit.apply()
+            cachedLikes = likes
+            cachedPlayCounts = counts
+            cachedSkipCounts = skips
+            cachedIncomplete = incomplete
+            cachedTotalPlayedMs = totals
+            cachedLastPlayed = lasts
+        }
+        Recommender.invalidate()
+    }
+
     private fun readLikes(): MutableSet<Long> {
         val raw = prefs.getString(KEY_LIKES, null) ?: return mutableSetOf()
         if (raw.isBlank()) return mutableSetOf()
