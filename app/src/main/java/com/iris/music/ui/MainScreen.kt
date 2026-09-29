@@ -30,6 +30,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,6 +58,7 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
@@ -112,6 +114,7 @@ import dev.chrisbanes.haze.haze
 import dev.chrisbanes.haze.hazeChild
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -1308,6 +1311,36 @@ internal fun LyricsOverlay(
             backdrops = backdrops
         )
     } else Modifier
+    // ---- 侧边时间标记：垂直滚动歌词时，在焦点线一侧冒出一个迷你时间戳，
+    // 标记"滚到的这一句"对应的时间点；停手后淡出。跟随对齐方向贴在左/右侧。
+    val scrubScope = rememberCoroutineScope()
+    var scrubHideJob by remember { mutableStateOf<Job?>(null) }
+    var showTimeTag by remember { mutableStateOf(false) }
+    // 焦点线附近的行：取视口内最靠近焦点线的可见行，它就是"滚到的这一句"
+    val focusIndex by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val vis = info.visibleItemsInfo
+            if (vis.isEmpty()) return@derivedStateOf -1
+            val focusFrac = if (isLand) 0.42f else 0.38f
+            val focusPx = info.viewportStartOffset +
+                (info.viewportEndOffset - info.viewportStartOffset) * focusFrac
+            vis.minByOrNull { kotlin.math.abs((it.offset + it.size / 2f) - focusPx) }?.index ?: -1
+        }
+    }
+    val scrolling = listState.interactionSource.collectIsDraggedAsState().value
+    LaunchedEffect(scrolling) {
+        if (scrolling) {
+            scrubHideJob?.cancel()
+            showTimeTag = true
+        } else {
+            scrubHideJob?.cancel()
+            scrubHideJob = scrubScope.launch {
+                delay(900)
+                showTimeTag = false
+            }
+        }
+    }
     // 跟踪：当前行始终平滑滑向焦点线。滚动曲线用 LyricEase（起步利落、
     // 尾段长缓收住），和行的缩放/淡入/字色过渡同一条曲线、同一时长，节奏统一。
     // 焦点不在正中而在视口偏上（约 38%）：当前行上方留窄、下方留宽，
@@ -1352,6 +1385,47 @@ internal fun LyricsOverlay(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
+        // 侧边迷你时间标记：随垂直滚动出现，贴在焦点线高度、按对齐方向靠左/右。
+        // 只有一个超小时间戳 + 一道指向性短横线指向焦点行，无胶囊背景。
+        val tagAlpha by animateFloatAsState(
+            if (showTimeTag && focusIndex in lines.indices) 1f else 0f,
+            animationSpec = tween(180), label = "timeTagAlpha"
+        )
+        if (focusIndex in lines.indices) {
+            val focusFrac = if (isLand) 0.42f else 0.38f
+            // 居中/靠左对齐 → 标记贴右；靠右对齐 → 标记贴左
+            val onRight = lyricAlign != 2
+            // 时间数值平滑过渡：跨行时不是瞬间跳变，而是从旧时间连续滑到新时间，
+            // 视觉上像滚动条一样渐变滚过去。
+            val animMs by animateFloatAsState(
+                targetValue = lines[focusIndex].timeMs.toFloat(),
+                animationSpec = tween(durationMillis = 260, easing = LyricEase),
+                label = "timeTagMs"
+            )
+            val tagText = formatDuration(animMs.toLong())
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val tagY = maxHeight * focusFrac
+                Row(
+                    Modifier
+                        .align(if (onRight) Alignment.TopEnd else Alignment.TopStart)
+                        .padding(top = tagY - 7.dp, start = if (onRight) 0.dp else 12.dp, end = if (onRight) 12.dp else 0.dp)
+                        .alpha(tagAlpha),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onRight) {
+                        Box(Modifier.width(10.dp).height(2.dp).background(colors.primary))
+                        Spacer(Modifier.width(5.dp))
+                        Text(tagText,
+                            color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text(tagText,
+                            color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(5.dp))
+                        Box(Modifier.width(10.dp).height(2.dp).background(colors.primary))
+                    }
+                }
+            }
+        }
         GlassContent {
         Column(
             Modifier
@@ -1510,6 +1584,7 @@ internal fun LyricsOverlay(
         }
     }
 }
+
 /**
  * 逐字点亮的当前行：已唱→未唱之间是一道带柔边的渐变扫光，连续平滑推过整行，
  * 不是一个字一个字地硬切。
