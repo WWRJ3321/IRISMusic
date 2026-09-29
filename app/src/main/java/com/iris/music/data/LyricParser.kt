@@ -731,23 +731,34 @@ object LyricParser {
      * 无词级信息时返回 -1，调用方退回整行高亮。
      */
     fun wordProgressChars(line: LyricLine, positionMs: Long): Int {
+        val f = wordProgressCharsF(line, positionMs)
+        return if (f < 0f) -1 else f.toInt()
+    }
+
+    /**
+     * 逐字点亮进度（浮点版）：返回已唱到的字符数（0f..text.length，连续小数）。
+     * 相比取整版，小数部分让扫光在词内继续平滑推进，配合 glyph 级像素定位可做到
+     * 光带精确停在正在咬的那个字上，而不是按字符数比例粗略铺。
+     * 无词级信息时返回 -1f。
+     */
+    fun wordProgressCharsF(line: LyricLine, positionMs: Long): Float {
         val words = line.words
-        if (words.isEmpty()) return -1
+        if (words.isEmpty()) return -1f
         // 累计每个词结束时的字符数
         var chars = 0
         for (i in words.indices) {
             val w = words[i]
             val start = w.startMs
             val end = if (i + 1 < words.size) words[i + 1].startMs else Long.MAX_VALUE
-            if (positionMs < start) return chars
+            if (positionMs < start) return chars.toFloat()
             if (positionMs < end) {
-                // 词内插值
+                // 词内插值（保留小数，扫光在词内连续推进）
                 val span = (end - start).coerceAtLeast(1)
                 val frac = ((positionMs - start).toFloat() / span).coerceIn(0f, 1f)
-                return chars + (w.text.length * frac).toInt()
+                return chars + w.text.length * frac
             }
             chars += w.text.length
         }
-        return chars
+        return chars.toFloat()
     }
 }

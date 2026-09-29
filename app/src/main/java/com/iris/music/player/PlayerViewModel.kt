@@ -19,6 +19,7 @@ import com.iris.music.audio.SafeLimiter
 import com.iris.music.audio.VirtualBass
 import com.iris.music.audio.TrackGain
 import com.iris.music.audio.VirtualSurround
+import com.iris.music.audio.SpatialWide
 import com.iris.music.audio.FadeController
 import com.iris.music.audio.SilenceSkipper
 import com.iris.music.audio.SpectrumAnalyzer
@@ -170,6 +171,10 @@ data class PlayerUiState(
     val virtualSurround: Boolean = false,
     /** 虚拟环绕强度 0-100 */
     val virtualSurroundStrength: Int = 40,
+    /** 宽场环绕（V4.4 · beta）：多频段展宽 + 早期反射，进一步提升空间感 */
+    val spatialWide: Boolean = false,
+    /** 宽场环绕强度 0-100 */
+    val spatialWideStrength: Int = 50,
     /** 防失真限幅（V3.10）：防止推高/增强后削波撕裂 */
     val safeLimiter: Boolean = false,
     /** 防失真限幅强度 0-100（越大余量越足、越安全） */
@@ -238,6 +243,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             rangeEnhancerStrength = prefs.getInt(RangeEnhancer.KEY_STRENGTH, 70).coerceIn(0, 100),
             virtualSurround = prefs.getBoolean(VirtualSurround.KEY_ENABLED, false),
             virtualSurroundStrength = prefs.getInt(VirtualSurround.KEY_STRENGTH, 40).coerceIn(0, 100),
+            spatialWide = prefs.getBoolean(SpatialWide.KEY_ENABLED, false),
+            spatialWideStrength = prefs.getInt(SpatialWide.KEY_STRENGTH, 50).coerceIn(0, 100),
             safeLimiter = prefs.getBoolean(SafeLimiter.KEY_ENABLED, false),
             safeLimiterStrength = prefs.getInt(SafeLimiter.KEY_STRENGTH, 30).coerceIn(0, 100),
             loudnorm = prefs.getBoolean(TrackGain.KEY_ENABLED, false),
@@ -915,6 +922,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putInt(VirtualSurround.KEY_STRENGTH, x).apply()
         VirtualSurround.setStrength(x)
         _state.value = _state.value.copy(virtualSurroundStrength = x)
+    }
+
+    /** 宽场环绕（beta · 多维听感）：多频段展宽 + 早期反射，进一步提升空间感 */
+    fun setSpatialWide(enabled: Boolean) {
+        prefs.edit().putBoolean(SpatialWide.KEY_ENABLED, enabled).apply()
+        SpatialWide.setEnabled(enabled)
+        _state.value = _state.value.copy(spatialWide = enabled)
+    }
+    /** 宽场环绕强度 0-100 */
+    fun setSpatialWideStrength(v: Int) {
+        val x = v.coerceIn(0, 100)
+        prefs.edit().putInt(SpatialWide.KEY_STRENGTH, x).apply()
+        SpatialWide.setStrength(x)
+        _state.value = _state.value.copy(spatialWideStrength = x)
     }
 
     /** 防失真限幅（V3.10）：防止推高/增强后削波撕裂 */

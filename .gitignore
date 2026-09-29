@@ -1,28 +1,34 @@
 # 构建产物
-*.iml
-.gradle/
-/local.properties
-/.idea/
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-
-# 编译输出与安装包
 app/build/
 build/
-*.apk
-*.aab
-*.ap_
-*.dex
+.gradle/
+local.properties
 
-# 密钥 / 签名文件（切勿提交）
+# 签名密钥与凭据：绝不入库
+keystore/
+keystore.properties
 *.jks
 *.keystore
-keystore.properties
-*.p12
 
-# 日志
-*.log
+# 反编译临时目录
+_recover/
+
+# APK 产物（hist/ 里的历史版本保留）
+*.apk
+!hist/*.apk
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# 工作区备份目录
+.backup/
+
+# 本地开发笔记（仅自用，不上 GitHub）
+docs/DEVNOTES.md
+
+# 本地笔记
+docs/rules_note.md
+docs/rules_note.md.bak
+docs/改进.md

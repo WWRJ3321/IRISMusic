@@ -45,7 +45,7 @@ object TrackGain : BaseAudioProcessor() {
     const val KEY_ENABLED = "loudnorm_enabled"
     /** 拉平力度 0-100：0=不校正，100=完全拉到目标响度，默认 70 */
     const val KEY_STRENGTH = "loudnorm_strength"
-    private const val KEY_STORE = "loudnorm_lufs_store"
+    private const val KEY_STORE = "loudnorm_lufs_store_v2"
 
     /** path → LUFS 存储上限（约 400 首 × ~100B ≈ 40KB） */
     private const val STORE_MAX = 400
@@ -67,8 +67,8 @@ object TrackGain : BaseAudioProcessor() {
     // ==================== 库（主线程读，音频线程读） ====================
 
     @Volatile private var prefs: SharedPreferences? = null
-    /** path → 该曲的 LUFS（定稿后写入，Key 是完整路径） */
-    @Volatile private var store: MutableMap<String, Float> = mutableMapOf()
+    /** path → 该曲的 (LUFS, 峰值)。定稿后写入，Key 是完整路径 */
+    @Volatile private var store: MutableMap<String, FloatArray> = mutableMapOf()
 
     fun init(p: SharedPreferences) {
         prefs = p
@@ -116,6 +116,8 @@ object TrackGain : BaseAudioProcessor() {
     private var measPath: String? = null
     private var measSum = 0.0      // K 加权后样本平方和
     private var measFrames = 0L
+    /** 该曲原始信号的峰值（|sample| 最大值，未加权）。用于正增益封顶，防 boost 削波。 */
+    private var measPeak = 0f
     private var committed = false
     private var prevChunkLufs = Float.NaN
     private var stableChunks = 0
@@ -239,6 +241,11 @@ object TrackGain : BaseAudioProcessor() {
                 } else {
                     out.getFloat(i + ch * smp)
                 }
+                // 记录该曲原始峰值（未加权），用于正增益封顶防削波
+                if (!committed && measPath != null) {
+                    val a = if (raw < 0f) -raw else raw
+                    if (a > measPeak) measPeak = a
+                }
                 // biquad cascade（状态按声道独立）
                 var x = raw
                 val y1 = hsB0 * x + hsB1 * st.hsX1 + hsB2 * st.hsX2 - hsA1 * st.hsY1 - hsA2 * st.hsY2
@@ -302,6 +309,7 @@ object TrackGain : BaseAudioProcessor() {
         measPath = path
         measSum = 0.0
         measFrames = 0
+        measPeak = 0f
         // 已有测过的 LUFS：直接标记完成，跳过重复测量（省 K 加权 CPU）
         committed = path != null && store.containsKey(path)
         prevChunkLufs = Float.NaN
@@ -318,7 +326,7 @@ object TrackGain : BaseAudioProcessor() {
             if (measFrames >= minFrames) {
                 val lufs = lufsOf(measSum, measFrames)
                 if (lufs.isFinite() && lufs > -60f && lufs < 0f) {
-                    putLufs(path, lufs)
+                    putLufs(path, lufs, measPeak.coerceIn(0f, 1f))
                 }
             }
         }
@@ -332,18 +340,30 @@ object TrackGain : BaseAudioProcessor() {
         return (-0.691f + 10f * log10(mean)).toFloat()
     }
 
-    /** 查库算增益；未测过返回 null（= 1.0 直通）。力度×偏差决定实际校正量 */
+    /** 查库算增益；未测过返回 null（= 1.0 直通）。力度×偏差决定实际校正量。
+     *  正增益（抬轻曲）额外按该曲峰值封顶：boost 后峰值不越过 -1dBFS，
+     *  从源头避免"响度均衡把安静曲子抬到削波"——这正是开此功能后最容易发糊/发裂的原因。 */
     private fun gainFor(path: String): Float? {
-        val lufs = store[path] ?: return null
+        val rec = store[path] ?: return null
+        val lufs = rec[0]
+        val peak = if (rec.size > 1) rec[1] else 0f
         val amt = strength / 100f
-        val db = ((TARGET_LUFS - lufs).toFloat() * amt).coerceIn(-6f, 6f)
+        var db = ((TARGET_LUFS - lufs).toFloat() * amt).coerceIn(-6f, 6f)
+        // 正增益封顶：抬升后峰值不得超过 -1dBFS（0.891）。peak 已知且 >0 时，
+        // 允许的最大 dB = 20·log10(ceiling/peak)。peak 未知（0）时退回 0dB 不抬，
+        // 只允许衰减，宁可不抬也不赌它削波。
+        if (db > 0f) {
+            val ceiling = 0.891f // -1dBFS
+            val maxBoostDb = if (peak > 1e-4f) 20f * log10(ceiling / peak) else 0f
+            db = db.coerceAtMost(maxBoostDb.coerceAtLeast(0f))
+        }
         return 10f.pow(db / 20f)
     }
 
     // 库存取（切换时才发生，非实时路径；同步方法保护 Map）
-    @Synchronized private fun putLufs(path: String, lufs: Float) {
+    @Synchronized private fun putLufs(path: String, lufs: Float, peak: Float) {
         val m = store.toMutableMap()
-        m[path] = lufs
+        m[path] = floatArrayOf(lufs, peak)
         // 超限删最旧（插入序近似访问序，够用）
         while (m.size > STORE_MAX) {
             val eldest = m.keys.firstOrNull() ?: break
@@ -353,20 +373,23 @@ object TrackGain : BaseAudioProcessor() {
         prefs?.edit()?.putString(KEY_STORE, encodeStore(m))?.apply()
     }
 
-    private fun loadStore(p: SharedPreferences): MutableMap<String, Float> {
+    private fun loadStore(p: SharedPreferences): MutableMap<String, FloatArray> {
         val raw = p.getString(KEY_STORE, null) ?: return mutableMapOf()
-        val out = LinkedHashMap<String, Float>()
-        raw.split('').forEach { pair ->
+        val out = LinkedHashMap<String, FloatArray>()
+        raw.split('\u0001').forEach { pair ->
             val idx = pair.lastIndexOf(':')
             if (idx > 0) {
                 val k = pair.substring(0, idx)
-                val v = pair.substring(idx + 1).toFloatOrNull()
-                if (k.isNotEmpty() && v != null) out[k] = v
+                // 值可能是 "lufs" 或 "lufs,peak"（新版）；兼容旧格式
+                val vs = pair.substring(idx + 1).split(',')
+                val lufs = vs.getOrNull(0)?.toFloatOrNull()
+                val peak = vs.getOrNull(1)?.toFloatOrNull() ?: 0f
+                if (k.isNotEmpty() && lufs != null) out[k] = floatArrayOf(lufs, peak)
             }
         }
         return out
     }
 
-    private fun encodeStore(m: Map<String, Float>): String =
-        m.entries.joinToString("") { "${it.key}:${it.value}" }
+    private fun encodeStore(m: Map<String, FloatArray>): String =
+        m.entries.joinToString("\u0001") { "${it.key}:${it.value[0]},${it.value.getOrElse(1) { 0f }}" }
 }

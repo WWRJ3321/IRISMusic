@@ -501,6 +501,10 @@ onPhysicsFxChange = viewModel::setPhysicsFx,
                     virtualSurroundStrength = state.virtualSurroundStrength,
                     onVirtualSurroundChange = viewModel::setVirtualSurround,
                     onVirtualSurroundStrengthChange = viewModel::setVirtualSurroundStrength,
+                    spatialWide = state.spatialWide,
+                    spatialWideStrength = state.spatialWideStrength,
+                    onSpatialWideChange = viewModel::setSpatialWide,
+                    onSpatialWideStrengthChange = viewModel::setSpatialWideStrength,
                     safeLimiter = state.safeLimiter,
                     safeLimiterStrength = state.safeLimiterStrength,
                     onSafeLimiterChange = viewModel::setSafeLimiter,
@@ -1623,19 +1627,23 @@ private fun KaraokeLine(
             }
         }
     }
-    // 已唱比例（0f..1f 连续，不取整）
-    val frac = if (line.hasWords && text.isNotEmpty()) {
-        LyricParser.wordProgressChars(line, estMs).coerceIn(0, text.length).toFloat() / text.length
+    // 已唱到的“字符位置”（浮点，含词内小数）。
+    // 有词级时间：真逐字，落到正在咬的那个字上；无词级：按行时长线性铺开。
+    val charProgress = if (line.hasWords && text.isNotEmpty()) {
+        LyricParser.wordProgressCharsF(line, estMs).coerceIn(0f, text.length.toFloat())
     } else {
         // 伪逐字：分母不是"到下一句的整段间隔"（含唱完后的停顿），但也不能缩太多——
-        // 之前按 260ms/字 估算，短句扫到一半句就停了，僵在那里等下一句，很难看。
-        // 现在取两者折中：估算值与行间隔取小，但保底吃满间隔的 92%——
-        // 光带几乎匀速推到下一句进，只在句尾留一点点呼吸，不再出现"停住不动"。
+        // 按估算值与行间隔取小、并保底吃满间隔的 92%，光带几乎匀速推到下一句进。
         val span = (lineEndMs - line.timeMs).coerceAtLeast(1L)
         val est = (text.length * 300L).coerceAtLeast(600L)
         val singMs = minOf(est, span).coerceAtLeast((span * 0.92f).toLong())
-        ((estMs - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
+        val f = ((estMs - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
+        f * text.length
     }
+    // 已唱比例：直接用“字符位置 / 总字符数”。之前尝试按字形像素定位，
+    // 但一句歌词换行成多视觉行时 getHorizontalPosition 会在换行处把 x 拨回行首，
+    // 分母又是整行宽，导致光带扫过后往回退——按字符数比例是单调递增的，稳。
+    val frac = (charProgress / text.length.coerceAtLeast(1)).coerceIn(0f, 1f)
     // 柔边宽度（占整行比例）：过渡带越宽越"模糊"，越窄越"锐利"
     val soft = 0.10f
     // 渐变 4 个 stop 必须严格递增且落在 [0,1]，否则 coerceIn 会遇到空区间抛异常。

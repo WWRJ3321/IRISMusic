@@ -244,7 +244,7 @@ fun SongDeck(
                 ) {
                     if (state.queue.isEmpty()) {
                         Text(
-                            if (state.loading) "读取音乐库…" else "队列是空的\n到设置里换个文件夹或取消筛选",
+                                if (state.loading) "读取音乐库…" else "还没有歌曲\n去设置里换个文件夹，或取消当前筛选",
                             color = colors.subText,
                             fontSize = 13.sp,
                             lineHeight = 19.sp,

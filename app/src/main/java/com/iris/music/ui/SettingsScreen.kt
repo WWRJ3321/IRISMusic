@@ -421,7 +421,7 @@ internal fun SettingsPanel(
                 IrisLayout.LIST -> "纵向排布：歌单列表 + 右滑播放页，原有结构"
                 IrisLayout.CAROUSEL -> "横向排布：只剩播放卡片，左右滑动翻歌"
                 IrisLayout.STACK -> "堆叠排布：卡片叠成一沓，把最上面那张拖走切歌"
-                IrisLayout.COMPACT -> "海报墙：正方形/长方形磁贴组成画布，可自由拖动探索"
+                IrisLayout.COMPACT -> "唱片墙：正方形/长方形磁贴组成画布，可自由拖动探索"
             },
             color = colors.subText, fontSize = 11.sp
         )
@@ -475,7 +475,7 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(14.dp))
 
         SettingToggleRow(
-            "音乐渐入渐出",
+            "淡入淡出",
             state.fadeEnabled,
             colors,
             subtitle = "开头音量渐起、结尾渐落，暂停也不再突兀"
@@ -507,7 +507,7 @@ internal fun SettingsPanel(
 
         // ---- 无声略过（beta） ----
         SettingToggleRow(
-            "无声略过 beta",
+            "无声略过 · beta",
             state.silenceSkip,
             colors,
             subtitle = "自动跳过歌曲开头和结尾没有声音的部分"
@@ -537,7 +537,7 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(14.dp))
 
         SettingToggleRow(
-            "逐字扫光",
+            "逐字流光",
             state.karaokeLyric,
             colors,
             subtitle = "全屏歌词当前行按进度扫光点亮（无词级时间时按句长估算）"
@@ -578,7 +578,7 @@ internal fun SettingsPanel(
 
         // ---- 物理动效 ----
         SettingToggleRow(
-            "物理动效 beta",
+            "物理动效 · beta",
             state.tiltSpectrum || state.coverShake,
             colors,
             subtitle = "倾斜频谱 + 摇动封面，传感器驱动"
@@ -598,7 +598,7 @@ internal fun SettingsPanel(
 
         // ---- 低音马达震动（beta） ----
         SettingToggleRow(
-            "低音马达震动 beta",
+            "低音马达震动 · beta",
             state.bassHaptics,
             colors,
             subtitle = "跟随低频节奏轻微震动，幅度随鼓点强弱变化"
@@ -714,7 +714,7 @@ internal fun SettingsPanel(
         Text("推荐探索度", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (state.exploration < 0.2f) "偏好好友圈：按相似度和喜好推荐"
+            if (state.exploration < 0.2f) "贴合口味：按相似度和历史喜好推荐"
             else if (state.exploration < 0.5f) "均衡：偏好为主，偶尔新鲜"
             else if (state.exploration < 0.8f) "探索为主：多推没听过的风格"
             else "全随机：完全探索未知",
@@ -771,7 +771,7 @@ internal fun SettingsPanel(
         SectionHeader("关于", colors)
         Spacer(Modifier.height(8.dp))
         Text(
-            "IRIS Music v${BuildConfig.VERSION_NAME}\n本地音乐播放器\nKotlin + Jetpack Compose 构建",
+            "IRIS Music v${BuildConfig.VERSION_NAME}\n纯本地音乐播放器 · 不联网不上传\nKotlin + Jetpack Compose 构建",
             color = colors.subText,
             fontSize = 12.sp,
             lineHeight = 18.sp

@@ -115,6 +115,10 @@ fun EqualizerSheet(
     virtualSurroundStrength: Int = 40,
     onVirtualSurroundChange: (Boolean) -> Unit = {},
     onVirtualSurroundStrengthChange: (Int) -> Unit = {},
+    spatialWide: Boolean = false,
+    spatialWideStrength: Int = 50,
+    onSpatialWideChange: (Boolean) -> Unit = {},
+    onSpatialWideStrengthChange: (Int) -> Unit = {},
     safeLimiter: Boolean = false,
     safeLimiterStrength: Int = 30,
     onSafeLimiterChange: (Boolean) -> Unit = {},
@@ -160,7 +164,7 @@ fun EqualizerSheet(
 
             if (!state.available) {
                 Spacer(Modifier.height(20.dp))
-                Text("当前设备不支持系统均衡器", color = colors.subText, fontSize = 13.sp, lineHeight = 20.sp)
+                Text("当前设备不支持系统均衡器（虚拟低音等增强仍可用）", color = colors.subText, fontSize = 13.sp, lineHeight = 20.sp)
                 Spacer(Modifier.height(16.dp))
                 DoneButton(colors, onDismiss)
             } else {
@@ -246,6 +250,18 @@ fun EqualizerSheet(
                 onStrengthChange = onVirtualSurroundStrengthChange
             )
             Spacer(Modifier.height(6.dp))
+            // 宽场环绕：多频段展宽（低频居中/中频温和/高频大幅）+ 去相关早期反射，制造包围感与纵深
+            EnhancerRow(
+                title = "宽场环绕",
+                subtitle = "分频展宽 + 早期反射，空间感更强",
+                checked = spatialWide,
+                strength = spatialWideStrength,
+                strengthLabel = "空间强度",
+                colors = colors,
+                onToggle = { onSpatialWideChange(!spatialWide) },
+                onStrengthChange = onSpatialWideStrengthChange
+            )
+            Spacer(Modifier.height(6.dp))
             // V3.10 防失真：前瞻峰值限幅，防推高/增强后削波撕裂。强度越大余量越足越安全
             EnhancerRow(
                 title = "防失真保护",
@@ -261,7 +277,7 @@ fun EqualizerSheet(
             // 曲间响度均衡：在线测响度、按曲拉平（解决现场版巨响/老录音听不清）
             EnhancerRow(
                 title = "响度均衡",
-                subtitle = "让每首歌的音量听起来差不多（新歌首次听完自动测好）",
+                subtitle = "拉平各首歌的音量差异，避免忽大忽小（新歌听完一遍自动测量）",
                 checked = loudnorm,
                 strength = loudnormStrength,
                 strengthLabel = "拉平力度",

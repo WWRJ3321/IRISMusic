@@ -15,12 +15,16 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import android.app.PendingIntent
+import android.content.Intent
+import com.iris.music.MainActivity
 import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
 import com.iris.music.audio.FadeController
 import com.iris.music.audio.RangeEnhancer
 import com.iris.music.audio.SafeLimiter
 import com.iris.music.audio.SilenceSkipper
+import com.iris.music.audio.SpatialWide
 import com.iris.music.audio.SpectrumAnalyzer
 import com.iris.music.audio.TrackGain
 import com.iris.music.audio.VirtualBass
@@ -96,13 +100,15 @@ class MusicService : MediaSessionService() {
         ): AudioSink = DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            // DSP 链顺序：曲间响度均衡 → 动态范围增强 → 虚拟环绕 → 虚拟低音 → 防失真限幅 → 频谱旁路。
+            // DSP 链顺序：曲间响度均衡 → 动态范围增强 → 虚拟环绕 → 宽场环绕 → 虚拟低音 → 防失真限幅 → 频谱旁路。
             // TrackGain 放最前：测原始信号，校正后电平让后级（含频谱/震动）看到真实输出。
             // RangeEnhancer 先抬响度会让 VirtualBass 的低频检测跟着抬高，
             // 两者对响度的影响会互相叠加；让 VirtualBass 看到原始低频
             // 更接近"补低音"而非"补已被增强的低音"。VirtualSurround 基于
             // 原始 L/R 差分做声场展宽，放在 VirtualBass 前（低音谐波是
             // 单声道注入，若先注入再展宽会把谐波也摊到两侧、破坏居中）。
+            // SpatialWide 紧跟 VirtualSurround：多频段展宽 + 早期反射叠在展宽后的
+            // 声场上，同样必须在 VirtualBass 之前——低音谐波居中注入才不被摊向两侧。
             // SafeLimiter 放最后一道处理：前级所有增强叠加后可能顶过 0dBFS，
             // 由它统一把峰值压回安全线，杜绝硬削波（撕裂/破音）。
             // 频谱放限幅之后，UI 显示与低音震动看到的都是处理后的实际输出。
@@ -110,6 +116,7 @@ class MusicService : MediaSessionService() {
                 TrackGain,
                 RangeEnhancer,
                 VirtualSurround,
+                SpatialWide,
                 VirtualBass,
                 SafeLimiter,
                 TeeAudioProcessor(SpectrumAnalyzer)
@@ -161,6 +168,7 @@ class MusicService : MediaSessionService() {
         VirtualBass.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         RangeEnhancer.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         VirtualSurround.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
+        SpatialWide.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         SafeLimiter.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         TrackGain.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         player.addListener(object : Player.Listener {
@@ -184,7 +192,19 @@ class MusicService : MediaSessionService() {
         // 听歌时长统计：文件在服务进程里初始化（UI 进程那边也 init 一次，两边同路径）
         ListenStats.init(this)
 
-        mediaSession = MediaSession.Builder(this, FadingPlayer(player)).build()
+        val sessionActivityPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                // 复用已有实例回到前台，而不是新起一个 Activity
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        mediaSession = MediaSession.Builder(this, FadingPlayer(player))
+            .setSessionActivity(sessionActivityPendingIntent)
+            .build()
 
         // 桌面悬浮歌词：常驻服务里初始化，UI 退到后台也能跟随
         FloatingLyric.init(this, player)
