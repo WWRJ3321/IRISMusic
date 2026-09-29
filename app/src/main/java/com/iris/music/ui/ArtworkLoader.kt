@@ -309,7 +309,15 @@ object ArtworkLoader {
         }.getOrNull()
     }
 
-    /** 读取内嵌封面原始字节：先 MediaMetadataRetriever，失败换 MediaExtractor */
+    /**
+     * 读取内嵌封面原始字节，三条路径依次兜底：
+     *  1. MediaMetadataRetriever —— 大多数规范文件最快、最省事。
+     *  2. MediaExtractor —— ogg/opus 等场景回退。
+     *  3. 自解析 ID3v2 APIC —— MMR 对部分来源（如 QQ 音乐带内嵌歌词 USLT +
+     *     巨型 APIC 的 MP3）会解析中断、embeddedPicture 返回 null，MediaExtractor
+     *     的 ALBUM_ART key 在 MP3 上也常拿不到。此时直接扫 ID3 标签取 APIC，
+     *     覆盖这些前两路都失败的文件。
+     */
     private fun readPictureBytes(filePath: String): ByteArray? {
         // 路径 1：MediaMetadataRetriever
         runCatching {
@@ -323,7 +331,7 @@ object ArtworkLoader {
         }
 
         // 路径 2：MediaExtractor（ogg/opus 等场景回退）
-        return runCatching {
+        runCatching {
             val extractor = MediaExtractor()
             try {
                 extractor.setDataSource(filePath)
@@ -343,10 +351,132 @@ object ArtworkLoader {
                         }
                     }
                 }
-                null
             } finally {
                 runCatching { extractor.release() }
             }
-        }.getOrNull()
+        }
+
+        // 路径 3：手动解析 ID3v2 的 APIC 帧
+        return runCatching { parseId3v2Apic(filePath) }.getOrNull()
+    }
+
+    /**
+     * 直接从 MP3 文件头部的 ID3v2 标签里抽取 APIC（内嵌封面）帧的图片字节。
+     *
+     * 只做够用的解析：ID3v2.2/2.3/2.4 帧遍历、tag 级 unsynchronisation 反转、
+     * 扩展头跳过、APIC/PIC 帧的编码/MIME/描述字段跳过。找到第一张封面即返回。
+     * 不依赖系统解析器，专治 MMR 读不到封面的文件。
+     */
+    private fun parseId3v2Apic(filePath: String): ByteArray? {
+        val file = File(filePath)
+        if (!file.exists() || file.length() < 10) return null
+
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            val header = ByteArray(10)
+            if (raf.read(header) != 10) return null
+            if (header[0] != 'I'.code.toByte() ||
+                header[1] != 'D'.code.toByte() ||
+                header[2] != '3'.code.toByte()
+            ) return null
+
+            val major = header[3].toInt() and 0xFF
+            val flags = header[5].toInt() and 0xFF
+            val tagSize = synchsafe(header, 6)
+            if (tagSize <= 0 || tagSize > file.length()) return null
+
+            var tag = ByteArray(tagSize)
+            if (raf.read(tag) != tagSize) return null
+
+            // tag 级 unsynchronisation（v2.2/2.3 用 header flag 0x80）：还原 0xFF 0x00 -> 0xFF
+            if (flags and 0x80 != 0) tag = deunsync(tag)
+
+            var pos = 0
+            // 扩展头
+            if (flags and 0x40 != 0) {
+                pos += if (major >= 4) {
+                    synchsafe(tag, 0)
+                } else {
+                    beInt(tag, 0) + 4
+                }
+            }
+
+            val idLen = if (major == 2) 3 else 4
+            val sizeLen = if (major == 2) 3 else 4
+            val frameFlagsLen = if (major == 2) 0 else 2
+
+            while (pos + idLen + sizeLen + frameFlagsLen <= tag.size) {
+                if (tag[pos].toInt() == 0) break // 到达填充区
+                val id = String(tag, pos, idLen, Charsets.ISO_8859_1)
+                val frameSize = when {
+                    major == 2 -> ((tag[pos + 3].toInt() and 0xFF) shl 16) or
+                        ((tag[pos + 4].toInt() and 0xFF) shl 8) or
+                        (tag[pos + 5].toInt() and 0xFF)
+                    major >= 4 -> synchsafe(tag, pos + 4)
+                    else -> beInt(tag, pos + 4)
+                }
+                if (frameSize <= 0) break
+                val bodyPos = pos + idLen + sizeLen + frameFlagsLen
+                if (bodyPos + frameSize > tag.size) break
+
+                if (id == "APIC" || id == "PIC") {
+                    val pic = extractApicImage(tag, bodyPos, frameSize, id == "PIC")
+                    if (pic != null && pic.size > 4) return pic
+                }
+                pos = bodyPos + frameSize
+            }
+        }
+        return null
+    }
+
+    /** 从 APIC/PIC 帧体里跳过编码/MIME/图片类型/描述，返回图片原始字节。 */
+    private fun extractApicImage(tag: ByteArray, start: Int, size: Int, isV22: Boolean): ByteArray? {
+        var i = start
+        val end = start + size
+        if (i >= end) return null
+        val enc = tag[i].toInt() and 0xFF; i++
+        if (isV22) {
+            i += 3 // v2.2：3 字节图片格式（如 "JPG"）
+        } else {
+            while (i < end && tag[i].toInt() != 0) i++ // MIME 以 0x00 结尾
+            i++
+        }
+        if (i >= end) return null
+        i++ // 图片类型 1 字节
+        // 描述：编码 1/2（UTF-16）以双 0x00 结尾，0/3（Latin1/UTF-8）以单 0x00 结尾
+        if (enc == 1 || enc == 2) {
+            while (i + 1 < end && !(tag[i].toInt() == 0 && tag[i + 1].toInt() == 0)) i += 2
+            i += 2
+        } else {
+            while (i < end && tag[i].toInt() != 0) i++
+            i++
+        }
+        if (i >= end) return null
+        return tag.copyOfRange(i, end)
+    }
+
+    /** ID3 synchsafe 整数（每字节仅低 7 位有效）。 */
+    private fun synchsafe(b: ByteArray, off: Int): Int =
+        ((b[off].toInt() and 0x7F) shl 21) or
+            ((b[off + 1].toInt() and 0x7F) shl 14) or
+            ((b[off + 2].toInt() and 0x7F) shl 7) or
+            (b[off + 3].toInt() and 0x7F)
+
+    /** 普通大端 32 位整数。 */
+    private fun beInt(b: ByteArray, off: Int): Int =
+        ((b[off].toInt() and 0xFF) shl 24) or
+            ((b[off + 1].toInt() and 0xFF) shl 16) or
+            ((b[off + 2].toInt() and 0xFF) shl 8) or
+            (b[off + 3].toInt() and 0xFF)
+
+    /** 反 unsynchronisation：把 0xFF 0x00 序列还原为 0xFF。 */
+    private fun deunsync(src: ByteArray): ByteArray {
+        val out = java.io.ByteArrayOutputStream(src.size)
+        var i = 0
+        while (i < src.size) {
+            out.write(src[i].toInt())
+            if (src[i] == 0xFF.toByte() && i + 1 < src.size && src[i + 1] == 0x00.toByte()) i++
+            i++
+        }
+        return out.toByteArray()
     }
 }

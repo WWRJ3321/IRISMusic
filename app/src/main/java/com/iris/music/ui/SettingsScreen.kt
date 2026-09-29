@@ -134,6 +134,7 @@ internal fun SettingsPanel(
     onSilenceSkipChange: (Boolean) -> Unit,
     onPhysicsFxChange: (Boolean) -> Unit,
     onCoverLyricChange: (Boolean) -> Unit,
+    onKaraokeLyricChange: (Boolean) -> Unit,
     onTopBarAutoHideChange: (Boolean) -> Unit,
     onLyricAlignChange: (Int) -> Unit,
     onBassHapticsChange: (Boolean) -> Unit,
@@ -533,6 +534,14 @@ internal fun SettingsPanel(
             colors,
             subtitle = "封面左下角单行歌词，换句时模糊渐隐渐出"
         ) { onCoverLyricChange(!state.coverLyric) }
+        Spacer(Modifier.height(14.dp))
+
+        SettingToggleRow(
+            "逐字扫光",
+            state.karaokeLyric,
+            colors,
+            subtitle = "全屏歌词当前行按进度扫光点亮（无词级时间时按句长估算）"
+        ) { onKaraokeLyricChange(!state.karaokeLyric) }
         Spacer(Modifier.height(14.dp))
         Column {
             Text("歌词对齐", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)

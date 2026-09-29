@@ -107,6 +107,31 @@ object Playlists {
     fun playlistsOfSong(songId: Long): List<String> =
         all().filter { songId in songs(it.id) }.map { it.name }
 
+    /**
+     * 歌曲移动后把各歌单里的旧 ID 换成新 ID（原位替换，保持加入顺序）。
+     * 新 ID 已在歌单里则丢弃旧条目去重。
+     */
+    fun remapIds(idMap: Map<Long, Long>): Unit = synchronized(writeLock) {
+        if (idMap.isEmpty()) return@synchronized
+        val edit = prefs.edit()
+        var changed = false
+        for (pid in readNamesMap().keys) {
+            val key = KEY_SONGS_PREFIX + pid
+            val list = songs(pid)
+            val mapped = ArrayList<Long>(list.size)
+            for (id in list) {
+                val nid = idMap[id] ?: id
+                if (nid !in mapped) mapped.add(nid)
+            }
+            if (mapped != list) {
+                edit.putString(key, mapped.joinToString(","))
+                changed = true
+            }
+        }
+        cachedPlaylists = null
+        if (changed) edit.apply()
+    }
+
     // ==================== 内部 ====================
 
     private fun readAll(): List<Playlist> {

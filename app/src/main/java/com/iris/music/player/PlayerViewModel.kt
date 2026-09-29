@@ -125,7 +125,9 @@ data class PlayerUiState(
     /** 实验性：摇动手机封面跟着一晃（duangduang） */
     val coverShake: Boolean = false,
     /** 封面左下角单行歌词（锁在封面上，换词时模糊渐隐渐出） */
-val coverLyric: Boolean = false,
+    val coverLyric: Boolean = false,
+    /** 全屏歌词当前行的伪逐字扫光（无词级时间时按行时长匀速扫过） */
+    val karaokeLyric: Boolean = true,
     /** 全屏歌词对齐：0=靠左 1=居中 2=靠右 */
     val lyricAlign: Int = 1,
     /** 上栏（卡片模式顶栏）完全静止时是否淡到完全透明（关=停在半透明 30%） */
@@ -213,6 +215,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             tiltSpectrum = prefs.getBoolean(KEY_TILT_SPECTRUM, false),
             coverShake = prefs.getBoolean(KEY_COVER_SHAKE, false),
             coverLyric = prefs.getBoolean(KEY_COVER_LYRIC, false),
+            karaokeLyric = prefs.getBoolean(KEY_KARAOKE_LYRIC, true),
             lyricAlign = prefs.getInt(KEY_LYRIC_ALIGN, 1).coerceIn(0, 2),
             topBarAutoHide = prefs.getBoolean(KEY_TOPBAR_AUTOHIDE, false),
             cornerBase = prefs.getFloat(KEY_CORNER_BASE, 38f),
@@ -757,6 +760,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean(KEY_COVER_LYRIC, enabled).apply()
         _state.value = _state.value.copy(coverLyric = enabled)
     }
+    /** 全屏歌词伪逐字扫光开关。 */
+    fun setKaraokeLyric(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_KARAOKE_LYRIC, enabled).apply()
+        _state.value = _state.value.copy(karaokeLyric = enabled)
+    }
     /** 上栏静止时是否淡到完全透明。 */
     fun setTopBarAutoHide(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_TOPBAR_AUTOHIDE, enabled).apply()
@@ -1263,6 +1271,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             allSongs = songs,
             folders = MusicRepository.buildFolders(songs),
+            // 库有增删移动时重新拉一遍按 ID 记账的状态：文件移动会触发 ID 迁移，
+            // 点赞/歌单不重读的话，收藏心标和歌单内容会停在旧 ID 上显示丢失。
+            likedSongIds = PlayHistory.getLikes(),
+            playlists = Playlists.all(),
             loading = false
         )
         applyFilters(resetToFirst = true)
@@ -1495,6 +1507,7 @@ private const val KEY_THEME = "theme"
         const val KEY_TILT_SPECTRUM = "tilt_spectrum"
         const val KEY_COVER_SHAKE = "cover_shake"
         const val KEY_COVER_LYRIC = "cover_lyric"
+        const val KEY_KARAOKE_LYRIC = "karaoke_lyric"
         const val KEY_LYRIC_ALIGN = "lyric_align"
         const val KEY_TOPBAR_AUTOHIDE = "topbar_autohide"
         const val KEY_CORNER_BASE = "corner_base"
