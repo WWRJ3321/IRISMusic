@@ -1630,7 +1630,7 @@ private fun KaraokeLine(
     // 已唱到的“字符位置”（浮点，含词内小数）。
     // 有词级时间：真逐字，落到正在咬的那个字上；无词级：按行时长线性铺开。
     val charProgress = if (line.hasWords && text.isNotEmpty()) {
-        LyricParser.wordProgressCharsF(line, estMs).coerceIn(0f, text.length.toFloat())
+        LyricParser.wordProgressCharsF(line, estMs, lineEndMs).coerceIn(0f, text.length.toFloat())
     } else {
         // 伪逐字：分母不是"到下一句的整段间隔"（含唱完后的停顿），但也不能缩太多——
         // 按估算值与行间隔取小、并保底吃满间隔的 92%，光带几乎匀速推到下一句进。
@@ -1646,20 +1646,26 @@ private fun KaraokeLine(
     val frac = (charProgress / text.length.coerceAtLeast(1)).coerceIn(0f, 1f)
     // 柔边宽度（占整行比例）：过渡带越宽越"模糊"，越窄越"锐利"
     val soft = 0.10f
-    // 渐变 4 个 stop 必须严格递增且落在 [0,1]，否则 coerceIn 会遇到空区间抛异常。
-    // 先夹紧过渡带中心，再由中心对称推出 start/end，最后统一收进合法区间。
     val half = soft / 2f
-    val center = frac.coerceIn(half, 1f - half)   // 让柔边整体不越界
+    // 进度 0→1 映射到过渡带中心 -half→1+half：两端各多滑出半个柔边，
+    // frac=1 时整行已唱、frac=0 时整行未唱。之前把 center 夹在 [half,1-half]，
+    // 行尾永远差最后一段柔边扫不完 —— 最后半个字卡在半透明再直接跳行。
+    val center = frac * (1f + soft) - half
     val start = (center - half).coerceIn(0f, 1f)
     val end = (center + half).coerceIn(0f, 1f)
-    val sweep = androidx.compose.ui.graphics.Brush.horizontalGradient(
-        colorStops = arrayOf(
-            0f to sungColor,
-            start to sungColor,
-            end to unsungColor,
-            1f to unsungColor
-        )
-    )
+    val sweep = if (end <= start) {
+        // 柔边已完全滑出边界：右端=整行已唱，左端=整行未唱
+        androidx.compose.ui.graphics.SolidColor(if (frac >= 0.5f) sungColor else unsungColor)
+    } else {
+        // colorStops 必须严格递增：start=0 或 end=1 时省略重复端点
+        val stops = buildList {
+            add(0f to sungColor)
+            if (start > 0f) add(start to sungColor)
+            add(end to unsungColor)
+            if (end < 1f) add(1f to unsungColor)
+        }.toTypedArray()
+        androidx.compose.ui.graphics.Brush.horizontalGradient(colorStops = stops)
+    }
     Text(
         text,
         textAlign = textAlign,

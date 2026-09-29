@@ -734,14 +734,17 @@ object LyricParser {
         val f = wordProgressCharsF(line, positionMs)
         return if (f < 0f) -1 else f.toInt()
     }
-
     /**
      * 逐字点亮进度（浮点版）：返回已唱到的字符数（0f..text.length，连续小数）。
      * 相比取整版，小数部分让扫光在词内继续平滑推进，配合 glyph 级像素定位可做到
      * 光带精确停在正在咬的那个字上，而不是按字符数比例粗略铺。
      * 无词级信息时返回 -1f。
+     *
+     * [lineEndMs] 为下一行开始时间（或曲末），用于给最后一个词一个合理的结束时间。
+     * 不传（<=0）时按最后一词平均字时长兜底——否则最后一词的 end 是 Long.MAX_VALUE，
+     * 插值比例恒为 0，最后半个字永远扫不完，卡在半亮再直接跳行。
      */
-    fun wordProgressCharsF(line: LyricLine, positionMs: Long): Float {
+    fun wordProgressCharsF(line: LyricLine, positionMs: Long, lineEndMs: Long = -1L): Float {
         val words = line.words
         if (words.isEmpty()) return -1f
         // 累计每个词结束时的字符数
@@ -749,7 +752,16 @@ object LyricParser {
         for (i in words.indices) {
             val w = words[i]
             val start = w.startMs
-            val end = if (i + 1 < words.size) words[i + 1].startMs else Long.MAX_VALUE
+            val end = if (i + 1 < words.size) {
+                words[i + 1].startMs
+            } else {
+                // 最后一个词：优先用行尾时间；否则按其它词的平均时长估算，最少 300ms
+                if (lineEndMs > start) lineEndMs
+                else {
+                    val avg = if (i > 0) (start - words.first().startMs) / i else 300L
+                    start + avg.coerceAtLeast(300L)
+                }
+            }
             if (positionMs < start) return chars.toFloat()
             if (positionMs < end) {
                 // 词内插值（保留小数，扫光在词内连续推进）
