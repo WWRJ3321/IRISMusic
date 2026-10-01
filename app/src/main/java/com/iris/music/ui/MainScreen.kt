@@ -25,6 +25,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -238,6 +240,14 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
     // 快速滚动条是否正在拖动（拖动期间列表由滑条驱动，上栏需实时跟随）
     val scrollerDragging = remember { mutableStateOf(false) }
 
+    // 上栏计数（几首 / 已选文件夹）：启动时显示 4 秒后自动隐藏，之后不再常驻。
+    // 状态放在根层级而不是 LibraryPage：切到播放页再切回来不会重新计时显示。
+    var showCountLabel by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(4000)
+        showCountLabel = false
+    }
+
     Box(
         Modifier
             .fillMaxSize()
@@ -312,7 +322,8 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                         onCycleLayout = { viewModel.setLayout(state.layout.next) },
                         onOpenPlaylists = { showPlaylists = true },
                         onAddToPlaylist = { song -> pendingAddSong = song },
-                        scrollerDragging = scrollerDragging
+                        scrollerDragging = scrollerDragging,
+                        showCount = showCountLabel
                     )
 
                     1 -> PlayerPage(
@@ -401,6 +412,9 @@ visible = scrollerVisible,
                             onModeChange = onModeChange,
                             onRowSizeChange = onRowSizeChange,
                             onRowCoverChange = viewModel::setShowRowCover,
+                            onRowArtistChange = viewModel::setShowRowArtist,
+                            onRowPlaylistChange = viewModel::setShowRowPlaylist,
+                            onSearchPersistentChange = viewModel::setSearchPersistent,
                              onLikedBadgeChange = viewModel::setShowLikedBadge,
                             onLikedFilterChange = viewModel::setOnlyLiked,
                             onExplorationChange = onExplorationChange,
@@ -579,7 +593,8 @@ private fun LibraryPage(
     onReload: () -> Unit,
     onCycleLayout: () -> Unit,
     onOpenPlaylists: () -> Unit,
-    onAddToPlaylist: (Song) -> Unit
+    onAddToPlaylist: (Song) -> Unit,
+    showCount: Boolean = true
 ) {
     // 上栏高度（px）与当前偏移：上滑跟手滑出屏幕，下滑从任意位置随时拉回
     val density = LocalDensity.current
@@ -602,6 +617,28 @@ private fun LibraryPage(
     val searchInteraction = remember { MutableInteractionSource() }
     val searchFocused by searchInteraction.collectIsFocusedAsState()
     val searchBounds = remember { mutableStateOf(Rect.Zero) }
+    // ===== 搜索框常驻开关 =====
+    // 关闭常驻后：搜索框收起，点标题「IRIS MUSIC」展开并自动聚焦；
+    // 再点标题收起（有查询词时一并清空回到全库）；聚焦后又闲置且清空了词，几秒后自动收起。
+    var searchExpanded by remember { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val showSearch = state.searchPersistent || searchExpanded
+    // 展开后自动聚焦（等 TextField 进入组合再请求焦点）
+    LaunchedEffect(searchExpanded, state.searchPersistent) {
+        if (!state.searchPersistent) {
+            if (searchExpanded) {
+                delay(150)
+                runCatching { searchFocusRequester.requestFocus() }
+            }
+        }
+    }
+    // 闲置自动收起：非展开开关周期内、未聚焦、无查询词 → 4 秒后收起
+    LaunchedEffect(searchExpanded, searchFocused, state.searchQuery, state.searchPersistent) {
+        if (!state.searchPersistent && searchExpanded && !searchFocused && state.searchQuery.isBlank()) {
+            delay(4000)
+            searchExpanded = false
+        }
+    }
     val frosted = isFrostedGlass
     val frostedBlur = frostedBlurRadius
     val glass = isLiquidGlass
@@ -852,9 +889,8 @@ private fun LibraryPage(
                             RecommendationSection(
                                 recommendations = recs,
                                 colors = colors,
-                                onSelect = onPlaySong,
-                                allSongs = recPool,
-                                exploration = state.exploration
+                                showArtist = state.showRowArtist,
+                                onSelect = onPlaySong
                             )
                         } else {
                             // 后台计算中，显示占位
@@ -876,6 +912,8 @@ private fun LibraryPage(
                     colors = colors,
                     rowSize = state.rowSize,
                     showCover = state.showRowCover,
+                    showArtist = state.showRowArtist,
+                    showPlaylist = state.showRowPlaylist,
                     showLikedBadge = state.showLikedBadge,
                     liked = song.id in state.likedSongIds,
                     playlistNames = Playlists.playlistsOfSong(song.id),
@@ -1002,8 +1040,25 @@ private fun LibraryPage(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 主色/辅色直接当文字色会翻车：辅色是按"与主色配对好看"挑的，
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        // 搜索框收起时点标题展开；已展开时再点收起（有词则清空回全库）
+                        modifier = Modifier
+                            .clip(IrisShape.item)
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) {
+                                Haptics.tap()
+                                if (state.searchPersistent) return@clickable
+                                if (searchExpanded) {
+                                    if (state.searchQuery.isNotBlank()) onSearch("")
+                                    focusManager.clearFocus()
+                                    searchExpanded = false
+                                } else {
+                                    searchExpanded = true
+                                }
+                            }
+                    ) {
                         // 没人保证它在上栏底上可读。黑白主题的辅色两边都翻车——浅色模式是
                         // 纯白落在白上栏、深色模式是纯黑落在近黑上栏，对比度都在 1.1 以下。
                         // 基准取 colors.surface：实色模式就是上栏底色；玻璃/毛玻璃下底是半透明的，
@@ -1027,8 +1082,6 @@ private fun LibraryPage(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
-
                 // 搜索框：灰底 + 放大镜图标，简约统一
                 // 液态玻璃下改半透明底，否则实色方块会把整条玻璃切成两半
                 val searchBg = if (glass) {
@@ -1037,6 +1090,13 @@ private fun LibraryPage(
                     if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
                 }
                 val iconTint = colors.subText
+                AnimatedVisibility(
+                    visible = showSearch,
+                    enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
+                    exit = fadeOut(tween(180)) + shrinkVertically(tween(220, easing = EaseOutCubic))
+                ) {
+                    Column {
+                        Spacer(Modifier.height(8.dp))
                 TextField(
                     value = state.searchQuery,
                     onValueChange = onSearch,
@@ -1045,6 +1105,7 @@ private fun LibraryPage(
                     // 记录搜索框在根坐标下的矩形，供聚焦期"点框外收键盘"判定
                     modifier = Modifier
                         .fillMaxWidth()
+                        .focusRequester(searchFocusRequester)
                         .onGloballyPositioned { searchBounds.value = it.boundsInRoot() },
                     placeholder = { Text("搜索歌曲、艺术家…", color = colors.subText, fontSize = 12.sp) },
                     textStyle = TextStyle(color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium),
@@ -1078,30 +1139,39 @@ private fun LibraryPage(
                         unfocusedIndicatorColor = Color.Transparent,
                         disabledIndicatorColor = Color.Transparent,
                         cursorColor = colors.primary,
-                        focusedTextColor = colors.text,
-                        unfocusedTextColor = colors.text,
-                     )
-                )
-
-                Spacer(Modifier.height(6.dp))
-
-                // 计数
-                val countLabel = when {
-                    state.activePlaylistId != null ->
-                        state.playlists.firstOrNull { it.id == state.activePlaylistId }?.let { "歌单「${it.name}」· ${state.queue.size} 首" } ?: "${state.queue.size} 首"
-                    state.selectedFolders.isNotEmpty() -> "${state.queue.size} 首 · 已选 ${state.selectedFolders.size} 个文件夹"
-                    state.onlyLiked -> "我的收藏 · ${state.queue.size} 首"
-                    else -> "${state.queue.size} 首"
+                         focusedTextColor = colors.text,
+                         unfocusedTextColor = colors.text,
+                      )
+                 )
+                    }
                 }
-                Text(
-                    countLabel,
-                    color = colors.subText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .wrapContentWidth(Alignment.CenterHorizontally)
-                )
+
+                // 计数：启动后显示 4 秒自动隐藏（showCount 由根层级控制），淡出后收回高度
+                AnimatedVisibility(
+                    visible = showCount,
+                    enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+                    exit = fadeOut(tween(400)) + shrinkVertically(tween(400))
+                ) {
+                    Column {
+                        Spacer(Modifier.height(6.dp))
+                        val countLabel = when {
+                            state.activePlaylistId != null ->
+                                state.playlists.firstOrNull { it.id == state.activePlaylistId }?.let { "歌单「${it.name}」· ${state.queue.size} 首" } ?: "${state.queue.size} 首"
+                            state.selectedFolders.isNotEmpty() -> "${state.queue.size} 首 · 已选 ${state.selectedFolders.size} 个文件夹"
+                            state.onlyLiked -> "我的收藏 · ${state.queue.size} 首"
+                            else -> "${state.queue.size} 首"
+                        }
+                        Text(
+                            countLabel,
+                            color = colors.subText,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .wrapContentWidth(Alignment.CenterHorizontally)
+                        )
+                    }
+                }
             }
             }
             }
@@ -1851,6 +1921,8 @@ private fun SongRow(
     colors: IrisColors,
     rowSize: Int,
     showCover: Boolean = false,
+    showArtist: Boolean = true,
+    showPlaylist: Boolean = true,
     showLikedBadge: Boolean = false,
     liked: Boolean = false,
     playlistNames: List<String> = emptyList(),
@@ -1912,13 +1984,15 @@ private fun SongRow(
         Column(Modifier.weight(1f)) {
             Text(song.title, color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), activeT),
                 fontSize = titleSize, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artist, color = colors.subText, fontSize = subSize,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (showArtist) {
+                Text(song.artist, color = colors.subText, fontSize = subSize,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(formatDuration(song.durationMs), color = colors.subText, fontSize = subSize, fontWeight = FontWeight.Medium)
             // 所属歌单名：右下角淡显示，多个歌单用「/」分隔
-            if (playlistNames.isNotEmpty()) {
+            if (showPlaylist && playlistNames.isNotEmpty()) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     playlistNames.joinToString(" / "),

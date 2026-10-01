@@ -89,6 +89,12 @@ data class PlayerUiState(
     val rowSize: Int = 1,
     /** 歌单行左侧显示封面 */
     val showRowCover: Boolean = false,
+    /** 歌单行显示歌手副标题 */
+    val showRowArtist: Boolean = true,
+    /** 歌单行右下角显示所属歌单名 */
+    val showRowPlaylist: Boolean = true,
+    /** 搜索框常驻上栏；关闭后点标题才展开，闲置自动收起 */
+    val searchPersistent: Boolean = true,
     /** 歌单行右下角显示点赞角标 */
     val showLikedBadge: Boolean = false,
     /** 已点赞歌曲 ID 集合 */
@@ -214,6 +220,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             repeatMode = readRepeatMode(),
             rowSize = prefs.getInt(KEY_ROW_SIZE, 1).coerceIn(0, 2),
             showRowCover = prefs.getBoolean(KEY_ROW_COVER, false),
+            showRowArtist = prefs.getBoolean(KEY_ROW_ARTIST, true),
+            showRowPlaylist = prefs.getBoolean(KEY_ROW_PLAYLIST, true),
+            searchPersistent = prefs.getBoolean(KEY_SEARCH_PERSISTENT, true),
             showLikedBadge = prefs.getBoolean(KEY_LIKED_BADGE, false),
             exploration = prefs.getFloat(KEY_EXPLORATION, 0.3f),
             visualizerEnabled = prefs.getBoolean(KEY_VISUALIZER, false),
@@ -733,6 +742,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setShowRowCover(show: Boolean) {
         prefs.edit().putBoolean(KEY_ROW_COVER, show).apply()
         _state.value = _state.value.copy(showRowCover = show)
+    }
+    fun setShowRowArtist(show: Boolean) {
+        prefs.edit().putBoolean(KEY_ROW_ARTIST, show).apply()
+        _state.value = _state.value.copy(showRowArtist = show)
+    }
+    fun setShowRowPlaylist(show: Boolean) {
+        prefs.edit().putBoolean(KEY_ROW_PLAYLIST, show).apply()
+        _state.value = _state.value.copy(showRowPlaylist = show)
+    }
+    fun setSearchPersistent(on: Boolean) {
+        prefs.edit().putBoolean(KEY_SEARCH_PERSISTENT, on).apply()
+        _state.value = _state.value.copy(searchPersistent = on)
     }
 
     fun setShowLikedBadge(show: Boolean) {
@@ -1523,6 +1544,9 @@ private const val KEY_THEME = "theme"
         const val KEY_BG_BLUR = "bg_blur"
         const val KEY_ROW_SIZE = "row_size"
         const val KEY_ROW_COVER = "row_cover"
+        const val KEY_ROW_ARTIST = "row_artist"
+        const val KEY_ROW_PLAYLIST = "row_playlist"
+        const val KEY_SEARCH_PERSISTENT = "search_persistent"
         const val KEY_LIKED_BADGE = "liked_badge"
         const val KEY_VISUALIZER = "visualizer_enabled"
         const val KEY_TILT_SPECTRUM = "tilt_spectrum"

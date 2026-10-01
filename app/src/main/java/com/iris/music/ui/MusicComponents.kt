@@ -111,20 +111,15 @@ internal fun RecommendationSection(
     recommendations: List<Song>,
     colors: IrisColors,
     onSelect: (Song) -> Unit,
-    /** 全库，用于算"为什么推荐这首"。为空时长按不显示解释。 */
-    allSongs: List<Song> = emptyList(),
-    /** 当前探索度 0-1，解释弹窗据此提示随机成分 */
-    exploration: Float = 0f
+    /** 卡片是否显示歌手（跟随设置「歌单行显示歌手」） */
+    showArtist: Boolean = true
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
     val scrollState = rememberScrollState()
-    // 长按选中的歌：非空时弹出解释卡
-    var explainSong by remember { mutableStateOf<Song?>(null) }
 
     Column(Modifier.padding(bottom = 8.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(bottom = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -132,12 +127,6 @@ internal fun RecommendationSection(
                 color = onSheet,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Black
-            )
-            Text(
-                "长按看原因",
-                color = colors.subText,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
             )
         }
         // 横滑卡片：内容两端 alpha 渐变淡出（对内容本身混合，适配任何背景）
@@ -165,136 +154,13 @@ internal fun RecommendationSection(
                     RecommendCard(
                         song = song,
                         colors = colors,
-                        onClick = { onSelect(song) },
-                        onLongClick = if (allSongs.isEmpty()) null else {
-                            { explainSong = song }
-                        }
+                        showArtist = showArtist,
+                        onClick = { onSelect(song) }
                     )
                 }
             }
         }
         Spacer(Modifier.height(14.dp))
-    }
-
-    explainSong?.let { song ->
-        RecommendExplainDialog(
-            song = song,
-            allSongs = allSongs,
-            exploration = exploration,
-            colors = colors,
-            onDismiss = { explainSong = null }
-        )
-    }
-}
-
-/**
- * "为什么是这首"：把打分的贡献因子摊开。
- *
- * 推荐原先是个黑盒打分器，用户无从判断该不该信它、更无从知道调"探索度"会发生什么。
- * 解释直接取自 [Recommender.explain]，与真实排序同源。
- */
-@Composable
-private fun RecommendExplainDialog(
-    song: Song,
-    allSongs: List<Song>,
-    exploration: Float = 0f,
-    colors: IrisColors,
-    onDismiss: () -> Unit
-) {
-    val explanation = remember(song.id, allSongs, exploration) {
-        Recommender.explain(song, allSongs, exploration)
-    }
-    val onSheet = if (colors.isDark) Color.White else Color.Black
-
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(IrisShape.card)
-                .background(if (colors.isDark) Color(0xFF1E1E26) else Color.White)
-                .padding(20.dp)
-        ) {
-            Text("为什么推荐这首", color = onSheet, fontSize = 15.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "${song.title} · ${song.artist}",
-                color = colors.subText, fontSize = 12.sp,
-                maxLines = 2, overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(Modifier.height(14.dp))
-
-            if (explanation.factors.isEmpty()) {
-                Text(
-                    if (explanation.isColdStart)
-                        "这是首新歌，还没有任何播放记录，拿的是基准分。想让新歌更容易出现，可以在设置里调高「探索度」。"
-                    else
-                        "这首歌目前只拿基准分，没有明显的加减分因素。",
-                    color = onSheet, fontSize = 13.sp, lineHeight = 20.sp
-                )
-            } else {
-                explanation.factors.forEach { f ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            f.label,
-                            color = onSheet, fontSize = 13.sp,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        // 正贡献用主色、负贡献用柔和红，符号明确写出避免歧义
-                        val pct = (kotlin.math.abs(f.weight) * 100f).toInt()
-                        Text(
-                            (if (f.weight >= 0) "+" else "−") + "$pct%",
-                            color = if (f.weight >= 0) colors.primary else Color(0xFFE2606A),
-                            fontSize = 13.sp, fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-                if (explanation.isColdStart) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "新导入的歌只拿基准分，靠「探索度」出头。",
-                        color = colors.subText, fontSize = 11.sp, lineHeight = 17.sp
-                    )
-                }
-            }
-
-            // 探索度 > 0：最终排序含随机成分，上面的偏好因子只是固定部分。
-            // 那次推荐用的随机值不落盘、无法回溯，所以据实点明而不伪造精确百分比。
-            if (explanation.exploration > 0.01f) {
-                Spacer(Modifier.height(10.dp))
-                val pct = (explanation.exploration * 100f).toInt()
-                val hint = when {
-                    explanation.exploration >= 0.8f ->
-                        "当前探索度 $pct%（接近全随机）：这首能出现主要靠随机抽取，上面的偏好因素基本只作参考。"
-                    explanation.exploration >= 0.5f ->
-                        "当前探索度 $pct%（探索为主）：排序含较大随机成分，偏好因素只占一部分。"
-                    else ->
-                        "当前探索度 $pct%：排序里混入了随机成分，这首的位置未必完全由上面的偏好因素决定。"
-                }
-                Text(
-                    hint,
-                    color = colors.subText, fontSize = 11.sp, lineHeight = 17.sp
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth().height(40.dp)
-                    .clip(IrisShape.item)
-                    .background(colors.primary)
-                    .clickable { Haptics.tap(); onDismiss() },
-                contentAlignment = Alignment.Center
-            ) {
-                Text("知道了", color = colors.primary.readableTextOn(),
-                    fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            }
-        }
     }
 }
 
@@ -303,9 +169,8 @@ private fun RecommendExplainDialog(
 private fun RecommendCard(
     song: Song,
     colors: IrisColors,
-    onClick: () -> Unit,
-    /** 长按查看推荐原因；为 null 时只保留点击 */
-    onLongClick: (() -> Unit)? = null
+    showArtist: Boolean = true,
+    onClick: () -> Unit
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
 
@@ -313,10 +178,7 @@ private fun RecommendCard(
         Modifier
             .width(120.dp)
             .irisSurface(GlassLevel.CARD, colors, IrisShape.item)
-            .combinedClickable(
-                onClick = { Haptics.tap(); onClick() },
-                onLongClick = onLongClick?.let { action -> { Haptics.click(); action() } }
-            )
+            .clickable { Haptics.tap(); onClick() }
             .padding(10.dp)
     ) {
         // 封面：SongArtwork（异步加载 + HSV 占位 + 音符图标）
@@ -339,14 +201,16 @@ private fun RecommendCard(
             overflow = TextOverflow.Ellipsis,
             lineHeight = 14.sp
         )
-        Text(
-            song.artist,
-            color = colors.subText,
-            fontSize = 11.sp,
-            minLines = 1,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        if (showArtist) {
+            Text(
+                song.artist,
+                color = colors.subText,
+                fontSize = 11.sp,
+                minLines = 1,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

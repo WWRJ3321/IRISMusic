@@ -117,6 +117,9 @@ internal fun SettingsPanel(
     onModeChange: (IrisMode) -> Unit,
     onRowSizeChange: (Int) -> Unit,
     onRowCoverChange: (Boolean) -> Unit,
+    onRowArtistChange: (Boolean) -> Unit,
+    onRowPlaylistChange: (Boolean) -> Unit,
+    onSearchPersistentChange: (Boolean) -> Unit,
     onLikedBadgeChange: (Boolean) -> Unit,
     onLikedFilterChange: (Boolean) -> Unit,
     onExplorationChange: (Float) -> Unit,
@@ -171,8 +174,7 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(16.dp))
 
         // ==================== 外观 ====================
-        SectionHeader("外观", colors)
-        Spacer(Modifier.height(10.dp))
+        CollapsibleSection("外观", colors) {
 
         // ---- 明暗模式 ----
         Text("明暗模式", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -447,7 +449,7 @@ internal fun SettingsPanel(
             exit = fadeOut() + shrinkVertically()
         ) {
             Column {
-                Text("歌单行大小", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("列表行样式", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ModeSwatch("紧凑", state.rowSize == 0, colors,
@@ -463,6 +465,18 @@ internal fun SettingsPanel(
                 SettingToggleRow("歌单行显示封面", state.showRowCover, colors) { onRowCoverChange(!state.showRowCover) }
 
                 Spacer(Modifier.height(10.dp))
+                SettingToggleRow("歌单行显示歌手", state.showRowArtist, colors,
+                    subtitle = "关闭后歌单行只显示歌名") { onRowArtistChange(!state.showRowArtist) }
+
+                Spacer(Modifier.height(10.dp))
+                SettingToggleRow("歌单行显示所属歌单", state.showRowPlaylist, colors,
+                    subtitle = "关闭后不再显示歌曲所在的收藏歌单") { onRowPlaylistChange(!state.showRowPlaylist) }
+
+                Spacer(Modifier.height(10.dp))
+                SettingToggleRow("搜索框常驻", state.searchPersistent, colors,
+                    subtitle = "关闭后上栏收起搜索框，点标题展开，闲置几秒自动收起") { onSearchPersistentChange(!state.searchPersistent) }
+
+                Spacer(Modifier.height(10.dp))
                 SettingToggleRow("歌单行显示点赞角标", state.showLikedBadge, colors,
                     subtitle = "已点赞的歌曲在右下角显示爱心") { onLikedBadgeChange(!state.showLikedBadge) }
             }
@@ -470,9 +484,10 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
+        } // 结束外观
+
         // ==================== 播放 ====================
-        SectionHeader("播放", colors)
-        Spacer(Modifier.height(14.dp))
+        CollapsibleSection("播放", colors) {
 
         SettingToggleRow(
             "淡入淡出",
@@ -524,9 +539,10 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
+        } // 结束播放
+
         // ==================== 歌词 ====================
-        SectionHeader("歌词", colors)
-        Spacer(Modifier.height(14.dp))
+        CollapsibleSection("歌词", colors) {
 
         SettingToggleRow(
             "封面歌词",
@@ -562,9 +578,10 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
+        } // 结束歌词
+
         // ==================== 动效与反馈 ====================
-        SectionHeader("动效与反馈", colors)
-        Spacer(Modifier.height(14.dp))
+        CollapsibleSection("动效与反馈", colors) {
 
         // ---- 触感反馈 ----
         SettingToggleRow(
@@ -706,9 +723,10 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
+        } // 结束动效与反馈
+
         // ==================== 推荐 ====================
-        SectionHeader("推荐", colors)
-        Spacer(Modifier.height(14.dp))
+        CollapsibleSection("推荐", colors) {
 
         // ---- 推荐探索度 ----
         Text("推荐探索度", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -739,9 +757,10 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
+        } // 结束推荐
+
         // ==================== 数据 ====================
-        SectionHeader("数据", colors)
-        Spacer(Modifier.height(14.dp))
+        CollapsibleSection("数据", colors) {
 
         // ---- 文件夹 ----
         Text("音乐文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -767,9 +786,11 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
+        } // 结束数据
+
         // ==================== 关于 ====================
-        SectionHeader("关于", colors)
-        Spacer(Modifier.height(8.dp))
+        CollapsibleSection("关于", colors) {
+
         Text(
             "IRIS Music v${BuildConfig.VERSION_NAME}\n纯本地音乐播放器 · 不联网不上传\nKotlin + Jetpack Compose 构建",
             color = colors.subText,
@@ -784,10 +805,14 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(18.dp))
 
+        } // 结束关于
+
         // ==================== 我的数据 ====================
-        SectionHeader("我的数据", colors)
-        Spacer(Modifier.height(8.dp))
+        CollapsibleSection("我的数据", colors) {
+
         DataTransferSection(colors, state.allSongs)
+
+        } // 结束我的数据
 
         Spacer(Modifier.height(24.dp))
         } // ===== 结束可滚动内容 =====
@@ -820,6 +845,72 @@ private fun SectionHeader(text: String, colors: IrisColors) {
         fontSize = 15.sp,
         fontWeight = FontWeight.Black
     )
+}
+
+/**
+ * 可折叠分区：默认收起，只显示一行标题 + 右侧箭头；点标题展开整段详细设置。
+ *
+ * 设置项太多，一屏塞不下、第一眼也显得杂乱。把每个一级分区做成默认折叠，
+ * 收起时就是一列干净的分区名，想看哪块点哪块。箭头指向随展开状态旋转（› 收起 / ⌄ 展开）。
+ */
+@Composable
+private fun CollapsibleSection(
+    title: String,
+    colors: IrisColors,
+    defaultExpanded: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by remember { mutableStateOf(defaultExpanded) }
+    Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(IrisShape.item)
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { Haptics.tap(); expanded = !expanded }
+                .padding(vertical = 8.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.Black)
+            // 右侧箭头：收起指向右、展开指向下，220ms 旋转过渡
+            val rot by animateFloatAsState(
+                targetValue = if (expanded) 90f else 0f,
+                animationSpec = tween(220, easing = EaseInOutCubic),
+                label = "sectionChevron"
+            )
+            Canvas(Modifier.size(16.dp).graphicsLayer { rotationZ = rot }) {
+                val c = colors.subText
+                val w = size.width
+                val h = size.height
+                val mid = h / 2f
+                val stroke = w * 0.12f
+                drawLine(
+                    color = c,
+                    start = Offset(w * 0.38f, h * 0.22f),
+                    end = Offset(w * 0.66f, mid),
+                    strokeWidth = stroke,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+                drawLine(
+                    color = c,
+                    start = Offset(w * 0.66f, mid),
+                    end = Offset(w * 0.38f, h * 0.78f),
+                    strokeWidth = stroke,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(Modifier.padding(top = 4.dp), content = content)
+        }
+    }
 }
 
 /**
