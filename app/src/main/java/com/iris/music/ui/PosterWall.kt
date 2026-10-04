@@ -1616,6 +1616,20 @@ private fun PosterTile(
                 val lyricFontSp = POSTER_LYRIC_FONT * contentScale
                 val lyricRowH = (lyricFontSp + POSTER_LYRIC_LINE_GAP * contentScale)
                 val rowHPx = with(density) { lyricRowH.dp.toPx() }
+                // 窗口锚点只取整数：derivedStateOf 保证整数字符号不变时零重组。
+                // 逐帧量（位移/透明度/缩放）全部下沉到 LyricRow 的 graphicsLayer 绘制阶段，
+                // 正文不再直读 animIdx.value——旧写法每帧正文直读 + 每行 fontSize/fontWeight
+                // 逐帧插值，9 行文字每帧全部重排版（字形查找+省略号测量全 miss 缓存），
+                // 还把整张磁贴拖进逐帧重组——这就是切句移动时卡顿的来源。
+                //
+                // 取 round（floor(x+0.5)）而不是 floor：字重/current 的交接发生在
+                // 两句滚过中线、focus 恰好相等的瞬间——此刻新旧句尺寸与透明度完全对称，
+                // Bold 的换入换出被中点掩盖。用 floor 会在动画终点才交接：
+                // 新句全尺寸却还是 Normal、到站才突然变粗，旧句缩到边角还顶着 Bold
+                // 到最后一刻才褪掉——观感即"突然换字体再换回来"。
+                val anchor by remember {
+                    androidx.compose.runtime.derivedStateOf { kotlin.math.floor(animIdx.value + 0.5f).toInt() }
+                }
                 Box(
                     Modifier
                         .fillMaxSize()
@@ -1635,25 +1649,21 @@ private fun PosterTile(
                     lyricState?.let { ls ->
                         val count = ls.lines.size
                         for (s in 0 until 9) {
-                            val i = (kotlin.math.floor(animIdx.value).toInt()) - 2 + s
+                            val i = anchor - 2 + s
                             if (i < 0 || i >= count) continue
-                            val dF = i - animIdx.value
-                            val edgeFade = when {
-                                dF > 2f -> 1f - (dF - 2f) / 3.6f
-                                dF < -1f -> 1f + (dF + 1f) / 1.8f
-                                else -> 1f
-                            }.coerceIn(0f, 1f)
-                            val focus = (1f - kotlin.math.abs(dF)).coerceIn(0f, 1f)
                             LyricRow(
                                 text = ls.lines[i].text,
-                                focus = focus,
-                                edgeFade = edgeFade,
+                                index = i.toFloat(),
+                                animIdx = animIdx,
+                                rowHeightPx = rowHPx,
+                                current = (i == anchor),
                                 baseFontSp = lyricFontSp,
                                 rowHeightDp = lyricRowH,
                                 modifier = Modifier
                                     .align(Alignment.CenterStart)
-                                    .offset { IntOffset(0, ((i - animIdx.value) * rowHPx).roundToInt()) }
-                                    .zIndex(focus)   // 当前句置顶，放大时不被邻行盖住
+                                    .fillMaxWidth()
+                                    // 当前句置顶，放大时不被邻行盖住；只在锚点跨整数时变，随重组一次
+                                    .zIndex(if (i == anchor) 1f else 0f)
                             )
                         }
                     } ?: Text(
@@ -1769,39 +1779,57 @@ private fun PosterIconBtn(
 /**
  * 单行歌词：当前句加白放大，其他句半透明小字。
  *
- * @param focus 当前行权重 0..1（1 = 正好是当前句）。由连续的 animIdx 距离算出，
- *   所以高亮/字号是"随滚动渐变"的，不是到点硬切。这也是为什么这里不再用
- *   animateFloatAsState：值本身已经连续，再套一层动画只会拖慢并打架。
- * @param rowHeightDp 固定行高。必须恒定且与外层滚动位移用的行高一致，
- *   否则当前句放大时行高变化会顶动整列，滑动距离对不上行位置。
+ * 性能结构（切句卡顿的根治点）：
+ * - 布局只按**基准字号 + 固定行高**测一次；逐帧变化的位移、透明度、缩放
+ *   全部放进 graphicsLayer——那是绘制阶段的矩阵/alpha，零测量零排版。
+ * - 旧写法把 focus/edgeFade 逐帧传进正文，9 行的 fontSize、fontWeight、
+ *   color.alpha 每帧都是新值 → 9 段文字每帧重新排版（字形查找与省略号
+ *   测量全部 miss 缓存），还拖着整张磁贴逐帧重组。字体插值看着"高级"，
+ *   代价是切句时掉帧。
+ * - 字重不做逐帧插值（改字重必须重排版），量化为"当前句 Bold、其余 Normal"，
+ *   在窗口锚点跨整数时随重组切换，一次切歌一次排版。
+ * - 缩放用 graphicsLayer 而非改 fontSize：行框恒定，缩放绕左中原点，
+ *   视觉与旧的字号插值等价，滚动位移仍逐帧连续。
  */
 @Composable
 private fun LyricRow(
     text: String,
-    focus: Float,
-    edgeFade: Float = 1f,
+    index: Float,
+    animIdx: Animatable<Float, *>,
+    rowHeightPx: Float,
+    current: Boolean,
     baseFontSp: Float = POSTER_LYRIC_FONT,
     rowHeightDp: Float = POSTER_LYRIC_FONT + POSTER_LYRIC_LINE_GAP,
     modifier: Modifier = Modifier
 ) {
-    val effAlpha = (0.52f + 0.48f * focus) * edgeFade
-    // 非当前句缩到 0.705，当前句 1.0，中间连续过渡
-    val fontScale = 0.705f + 0.295f * focus
     Box(
         modifier
-            .fillMaxWidth()
-            .height(rowHeightDp.dp),
+            .height(rowHeightDp.dp)
+            .graphicsLayer {
+                val dF = index - animIdx.value
+                translationY = dF * rowHeightPx
+                val edgeFade = when {
+                    dF > 2f -> 1f - (dF - 2f) / 3.6f
+                    dF < -1f -> 1f + (dF + 1f) / 1.8f
+                    else -> 1f
+                }.coerceIn(0f, 1f)
+                val focus = (1f - abs(dF)).coerceIn(0f, 1f)
+                alpha = (0.52f + 0.48f * focus) * edgeFade
+                // 非当前句缩到 0.705，当前句 1.0，中间连续过渡
+                val fs = 0.705f + 0.295f * focus
+                scaleX = fs
+                scaleY = fs
+                transformOrigin = TransformOrigin(0f, 0.5f)
+            },
         contentAlignment = Alignment.CenterStart
     ) {
         Text(
             text,
-            color = Color.White.copy(alpha = effAlpha),
-            fontSize = (baseFontSp * fontScale).sp,
+            color = Color.White,
+            fontSize = baseFontSp.sp,
             // 行高交给外层 Box 固定，这里给足避免文字被自身 lineHeight 裁切
-            lineHeight = (baseFontSp * fontScale * 1.15f).sp,
-            // 字重随 focus 连续插值（Normal=400 → Bold=700）。旧写法是 focus>0.5 硬切
-            // Bold/Normal，每行滚过焦点瞬间字重跳变、字宽突变 → 滚动"抽搐"的主因。
-            fontWeight = androidx.compose.ui.text.font.FontWeight((400 + (300 * focus).roundToInt())),
+            lineHeight = (baseFontSp * 1.15f).sp,
+            fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
             textAlign = TextAlign.Start,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,

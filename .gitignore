@@ -47,5 +47,7 @@ publicity/*.mov
 # 内部自省草稿，仅本地
 docs/改进.md
 
-# 本地设计草图，不入库
+# AI 开工须知与本地脚本（含内部约定，不入库）
+AGENTS.md
+Tools/
 design/*.html
