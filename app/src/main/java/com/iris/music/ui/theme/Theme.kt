@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 
@@ -21,6 +22,8 @@ fun IRISMusicTheme(
     surfaceStyle: IrisSurfaceStyle = IrisSurfaceStyle.SOLID,
     /** 模糊浓度倍率，1.0 为基准 */
     glassBlur: Float = GLASS_BLUR_DEFAULT,
+    /** 界面字体：0=系统无衬线 1=衬线 */
+    uiFont: Int = 0,
     content: @Composable () -> Unit
 ) {
     val colors = theme.colors(mode)
@@ -71,13 +74,18 @@ fun IRISMusicTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = IrisTypography
+        typography = if (uiFont == 1) IrisSerifTypography else IrisTypography
     ) {
         // 圆角尺度下发给整棵树，所有 IrisShape.* 读取的都是这个值
         CompositionLocalProvider(
             LocalCorners provides IrisCorners(cornerBase.dp),
             LocalSurfaceStyle provides surfaceStyle,
             LocalGlassBlur provides glassBlur.coerceIn(GLASS_BLUR_MIN, GLASS_BLUR_MAX),
+            // 全局界面字体：Text 未显式传 style 时继承 LocalTextStyle
+            androidx.compose.material3.LocalTextStyle provides
+                androidx.compose.ui.text.TextStyle(
+                    fontFamily = if (uiFont == 1) FontFamily.Serif else FontFamily.SansSerif
+                ),
             content = content
         )
     }

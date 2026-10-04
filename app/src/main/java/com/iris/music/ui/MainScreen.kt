@@ -73,6 +73,7 @@ import android.content.res.Configuration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
@@ -133,14 +134,9 @@ fun MainScreen(
     onSeek: (Float) -> Unit,
     onSelect: (Int) -> Unit,
     onSearch: (String) -> Unit,
-    onSelectFolder: (String?) -> Unit,
     onToggleLike: (Long) -> Unit,
     onCyclePlayMode: () -> Unit,
-    onToggleSettings: (Boolean) -> Unit,
-    onThemeChange: (IrisTheme) -> Unit,
-    onModeChange: (IrisMode) -> Unit,
-    onRowSizeChange: (Int) -> Unit,
-    onExplorationChange: (Float) -> Unit
+    onToggleSettings: (Boolean) -> Unit
 ) {
     // 横屏「天台夜航」场景已暂时下线（NightFlightScene 文件保留，恢复时在此处重新接回）。
     // 自定义背景图 SAF 选择器
@@ -405,47 +401,12 @@ visible = scrollerVisible,
                     panelModifier = Modifier.heightIn(max = 720.dp)
                 ) {
                     SettingsPanel(
-                            state = state,
-                            colors = colors,
-                            onSelectFolder = onSelectFolder,
-                            onThemeChange = onThemeChange,
-                            onModeChange = onModeChange,
-                            onRowSizeChange = onRowSizeChange,
-                            onRowCoverChange = viewModel::setShowRowCover,
-                            onRowArtistChange = viewModel::setShowRowArtist,
-                            onRowPlaylistChange = viewModel::setShowRowPlaylist,
-                            onSearchPersistentChange = viewModel::setSearchPersistent,
-                             onLikedBadgeChange = viewModel::setShowLikedBadge,
-                            onLikedFilterChange = viewModel::setOnlyLiked,
-                            onExplorationChange = onExplorationChange,
-                            onCornerBaseChange = viewModel::setCornerBase,
-                            onFontScaleChange = viewModel::setFontScale,
-                            onSurfaceStyleChange = viewModel::setSurfaceStyle,
-                            onLayoutChange = viewModel::setLayout,
-                            onGlassBlurChange = viewModel::setGlassBlur,
-                            onBgBlurChange = viewModel::setBgBlur,
-                            onFadeChange = viewModel::setFadeEnabled,
-                            onFadeMsChange = viewModel::setFadeMs,
-                            onHapticsChange = viewModel::setHapticsEnabled,
-onShowRecsChange = viewModel::setShowRecommendations,
-                           onJellyAnimChange = viewModel::setJellyAnim,
-                           onSilenceSkipChange = viewModel::setSilenceSkip,
-onPhysicsFxChange = viewModel::setPhysicsFx,
-                             onCoverLyricChange = viewModel::setCoverLyric,
-                              onKaraokeLyricChange = viewModel::setKaraokeLyric,
-                             onTopBarAutoHideChange = viewModel::setTopBarAutoHide,
-                             onLyricAlignChange = viewModel::setLyricAlign,
-                             onBassHapticsChange = viewModel::setBassHaptics,
-                            onBassHapticsIntensityChange = viewModel::setBassHapticsIntensity,
-                            onBassHapticsPulseMsChange = viewModel::setBassHapticsPulseMs,
-                            onBassHapticsSensitivityChange = viewModel::setBassHapticsSensitivity,
-                            onBassHapticsLowCutoffChange = viewModel::setBassHapticsLowCutoff,
-                            onBassHapticsAdaptiveChange = viewModel::setBassHapticsAdaptive,
-                            onCustomColorsChange = viewModel::setCustomColors,
-                            onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
-                            onClearBackground = { viewModel.setCustomBackground(null) },
-                             sheetDrag = settingsDrag,
-                             onDismiss = { onToggleSettings(false) }
+                        state = state,
+                        colors = colors,
+                        viewModel = viewModel,
+                        onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
+                        sheetDrag = settingsDrag,
+                        onDismiss = { onToggleSettings(false) }
                     )
                 }
             }
@@ -1330,6 +1291,8 @@ visualizerEnabled = state.visualizerEnabled,
                 backdrops = lyricsBackdrops,
                 onSeek = onSeek,
                 lyricAlign = state.lyricAlign,
+                lyricFont = state.lyricFont,
+                lyricFontSize = state.lyricFontSize,
                 karaoke = state.karaokeLyric,
                 onDismiss = { showLyrics = false }
             )
@@ -1357,6 +1320,8 @@ internal fun LyricsOverlay(
     backdrops: List<IrisBackdrop>,
     onSeek: (Float) -> Unit,
     lyricAlign: Int = 1,
+    lyricFont: Int = 0,
+    lyricFontSize: Float = 20f,
     karaoke: Boolean = true,
     onDismiss: () -> Unit
 ) {
@@ -1365,6 +1330,10 @@ internal fun LyricsOverlay(
     val colAlign = when (lyricAlign) { 0 -> Alignment.Start; 2 -> Alignment.End; else -> Alignment.CenterHorizontally }
     val boxAlign = when (lyricAlign) { 0 -> Alignment.CenterStart; 2 -> Alignment.CenterEnd; else -> Alignment.Center }
     val textAlign = when (lyricAlign) { 0 -> TextAlign.Start; 2 -> TextAlign.End; else -> TextAlign.Center }
+    val lyricFamily = when (lyricFont) {
+        1 -> FontFamily.Serif
+        else -> FontFamily.SansSerif
+    }
     // 横屏：高度矮，且刘海/挖孔多在左侧——靠左时给更大的左边距避开，
     // 同时压缩列表上下留白、隐藏底部提示，把纵向空间尽量还给歌词。
     val isLand = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
@@ -1635,6 +1604,8 @@ internal fun LyricsOverlay(
                                     sungColor = colors.primary,
                                     unsungColor = onCard.copy(alpha = 0.42f),
                                     textAlign = textAlign,
+                                    fontFamily = lyricFamily,
+                                    fontSize = lyricFontSize,
                                     modifier = seekModifier
                                 )
                             } else {
@@ -1642,7 +1613,8 @@ internal fun LyricsOverlay(
                                     line.text,
                                     // 统一字号，大小差异交给 scale，行高恒定 → 跟踪更稳
                                     color = lineColor,
-                                    fontSize = 20.sp,
+                                    fontSize = lyricFontSize.sp,
+                                    fontFamily = lyricFamily,
                                     fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
                                     textAlign = textAlign,
                                     modifier = seekModifier
@@ -1680,6 +1652,8 @@ private fun KaraokeLine(
     sungColor: Color,
     unsungColor: Color,
     textAlign: TextAlign = TextAlign.Center,
+    fontFamily: FontFamily = FontFamily.SansSerif,
+    fontSize: Float = 20f,
     modifier: Modifier = Modifier
 ) {
     val text = line.text
@@ -1742,7 +1716,8 @@ private fun KaraokeLine(
         modifier = modifier,
         style = androidx.compose.ui.text.TextStyle(
             brush = sweep,
-            fontSize = 20.sp,
+            fontFamily = fontFamily,
+            fontSize = fontSize.sp,
             fontWeight = FontWeight.Bold,
             textAlign = textAlign
         )

@@ -112,43 +112,8 @@ import kotlin.math.roundToInt
 internal fun SettingsPanel(
     state: PlayerUiState,
     colors: IrisColors,
-    onSelectFolder: (String?) -> Unit,
-    onThemeChange: (IrisTheme) -> Unit,
-    onModeChange: (IrisMode) -> Unit,
-    onRowSizeChange: (Int) -> Unit,
-    onRowCoverChange: (Boolean) -> Unit,
-    onRowArtistChange: (Boolean) -> Unit,
-    onRowPlaylistChange: (Boolean) -> Unit,
-    onSearchPersistentChange: (Boolean) -> Unit,
-    onLikedBadgeChange: (Boolean) -> Unit,
-    onLikedFilterChange: (Boolean) -> Unit,
-    onExplorationChange: (Float) -> Unit,
-    onCornerBaseChange: (Float) -> Unit,
-    onFontScaleChange: (Float) -> Unit,
-    onSurfaceStyleChange: (IrisSurfaceStyle) -> Unit,
-    onLayoutChange: (IrisLayout) -> Unit,
-    onGlassBlurChange: (Float) -> Unit,
-    onBgBlurChange: (Float) -> Unit,
-    onFadeChange: (Boolean) -> Unit,
-    onFadeMsChange: (Long) -> Unit,
-    onHapticsChange: (Boolean) -> Unit,
-    onShowRecsChange: (Boolean) -> Unit,
-    onJellyAnimChange: (Boolean) -> Unit,
-    onSilenceSkipChange: (Boolean) -> Unit,
-    onPhysicsFxChange: (Boolean) -> Unit,
-    onCoverLyricChange: (Boolean) -> Unit,
-    onKaraokeLyricChange: (Boolean) -> Unit,
-    onTopBarAutoHideChange: (Boolean) -> Unit,
-    onLyricAlignChange: (Int) -> Unit,
-    onBassHapticsChange: (Boolean) -> Unit,
-    onBassHapticsIntensityChange: (Int) -> Unit,
-    onBassHapticsPulseMsChange: (Int) -> Unit,
-    onBassHapticsSensitivityChange: (Int) -> Unit,
-    onBassHapticsLowCutoffChange: (Int) -> Unit,
-    onBassHapticsAdaptiveChange: (Boolean) -> Unit,
-    onCustomColorsChange: (Long, Long) -> Unit,
+    viewModel: com.iris.music.player.PlayerViewModel,
     onPickBackground: () -> Unit,
-    onClearBackground: () -> Unit,
     sheetDrag: SheetDragState,
     onDismiss: () -> Unit
 ) {
@@ -181,11 +146,11 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ModeSwatch("深色", state.mode == IrisMode.DARK, colors,
-                modifier = Modifier.weight(1f)) { onModeChange(IrisMode.DARK) }
+                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.DARK) }
             ModeSwatch("浅色", state.mode == IrisMode.LIGHT, colors,
-                modifier = Modifier.weight(1f)) { onModeChange(IrisMode.LIGHT) }
+                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.LIGHT) }
             ModeSwatch("自动", state.mode == IrisMode.AUTO, colors,
-                modifier = Modifier.weight(1f)) { onModeChange(IrisMode.AUTO) }
+                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.AUTO) }
         }
 
         Spacer(Modifier.height(14.dp))
@@ -202,7 +167,7 @@ internal fun SettingsPanel(
                             theme = theme,
                             selected = state.theme == theme,
                             colors = colors,
-                            onClick = { onThemeChange(theme) },
+                            onClick = { viewModel.setTheme(theme) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -232,7 +197,7 @@ internal fun SettingsPanel(
                     primaryArgb = state.customPrimaryArgb,
                     secondaryArgb = state.customSecondaryArgb,
                     colors = colors,
-                    onColorsChange = onCustomColorsChange
+                    onColorsChange = viewModel::setCustomColors
                 )
             }
         }
@@ -259,7 +224,7 @@ internal fun SettingsPanel(
                     state.surfaceStyle == style,
                     colors,
                     modifier = Modifier.weight(1f)
-                ) { onSurfaceStyleChange(style) }
+                ) { viewModel.setSurfaceStyle(style) }
             }
         }
 
@@ -289,7 +254,7 @@ internal fun SettingsPanel(
                 Spacer(Modifier.height(8.dp))
                 CompactSlider(
                     value = state.glassBlur,
-                    onValueChange = { onGlassBlurChange(it) },
+                    onValueChange = { viewModel.setGlassBlur(it) },
                     valueRange = GLASS_BLUR_MIN..GLASS_BLUR_MAX,
                     activeColor = colors.primary,
                     inactiveColor = colors.surface
@@ -316,7 +281,7 @@ internal fun SettingsPanel(
             Spacer(Modifier.height(8.dp))
             CompactSlider(
                 value = state.bgBlur,
-                onValueChange = { onBgBlurChange(it) },
+                onValueChange = { viewModel.setBgBlur(it) },
                 valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
                 activeColor = colors.primary,
                 inactiveColor = colors.surface
@@ -354,7 +319,7 @@ internal fun SettingsPanel(
                         .weight(1f).height(40.dp)
                         .clip(IrisShape.item)
                         .background(colors.surface)
-                        .clickable { Haptics.tap(); onClearBackground() },
+                        .clickable { Haptics.tap(); viewModel.setCustomBackground(null) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text("恢复封面", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.text)
@@ -380,7 +345,7 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(8.dp))
         CompactSlider(
             value = state.cornerBase,
-            onValueChange = { onCornerBaseChange(it) },
+            onValueChange = { viewModel.setCornerBase(it) },
             valueRange = 0f..44f,
             activeColor = colors.primary,
             inactiveColor = colors.surface
@@ -406,11 +371,20 @@ internal fun SettingsPanel(
         CompactSlider(
             value = pendingFontScale,
             onValueChange = { pendingFontScale = it },
-            onValueChangeFinished = { onFontScaleChange(pendingFontScale) },
+            onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) },
             valueRange = 0.85f..1.30f,
             activeColor = colors.primary,
             inactiveColor = colors.surface
         )
+        Spacer(Modifier.height(14.dp))
+
+        // ---- 界面字体 ----
+        Text("界面字体", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ModeSwatch("系统", state.uiFont == 0, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(0) }
+            ModeSwatch("衬线", state.uiFont == 1, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(1) }
+        }
         Spacer(Modifier.height(14.dp))
 
         // ---- 界面排布 ----
@@ -435,7 +409,7 @@ internal fun SettingsPanel(
                     selected = state.layout == layout,
                     colors = colors,
                     modifier = Modifier.weight(1f)
-                ) { onLayoutChange(layout) }
+                ) { viewModel.setLayout(layout) }
             }
         }
 
@@ -453,32 +427,32 @@ internal fun SettingsPanel(
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ModeSwatch("紧凑", state.rowSize == 0, colors,
-                        modifier = Modifier.weight(1f)) { onRowSizeChange(0) }
+                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(0) }
                     ModeSwatch("标准", state.rowSize == 1, colors,
-                        modifier = Modifier.weight(1f)) { onRowSizeChange(1) }
+                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(1) }
                     ModeSwatch("宽松", state.rowSize == 2, colors,
-                        modifier = Modifier.weight(1f)) { onRowSizeChange(2) }
+                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(2) }
                 }
 
                 Spacer(Modifier.height(14.dp))
 
-                SettingToggleRow("歌单行显示封面", state.showRowCover, colors) { onRowCoverChange(!state.showRowCover) }
+                SettingToggleRow("歌单行显示封面", state.showRowCover, colors) { viewModel.setShowRowCover(!state.showRowCover) }
 
                 Spacer(Modifier.height(10.dp))
                 SettingToggleRow("歌单行显示歌手", state.showRowArtist, colors,
-                    subtitle = "关闭后歌单行只显示歌名") { onRowArtistChange(!state.showRowArtist) }
+                    subtitle = "关闭后歌单行只显示歌名") { viewModel.setShowRowArtist(!state.showRowArtist) }
 
                 Spacer(Modifier.height(10.dp))
                 SettingToggleRow("歌单行显示所属歌单", state.showRowPlaylist, colors,
-                    subtitle = "关闭后不再显示歌曲所在的收藏歌单") { onRowPlaylistChange(!state.showRowPlaylist) }
+                    subtitle = "关闭后不再显示歌曲所在的收藏歌单") { viewModel.setShowRowPlaylist(!state.showRowPlaylist) }
 
                 Spacer(Modifier.height(10.dp))
                 SettingToggleRow("搜索框常驻", state.searchPersistent, colors,
-                    subtitle = "关闭后上栏收起搜索框，点标题展开，闲置几秒自动收起") { onSearchPersistentChange(!state.searchPersistent) }
+                    subtitle = "关闭后上栏收起搜索框，点标题展开，闲置几秒自动收起") { viewModel.setSearchPersistent(!state.searchPersistent) }
 
                 Spacer(Modifier.height(10.dp))
                 SettingToggleRow("歌单行显示点赞角标", state.showLikedBadge, colors,
-                    subtitle = "已点赞的歌曲在右下角显示爱心") { onLikedBadgeChange(!state.showLikedBadge) }
+                    subtitle = "已点赞的歌曲在右下角显示爱心") { viewModel.setShowLikedBadge(!state.showLikedBadge) }
             }
         }
 
@@ -494,7 +468,7 @@ internal fun SettingsPanel(
             state.fadeEnabled,
             colors,
             subtitle = "开头音量渐起、结尾渐落，暂停也不再突兀"
-        ) { onFadeChange(!state.fadeEnabled) }
+        ) { viewModel.setFadeEnabled(!state.fadeEnabled) }
 
         // 时长滑块只在开启时出现：关闭状态下它没有意义，摆着反而干扰
         AnimatedVisibility(
@@ -510,7 +484,7 @@ internal fun SettingsPanel(
                 Spacer(Modifier.height(4.dp))
                 CompactSlider(
                     value = state.fadeMs.toFloat(),
-                    onValueChange = { onFadeMsChange(it.toLong()) },
+                    onValueChange = { viewModel.setFadeMs(it.toLong()) },
                     valueRange = 500f..5000f,
                     activeColor = colors.primary,
                     inactiveColor = colors.surface
@@ -526,7 +500,7 @@ internal fun SettingsPanel(
             state.silenceSkip,
             colors,
             subtitle = "自动跳过歌曲开头和结尾没有声音的部分"
-        ) { onSilenceSkipChange(!state.silenceSkip) }
+        ) { viewModel.setSilenceSkip(!state.silenceSkip) }
 
         Spacer(Modifier.height(10.dp))
 
@@ -535,7 +509,7 @@ internal fun SettingsPanel(
             state.topBarAutoHide,
             colors,
             subtitle = "完全静止时上栏淡到全透明，碰一下即回"
-        ) { onTopBarAutoHideChange(!state.topBarAutoHide) }
+        ) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
 
         Spacer(Modifier.height(18.dp))
 
@@ -549,7 +523,7 @@ internal fun SettingsPanel(
             state.coverLyric,
             colors,
             subtitle = "封面左下角单行歌词，换句时模糊渐隐渐出"
-        ) { onCoverLyricChange(!state.coverLyric) }
+        ) { viewModel.setCoverLyric(!state.coverLyric) }
         Spacer(Modifier.height(14.dp))
 
         SettingToggleRow(
@@ -557,20 +531,42 @@ internal fun SettingsPanel(
             state.karaokeLyric,
             colors,
             subtitle = "全屏歌词当前行按进度扫光点亮（无词级时间时按句长估算）"
-        ) { onKaraokeLyricChange(!state.karaokeLyric) }
+        ) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
         Spacer(Modifier.height(14.dp))
         Column {
             Text("歌词对齐", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ModeSwatch("靠左", state.lyricAlign == 0, colors,
-                    modifier = Modifier.weight(1f)) { onLyricAlignChange(0) }
+                    modifier = Modifier.weight(1f)) { viewModel.setLyricAlign(0) }
                 ModeSwatch("居中", state.lyricAlign == 1, colors,
-                    modifier = Modifier.weight(1f)) { onLyricAlignChange(1) }
+                    modifier = Modifier.weight(1f)) { viewModel.setLyricAlign(1) }
                 ModeSwatch("靠右", state.lyricAlign == 2, colors,
-                    modifier = Modifier.weight(1f)) { onLyricAlignChange(2) }
+                    modifier = Modifier.weight(1f)) { viewModel.setLyricAlign(2) }
             }
         }
+        Spacer(Modifier.height(14.dp))
+
+        // ---- 歌词字体 ----
+        Column {
+            Text("歌词字体", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModeSwatch("系统", state.lyricFont == 0, colors, modifier = Modifier.weight(1f)) { viewModel.setLyricFont(0) }
+                ModeSwatch("衬线", state.lyricFont == 1, colors, modifier = Modifier.weight(1f)) { viewModel.setLyricFont(1) }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+
+        // ---- 歌词字号 ----
+        Text("歌词字号 · ${state.lyricFontSize.toInt()}sp", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        CompactSlider(
+            value = state.lyricFontSize,
+            onValueChange = { viewModel.setLyricFontSize(it) },
+            valueRange = 14f..32f,
+            activeColor = colors.primary,
+            inactiveColor = colors.surface
+        )
         Spacer(Modifier.height(14.dp))
 
         // ---- 悬浮歌词 ----
@@ -589,7 +585,7 @@ internal fun SettingsPanel(
             state.hapticsEnabled,
             colors,
             subtitle = "按键、切歌、拖动滚动条时轻微震动"
-        ) { onHapticsChange(!state.hapticsEnabled) }
+        ) { viewModel.setHapticsEnabled(!state.hapticsEnabled) }
 
         Spacer(Modifier.height(10.dp))
 
@@ -599,7 +595,7 @@ internal fun SettingsPanel(
             state.tiltSpectrum || state.coverShake,
             colors,
             subtitle = "倾斜频谱 + 摇动封面，传感器驱动"
-        ) { onPhysicsFxChange(!(state.tiltSpectrum || state.coverShake)) }
+        ) { viewModel.setPhysicsFx(!(state.tiltSpectrum || state.coverShake)) }
 
         Spacer(Modifier.height(10.dp))
 
@@ -609,7 +605,7 @@ internal fun SettingsPanel(
             state.jellyAnim,
             colors,
             subtitle = "全局弹性动画：按钮、开关、卡片回弹带果冻感"
-        ) { onJellyAnimChange(!state.jellyAnim) }
+        ) { viewModel.setJellyAnim(!state.jellyAnim) }
 
         Spacer(Modifier.height(10.dp))
 
@@ -619,7 +615,7 @@ internal fun SettingsPanel(
             state.bassHaptics,
             colors,
             subtitle = "跟随低频节奏轻微震动，幅度随鼓点强弱变化"
-        ) { onBassHapticsChange(!state.bassHaptics) }
+        ) { viewModel.setBassHaptics(!state.bassHaptics) }
 
         // 强度档位只在开启时出现（同渐变时长的做法）
         AnimatedVisibility(
@@ -632,11 +628,11 @@ internal fun SettingsPanel(
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ModeSwatch("轻点", state.bassHapticsIntensity == 0, colors,
-                        modifier = Modifier.weight(1f)) { onBassHapticsIntensityChange(0) }
+                        modifier = Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(0) }
                     ModeSwatch("标准", state.bassHapticsIntensity == 1, colors,
-                        modifier = Modifier.weight(1f)) { onBassHapticsIntensityChange(1) }
+                        modifier = Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(1) }
                     ModeSwatch("重击", state.bassHapticsIntensity == 2, colors,
-                        modifier = Modifier.weight(1f)) { onBassHapticsIntensityChange(2) }
+                        modifier = Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(2) }
                 }
 
                 Spacer(Modifier.height(10.dp))
@@ -648,7 +644,7 @@ internal fun SettingsPanel(
                     state.bassHapticsAdaptive,
                     colors,
                     subtitle = "强度随鼓点力度、时长随鼓点长短自动变化"
-                ) { onBassHapticsAdaptiveChange(!state.bassHapticsAdaptive) }
+                ) { viewModel.setBassHapticsAdaptive(!state.bassHapticsAdaptive) }
 
                 // 单次震动时长仅在「自适应」关闭时显示（自适应时由鼓点时长接管）
                 AnimatedVisibility(
@@ -667,15 +663,15 @@ internal fun SettingsPanel(
                             val dur = state.bassHapticsPulseMs
                             ModeSwatch("短", dur <= 6, colors,
                                 modifier = Modifier.weight(1f)) {
-                                onBassHapticsPulseMsChange(4); BassHaptics.preview(state.bassHapticsIntensity)
+                                viewModel.setBassHapticsPulseMs(4); BassHaptics.preview(state.bassHapticsIntensity)
                             }
                             ModeSwatch("中", dur > 6 && dur < 15, colors,
                                 modifier = Modifier.weight(1f)) {
-                                onBassHapticsPulseMsChange(10); BassHaptics.preview(state.bassHapticsIntensity)
+                                viewModel.setBassHapticsPulseMs(10); BassHaptics.preview(state.bassHapticsIntensity)
                             }
                             ModeSwatch("长", dur >= 15, colors,
                                 modifier = Modifier.weight(1f)) {
-                                onBassHapticsPulseMsChange(18); BassHaptics.preview(state.bassHapticsIntensity)
+                                viewModel.setBassHapticsPulseMs(18); BassHaptics.preview(state.bassHapticsIntensity)
                             }
                         }
                     }
@@ -689,11 +685,11 @@ internal fun SettingsPanel(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val sens = state.bassHapticsSensitivity
                     ModeSwatch("低", sens <= 3, colors,
-                        modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(3) }
+                        modifier = Modifier.weight(1f)) { viewModel.setBassHapticsSensitivity(3) }
                     ModeSwatch("中", sens > 3 && sens < 7, colors,
-                        modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(5) }
+                        modifier = Modifier.weight(1f)) { viewModel.setBassHapticsSensitivity(5) }
                     ModeSwatch("高", sens >= 7, colors,
-                        modifier = Modifier.weight(1f)) { onBassHapticsSensitivityChange(8) }
+                        modifier = Modifier.weight(1f)) { viewModel.setBassHapticsSensitivity(8) }
                 }
 
                 Spacer(Modifier.height(12.dp))
@@ -712,7 +708,7 @@ internal fun SettingsPanel(
                     onValueChange = {
                         // 120–320Hz，步进 10Hz
                         val hz = (120 + (it * 200f)).toInt().let { v -> (v / 10) * 10 }.coerceIn(120, 320)
-                        onBassHapticsLowCutoffChange(hz)
+                        viewModel.setBassHapticsLowCutoff(hz)
                     },
                     valueRange = 0f..1f,
                     activeColor = colors.primary,
@@ -741,7 +737,7 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(8.dp))
         CompactSlider(
             value = state.exploration,
-            onValueChange = { onExplorationChange(it) },
+            onValueChange = { viewModel.setExploration(it) },
             valueRange = 0f..1f,
             activeColor = colors.primary,
             inactiveColor = colors.surface
@@ -753,7 +749,7 @@ internal fun SettingsPanel(
             state.showRecommendations,
             colors,
             subtitle = "关闭后歌单页只显示歌曲列表"
-        ) { onShowRecsChange(!state.showRecommendations) }
+        ) { viewModel.setShowRecommendations(!state.showRecommendations) }
 
         Spacer(Modifier.height(18.dp))
 
@@ -772,15 +768,15 @@ internal fun SettingsPanel(
         ) {
             item {
                 FolderRow("全部音乐", "${state.folders.sumOf { it.songCount }} 首",
-                    state.selectedFolders.isEmpty() && !state.onlyLiked, colors) { onSelectFolder(null); onLikedFilterChange(false) }
+                    state.selectedFolders.isEmpty() && !state.onlyLiked, colors) { viewModel.clearFolders(); viewModel.setOnlyLiked(false) }
             }
             item {
                 FolderRow("我的收藏", "${state.likedSongIds.size} 首",
-                    state.onlyLiked, colors) { onLikedFilterChange(true) }
+                    state.onlyLiked, colors) { viewModel.setOnlyLiked(true) }
             }
             itemsIndexed(state.folders, key = { _, f -> "folder-${f.path}" }) { _, f ->
                 FolderRow(f.name, "${f.songCount} 首",
-                    f.path in state.selectedFolders, colors) { onSelectFolder(f.path) }
+                    f.path in state.selectedFolders, colors) { viewModel.toggleFolder(f.path) }
             }
         }
 

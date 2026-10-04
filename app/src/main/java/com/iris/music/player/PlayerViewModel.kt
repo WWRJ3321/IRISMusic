@@ -137,6 +137,12 @@ data class PlayerUiState(
     val karaokeLyric: Boolean = true,
     /** 全屏歌词对齐：0=靠左 1=居中 2=靠右 */
     val lyricAlign: Int = 1,
+    /** 歌词字体：0=系统 1=衬线 */
+    val lyricFont: Int = 0,
+    /** 歌词字号 (sp) */
+    val lyricFontSize: Float = 20f,
+    /** 界面字体：0=系统无衬线 1=衬线 */
+    val uiFont: Int = 0,
     /** 上栏（卡片模式顶栏）完全静止时是否淡到完全透明（关=停在半透明 30%） */
     val topBarAutoHide: Boolean = false,
     /** 全局圆角基准值（dp），驱动所有卡片/列表/徽章的圆角 */
@@ -231,6 +237,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             coverLyric = prefs.getBoolean(KEY_COVER_LYRIC, false),
             karaokeLyric = prefs.getBoolean(KEY_KARAOKE_LYRIC, true),
             lyricAlign = prefs.getInt(KEY_LYRIC_ALIGN, 1).coerceIn(0, 2),
+            lyricFont = if (prefs.getInt(KEY_LYRIC_FONT, 0) == 1) 1 else 0,
+            lyricFontSize = prefs.getFloat(KEY_LYRIC_FONT_SIZE, 20f).coerceIn(14f, 32f),
+            uiFont = if (prefs.getInt(KEY_UI_FONT, 0) == 1) 1 else 0,
             topBarAutoHide = prefs.getBoolean(KEY_TOPBAR_AUTOHIDE, false),
             cornerBase = prefs.getFloat(KEY_CORNER_BASE, 38f),
             fontScale = prefs.getFloat(KEY_FONT_SCALE, 1f).coerceIn(0.85f, 1.30f),
@@ -809,6 +818,24 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val v = scale.coerceIn(0.85f, 1.30f)
         prefs.edit().putFloat(KEY_FONT_SCALE, v).apply()
         _state.value = _state.value.copy(fontScale = v)
+    }
+
+    fun setUiFont(font: Int) {
+        val v = if (font == 1) 1 else 0
+        prefs.edit().putInt(KEY_UI_FONT, v).apply()
+        _state.value = _state.value.copy(uiFont = v)
+    }
+
+    fun setLyricFont(font: Int) {
+        val v = font.coerceIn(0, 1)
+        prefs.edit().putInt(KEY_LYRIC_FONT, v).apply()
+        _state.value = _state.value.copy(lyricFont = v)
+    }
+
+    fun setLyricFontSize(size: Float) {
+        val v = size.coerceIn(14f, 32f)
+        prefs.edit().putFloat(KEY_LYRIC_FONT_SIZE, v).apply()
+        _state.value = _state.value.copy(lyricFontSize = v)
     }
 
     /**
@@ -1554,6 +1581,9 @@ private const val KEY_THEME = "theme"
         const val KEY_COVER_LYRIC = "cover_lyric"
         const val KEY_KARAOKE_LYRIC = "karaoke_lyric"
         const val KEY_LYRIC_ALIGN = "lyric_align"
+        const val KEY_LYRIC_FONT = "lyric_font"
+        const val KEY_LYRIC_FONT_SIZE = "lyric_font_size"
+        const val KEY_UI_FONT = "ui_font"
         const val KEY_TOPBAR_AUTOHIDE = "topbar_autohide"
         const val KEY_CORNER_BASE = "corner_base"
         const val KEY_FONT_SCALE = "font_scale"

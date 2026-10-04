@@ -30,7 +30,14 @@
 
 ## 4. 字体
 
-- 纯 SansSerif，**重字重对比**：标题 Black / ExtraBold（34 / 22sp，标题负字距 -0.5），正文 Medium 14sp，小标签 Bold 11sp + 正字距 1sp。层级靠字重与字号拉开，不靠花哨字体。
+- **字族可切换**（v4.5.1 起）：
+  - 界面字体 `uiFont`：系统（SansSerif）/ 衬线（Noto Serif CJK）。经 `Theme.kt` 的 `LocalTextStyle` 单点下发，全 App UI 文字同步生效。
+  - 歌词字体 `lyricFont`：系统 / 衬线，与界面字体各自独立。
+  - 歌词字号 `lyricFontSize`：14–32sp 可调（默认 20），作用于全屏歌词所有行含逐字流光。
+- **重字重对比**（不随字族改变）：标题 Black / ExtraBold（34 / 22sp，标题负字距 -0.5），正文 Medium 14sp，小标签 Bold 11sp + 正字距 1sp。层级靠字重与字号拉开。
+- 另有全局字号缩放 `fontScale`（0.85–1.30），走 `LocalDensity` 注入。
+- ⚠️ 不做「等宽 / 无衬线」选项：Android 上 `FontFamily.Monospace` 对中文回退到系统黑体，与 SansSerif 渲染完全相同，是无效摆设。中文只有 Serif 有真实差异。
+- ⚠️ 不内置第三方字体：曾试内置霞鹜文楷子集，APK 从 2.4MB 涨到 6.7MB，不划算。只用系统自带字族。
 
 ## 5. 圆角 / 形状
 

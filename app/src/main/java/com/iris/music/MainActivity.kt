@@ -52,7 +52,8 @@ class MainActivity : ComponentActivity() {
                 mode = state.mode,
                 cornerBase = state.cornerBase,
                 surfaceStyle = state.surfaceStyle,
-                glassBlur = state.glassBlur
+                glassBlur = state.glassBlur,
+                uiFont = state.uiFont
             ) {
                 MainScreen(
                     state = state,
@@ -63,14 +64,9 @@ class MainActivity : ComponentActivity() {
                     onSeek = viewModel::seekTo,
                     onSelect = viewModel::playAt,
                     onSearch = viewModel::updateSearch,
-                    onSelectFolder = { path -> if (path == null) viewModel.clearFolders() else viewModel.toggleFolder(path) },
                     onToggleLike = viewModel::toggleLike,
                     onCyclePlayMode = viewModel::cyclePlayMode,
-                    onToggleSettings = viewModel::toggleSettings,
-                    onThemeChange = viewModel::setTheme,
-                    onModeChange = viewModel::setMode,
-                    onRowSizeChange = viewModel::setRowSize,
-                    onExplorationChange = viewModel::setExploration
+                    onToggleSettings = viewModel::toggleSettings
                 )
             }
             }

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IRISMusic 横屏播放页 · 定稿方案</title>
+<style>
+  :root{
+    --bg:#0f0f14; --card:#1e1e26; --card2:#26262f;
+    --accent:#7ce0c8; --txt:#f2f2f5; --sub:#9a9aa8; --line:#33333f;
+    --good:#6ad0a0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+  body{background:var(--bg);color:var(--txt);padding:24px 16px 60px;line-height:1.6}
+  h1{font-size:22px;font-weight:800;margin-bottom:6px}
+  h2{font-size:16px;font-weight:700;margin:34px 0 12px;color:var(--accent);border-left:3px solid var(--accent);padding-left:10px}
+  .lead{color:var(--sub);font-size:13px;margin-bottom:8px}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:20px;margin-bottom:8px;font-weight:700;background:rgba(106,208,160,.18);color:var(--good)}
+  .caption{font-size:12px;color:var(--sub);margin:8px 2px 0}
+
+  .phone{position:relative;width:100%;max-width:640px;aspect-ratio:16/9;background:var(--bg);
+    border:2px solid var(--line);border-radius:16px;overflow:hidden;margin-top:4px}
+  .notch{position:absolute;left:8px;top:50%;transform:translateY(-50%);width:12px;height:44%;border-radius:8px;background:#000;opacity:.5;z-index:9}
+
+  .stage{position:absolute;left:44px;right:22px;top:16px;bottom:16px;display:flex;gap:28px;align-items:center}
+  .coverStage{position:relative;height:72%;aspect-ratio:1/1;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+  /* 横向布局专用：更宽的封面舞台，主封面居中，两侧露邻曲窄边，不侵入控制区 */
+  .carouselStage{position:relative;height:72%;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+  .carouselStage .frame{position:relative;height:100%;aspect-ratio:1/1}
+  .cv{position:absolute;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--sub);
+    background:linear-gradient(135deg,#3a3a5c,#5c3a4a)}
+  .cv.main{inset:0;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.45)}
+  .cv.side{width:64%;aspect-ratio:1/1;opacity:.32;z-index:1;background:linear-gradient(135deg,#2c2c44,#442c38);top:50%;transform:translateY(-50%)}
+  .cv.sideL{left:0}
+  .cv.sideR{right:0}
+  .cv.stackBack{inset:0;transform:translate(14%,8%) scale(.9);opacity:.4;z-index:2;background:linear-gradient(135deg,#2c2c44,#442c38)}
+  .cv.stackBack2{inset:0;transform:translate(26%,15%) scale(.82);opacity:.22;z-index:1;background:linear-gradient(135deg,#26263a,#3a2630)}
+
+  .ctrl{flex:1;display:flex;flex-direction:column;justify-content:center;gap:6px;min-width:0;position:relative;max-height:56%;align-self:center}
+  .ttl{font-size:16px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .art{font-size:12px;color:var(--accent)}
+  .bar{height:6px;border-radius:6px;background:var(--line);position:relative}
+  .bar::after{content:"";position:absolute;left:0;top:0;height:100%;width:38%;background:var(--accent);border-radius:6px}
+  .time{display:flex;justify-content:space-between;font-size:10px;color:var(--sub);margin-top:5px}
+  .btnrow{display:flex;align-items:center;justify-content:space-evenly}
+  .cbtn{width:30px;height:30px;border-radius:50%;background:var(--card2);display:flex;align-items:center;justify-content:center;font-size:13px}
+  .cbtn.big{width:40px;height:40px;background:var(--accent);color:#111;font-size:16px}
+  .mini{display:flex;gap:9px;justify-content:center}
+  .mchip{width:26px;height:26px;border-radius:50%;background:var(--card2);font-size:12px;display:flex;align-items:center;justify-content:center;color:var(--sub)}
+  .fuzz{position:absolute;right:4px;top:-2px;font-size:10px;color:var(--accent);opacity:.7}
+  .arrow{position:absolute;font-size:16px;color:var(--sub);z-index:6}
+
+  .note{background:var(--card);border-radius:12px;padding:14px 16px;margin-top:20px;font-size:13px;color:var(--sub)}
+  .note b{color:var(--txt)}
+  .note ul{margin:8px 0 0 18px}
+  .note li{margin:5px 0}
+  .key{color:var(--accent);font-weight:700}
+  code{background:#000;padding:1px 5px;border-radius:4px;color:#bfeee0;font-size:12px}
+</style>
+</head>
+<body>
+
+<h1>IRISMusic 横屏播放页 · 定稿</h1>
+<p class="lead">统一：三种播放布局横屏都是「左封面区 + 右控制区」。主菜单（列表页）不动。<br>差异全在左侧封面区的形态与手势；右侧控制区一致，切歌时资料模糊过渡。</p>
+
+<h2>① 正常布局（LIST 的播放页）· 单封面</h2>
+<span class="tag">左单封面 · 右控制</span>
+<div class="phone">
+  <div class="notch"></div>
+  <div class="stage">
+    <div class="coverStage">
+      <div class="cv main">封面</div>
+    </div>
+    <div class="ctrl">
+      <div><div class="ttl">歌曲标题</div><div class="art">艺术家</div></div>
+      <div><div class="bar"></div><div class="time"><span>1:24</span><span>3:57</span></div></div>
+      <div class="btnrow"><div class="cbtn">⏮</div><div class="cbtn big">⏸</div><div class="cbtn">⏭</div></div>
+      <div class="mini"><div class="mchip">🔀</div><div class="mchip">♡</div><div class="mchip">⏱</div><div class="mchip">🎚</div><div class="mchip" style="width:auto;padding:0 6px;border-radius:7px">MP3</div></div>
+    </div>
+  </div>
+</div>
+<p class="caption">单张封面，无邻曲。按屏高定尺寸，控制区垂直居中。</p>
+
+<h2>② 横向布局（CAROUSEL）· 封面左右露半透邻曲</h2>
+<span class="tag">左右各露一张半透封面（上一曲 / 下一曲）· 左右滑翻歌</span>
+<div class="phone">
+  <div class="notch"></div>
+  <div class="stage">
+    <div class="carouselStage" style="width:44%">
+      <div class="cv side sideL">上一曲</div>
+      <div class="cv side sideR">下一曲</div>
+      <div class="frame"><div class="cv main">当前封面</div></div>
+    </div>
+    <div class="ctrl">
+      <div class="fuzz">切歌时模糊过渡</div>
+      <div><div class="ttl">当前歌曲</div><div class="art">艺术家</div></div>
+      <div><div class="bar"></div><div class="time"><span>0:42</span><span>4:10</span></div></div>
+      <div class="btnrow"><div class="cbtn">⏮</div><div class="cbtn big">⏸</div><div class="cbtn">⏭</div></div>
+      <div class="mini"><div class="mchip">🔀</div><div class="mchip">♡</div><div class="mchip">⏱</div><div class="mchip">🎚</div></div>
+    </div>
+  </div>
+</div>
+<p class="caption">封面区左右各露一张半透邻曲封面（左=上一曲，右=下一曲），在封面区左右滑动翻歌。切换瞬间右侧标题/艺术家/进度做模糊淡变过渡。</p>
+
+<h2>③ 堆叠布局（STACK）· 下一曲堆在右后方</h2>
+<span class="tag">下一曲封面堆右后方 · 划走切歌（上一曲已被划出去）</span>
+<div class="phone">
+  <div class="notch"></div>
+  <div class="stage">
+    <div class="coverStage">
+      <div class="cv stackBack2">下下曲</div>
+      <div class="cv stackBack">下一曲</div>
+      <div class="cv main">当前封面</div>
+      <div class="arrow" style="right:-6%;top:50%">↗</div>
+    </div>
+    <div class="ctrl">
+      <div class="fuzz">切歌时模糊过渡</div>
+      <div><div class="ttl">当前歌曲</div><div class="art">艺术家</div></div>
+      <div><div class="bar"></div><div class="time"><span>2:05</span><span>3:33</span></div></div>
+      <div class="btnrow"><div class="cbtn">⏮</div><div class="cbtn big">⏸</div><div class="cbtn">⏭</div></div>
+      <div class="mini"><div class="mchip">🔀</div><div class="mchip">♡</div><div class="mchip">⏱</div><div class="mchip">🎚</div></div>
+    </div>
+  </div>
+</div>
+<p class="caption">当前封面在前，下一曲、下下曲往右后方缩小堆叠。把当前封面划走（右上抛出）切到下一曲，上一曲已被划出去不再显示。切换时右侧资料模糊淡变。</p>
+
+<div class="note">
+  <b>实现要点</b>
+  <ul>
+    <li><span class="key">判定横屏</span>：<code>BoxWithConstraints { maxWidth &gt; maxHeight }</code>，随分屏/折叠屏实时生效。</li>
+    <li><span class="key">重构核心</span>：横屏时封面区与控制区分离。原来 CAROUSEL/STACK 是「整张 PlayerCard 翻页/堆叠」，改为「只有封面在翻/堆，控制区固定右侧」。</li>
+    <li><span class="key">CAROUSEL 封面</span>：封面区内嵌一个只放封面的 HorizontalPager，contentPadding 露出左右邻曲，pager 翻页驱动 onSelect 切歌。</li>
+    <li><span class="key">STACK 封面</span>：封面区内做封面堆叠 + 划走手势（复用现有 DeckStack 的抛出/回弹逻辑，只是内容从整卡缩成封面）。</li>
+    <li><span class="key">资料模糊过渡</span>：右侧标题/艺术家在 currentIndex 变化时走 alpha+blur 淡变（类似封面歌词的换词动画）。</li>
+    <li><span class="key">竖屏不变</span>：竖屏仍是现在的整卡翻页/堆叠，只有横屏走新布局。</li>
+    <li><span class="key">改动范围</span>：SongDeck.kt（DeckCarousel/DeckStack/DeckCard 横屏分支）+ PlayerCard.kt（横屏 Row 布局）。数据层、切歌逻辑、手势判定复用。</li>
+  </ul>
+  <b style="display:block;margin-top:12px">确认点</b>
+  <ul>
+    <li>三种封面形态（单张 / 左右露邻 / 右后堆叠）对不对？</li>
+    <li>翻歌手势：CAROUSEL 左右滑、STACK 右上划走 —— 这样 OK？</li>
+    <li>封面占屏高：满高还是留一点上下边距（如 90%）？</li>
+  </ul>
+</div>
+
+</body>
+</html>

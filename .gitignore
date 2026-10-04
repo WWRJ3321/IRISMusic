@@ -1,34 +1,45 @@
-# 构建产物
+# ===== 构建产物 =====
 app/build/
 build/
 .gradle/
 local.properties
 
-# 签名密钥与凭据：绝不入库
+# ===== 签名密钥与凭据：绝不入库 =====
 keystore/
 keystore.properties
 *.jks
 *.keystore
 
-# 反编译临时目录
-_recover/
+# ===== 历史产物归档：体积巨大，只留本地 =====
+# hist/ 内有 600MB+ 历史 zip 与各版本 APK，不进 git
+hist/
 
-# APK 产物（hist/ 里的历史版本保留）
+# ===== APK / 打包产物 =====
 *.apk
-!hist/*.apk
+*.aab
+*.apks
 
-# IDE
+# ===== 临时与反编译目录 =====
+_recover/
+*_temp/
+*.bak
+*.bak.*
+*.orig
+*.rej
+
+# ===== IDE =====
 .idea/
 *.iml
 .DS_Store
+*.swp
 
-# 工作区备份目录
+# ===== 工作区备份 =====
 .backup/
 
-# 本地开发笔记（仅自用，不上 GitHub）
+# ===== 本地开发笔记与凭据（仅自用，不上 GitHub）=====
 docs/DEVNOTES.md
-
-# 本地笔记
 docs/rules_note.md
-docs/rules_note.md.bak
-docs/改进.md
+
+# ===== 宣传视频素材：体积大，仅本地 =====
+publicity/*.mp4
+publicity/*.mov
