@@ -113,14 +113,13 @@ keystore/            签名密钥（不入 git）
 
 | 路径 | 原因 |
 |---|---|
-| `hist/` | 626MB 历史归档，进 git 会永久膨胀仓库 |
-| `keystore/`、`keystore.properties` | 签名凭据，泄露即失去发布控制权 |
+| `hist/` | 体积巨大的历史归档，进 git 会永久膨胀仓库 |
+| `keystore/`、`keystore.properties` | 签名密钥，绝不入库 |
 | `local.properties` | 机器相关的 SDK 路径 |
-| `docs/rules_note.md` | 含 GitHub Token |
-| `publicity/*.mp4` | 13MB 视频 |
+| `docs/rules_note.md`、`docs/DEVNOTES.md` | 本地私有笔记 |
+| `publicity/*.mp4` | 宣传视频素材 |
 
-> ⚠️ `rules_note.md` 里的 Token 曾处于可提交状态，现已排除。
-> **建议去 GitHub 吊销并重新签发该 Token。**
+> 提交前自查一次大文件与凭据：`git diff --cached --name-only | grep -iE 'apk|zip|mp4|mp3|jks'` 应为空。
 
 ## 5. 历史教训（真实事故）
 
@@ -161,8 +160,7 @@ git 里最新只有 3.9.1，GitHub 最新只有 4.5.0 —— 源码彻底丢失�
 
 | 优先级 | 事项 | 说明 |
 |---|---|---|
-| P0 | **GitHub 同步滞后** | 远端最新 v4.5.0，本地已 v4.5.1，需推送 + 打 tag |
-| P0 | **Token 疑似暴露** | `rules_note.md` 的 GitHub Token 建议吊销重签 |
+| P0 | **GitHub 同步** | 发布后确认 `main` 与 tag 已更新（本次 v4.5.1 已同步） |
 | — | ~~`SettingsPanel` 44 个参数~~ | **已完成**：面板直接持有 `viewModel`，签名从 44 个回调压到 6 个参数。以后加设置项只改 `SettingsScreen.kt` 一处。 |
 | P1 | 无自动化测试 | `app/src/test` 与 `androidTest` 均不存在，24K 行零测试。建议先给 `LyricParser`（776 行、逻辑最纯、历史 bug 最多）补单测 |
 | P2 | `MainScreen.kt` 2073 行 | `LibraryPage` 单函数 597 行、`MainScreen` 453 行。建议按四种排布拆文件 |
