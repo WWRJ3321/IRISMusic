@@ -161,7 +161,13 @@ fun PlayerCard(
 
     Box(
         modifier = modifier
-            .fillMaxWidth()
+            // 横屏窄化：内容不再拉满整个横屏宽度，统一封顶后由外层 Column 居中。
+            // 竖屏保持 fillMaxWidth 原样（竖屏宽度本就小于封顶值，但 tablet 竖屏
+            // 可能超过，所以只在横屏生效）。
+            .then(
+                if (isLandscape) Modifier.widthIn(max = LANDSCAPE_PLAYER_MAX_WIDTH)
+                else Modifier.fillMaxWidth()
+            )
             .irisSurface(GlassLevel.PLAYER, colors, IrisShape.card, solid = cardColor)
             .padding(horizontal = 18.dp, vertical = 18.dp)
     ) {
@@ -659,6 +665,24 @@ private fun PressableIconButton(
  * 所以这个尺寸必须是一处定义、多处引用，不能各写一遍 38.dp。
  */
 private val MINI_BTN_SIZE = 38.dp
+
+/**
+ * 横屏时播放界面（含上栏）的统一宽度封顶。
+ *
+ * 三个布局共用这一个值：LIST 播放页的卡片、CAROUSEL/STACK 横屏的
+ * LandscapeDeckPlayer、卡片模式顶栏 DeckTopBar——封顶相同、都水平居中，
+ * 上栏与播放卡片左右边缘严格对齐。宽度只在这一层封顶，外层容器不再
+ * 二次封顶（曾双层套娃导致 LIST 卡片比另外两个布局窄一圈）。
+ * 唱片墙（COMPACT）明确排除——它的设计就是铺满整屏。
+ */
+internal val LANDSCAPE_PLAYER_MAX_WIDTH = 680.dp
+
+/**
+ * 上栏横屏封顶的补偿值：DeckTopBar / LIST 上栏的玻璃都在 padding(horizontal=22)
+ * 之后绘制，玻璃可见宽 = 封顶 - 44。给上栏封顶 680+44，玻璃才和 680 宽的
+ * 播放卡片左右缘严格对齐。
+ */
+internal val LANDSCAPE_BAR_MAX_WIDTH = 724.dp
 
 /**
  * 副控制按钮未激活时的图标不透明度。
@@ -1313,16 +1337,26 @@ internal fun LandscapeDeckPlayer(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
     ) {
+        // 横屏窄化：整行封顶 LANDSCAPE_PLAYER_MAX_WIDTH 并居中（本组件只在横屏
+        // 卡片模式使用）。唱片墙不经过这里，不受影响。
+        // 背板与 LIST 播放页的 PlayerCard 完全同款（GlassLevel.PLAYER 玻璃 +
+        // 同圆角同底色）——此前这里只有一排裸控件悬在背景上，没有卡片包裹，
+        // 三个布局里只有它有玻璃背板，观感断裂。
         Row(
-            Modifier.fillMaxSize(),
+            Modifier
+                .fillMaxHeight()
+                .widthIn(max = LANDSCAPE_PLAYER_MAX_WIDTH)
+                .irisSurface(GlassLevel.PLAYER, colors, IrisShape.card, solid = cardColor)
+                .padding(horizontal = 18.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // 左：封面舞台（翻页/堆叠由外部提供）。
-            // 占满可用高度，宽度由 coverAspect 按高度算出——封面是正方形，
-            // 舞台宽度就该等于高度（加上邻曲露头的余量），不能吃满剩余宽度。
+            // 宽度由 coverAspect 按高度算出——封面是正方形，舞台宽度就该等于
+            // 高度（加上邻曲露头的余量），不能吃满剩余宽度。
             Box(
                 Modifier
                     .fillMaxHeight()

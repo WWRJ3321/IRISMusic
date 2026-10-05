@@ -360,8 +360,16 @@ val scrollerVisible by remember {
         ) {
             Spacer(Modifier.weight(0.335f))
             Box(Modifier.weight(0.385f)) {
-                // 推荐区占据 LazyColumn 的 item 0，因此队列索引需要减去该偏移
-                val headerOffset = if (state.allSongs.isNotEmpty() && state.searchQuery.isBlank()) 1 else 0
+                // 推荐区占据 LazyColumn 的 item 0，因此队列索引需要减去该偏移。
+                // 条件必须与 LibraryPage 里推荐区 item 的渲染条件逐字一致
+                // （recPool 非空 && 无搜索词 && showRecommendations）——
+                // 曾因漏掉 showRecommendations：关掉推荐后列表少一个 item 而这里仍按
+                // 有算，侧边条整体错位一格（气泡显示上一首、定位跳到下一首）。
+                val recPoolNotEmpty = if (state.selectedFolders.isEmpty())
+                    state.allSongs.isNotEmpty()
+                else state.allSongs.any { it.folderPath in state.selectedFolders }
+                val headerOffset =
+                    if (recPoolNotEmpty && state.searchQuery.isBlank() && state.showRecommendations) 1 else 0
                 FastScroller(
                     listState = libraryListState,
                     colors = colors,
@@ -962,6 +970,13 @@ private fun LibraryPage(
         Column(
             Modifier
                 .fillMaxWidth()
+                // 横屏窄化：上栏玻璃与横屏播放卡片同宽（LANDSCAPE_BAR_MAX_WIDTH
+                // 已含玻璃外 22dp padding 的补偿）；竖屏 fillMaxWidth 原样。
+                .then(
+                    if (LocalConfiguration.current.orientation ==
+                        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                    ) Modifier.widthIn(max = LANDSCAPE_BAR_MAX_WIDTH) else Modifier
+                )
                 .align(Alignment.TopCenter)
                 .offset(y = with(density) { statusBarHeightDp.toDp() + barTopGap })
                 .onSizeChanged { barHeight.value = it.height }
@@ -1227,6 +1242,9 @@ private fun PlayerPage(
 
     Box(Modifier.fillMaxSize()) {
         // 播放卡片：毛玻璃模糊源 / 歌词层的折射背板
+        // 横屏窄化只在 PlayerCard 内部单层封顶（LANDSCAPE_PLAYER_MAX_WIDTH），
+        // 外层不再封顶——双层套娃会把卡片压得比封顶值还窄一圈，
+        // 和 CAROUSEL/STACK 横屏的宽度对不齐。列本身水平居中即可。
         Column(
             Modifier
                 .fillMaxSize()
@@ -1262,7 +1280,10 @@ private fun PlayerPage(
                 liked = state.currentSong?.id in state.likedSongIds,
                 onClickArtwork = onClickArtwork,
                 colors = colors,
-                modifier = Modifier.fillMaxWidth(),
+                // 宽度完全交给 PlayerCard 内部决定（横屏封顶居中 / 竖屏铺满）。
+                // 这里绝不能传 fillMaxWidth——它在 widthIn(max) 之前设置
+                // minWidth=屏宽，封顶会被抵消，横屏卡片又变回整屏宽。
+                modifier = Modifier,
                 sleepTimerMs = state.sleepTimerMs,
                 sleepTimerEndMs = state.sleepTimerEndMs,
                 onOpenSleepTimer = onOpenSleepTimer,

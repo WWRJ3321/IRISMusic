@@ -51,3 +51,9 @@ docs/改进.md
 AGENTS.md
 Tools/
 design/*.html
+
+# 本地数据导出（含个人听歌历史与路径），绝不入库
+irismusic-default-data.json
+
+# 本地设计稿与宣传素材，仅本地
+publicity/

@@ -336,6 +336,15 @@ visible: Boolean = true,
         }
     }
 
+    /** 第一可见行可达的最大索引（LazyList 滚到底会钳制在这里）。
+     *  拖动目标必须先在 [0, max] 内钳制再换算回分数：若直接映射到 total-1，
+     *  滚到底部区间会被列表强制钳回，列表停在原地而滑块继续跟手指——读回
+     *  scrollProgress 时滑块从指尖位置回跳，即"拖过头再弹回来"。 */
+    fun currentMaxFirstIndex(): Int {
+        val info = listState.layoutInfo
+        return (info.totalItemsCount - info.visibleItemsInfo.size).coerceAtLeast(0)
+    }
+
     // 活跃态：滚动或拖动时展开，静止 1.1s 后自动收细
     val moving by remember { derivedStateOf { isDragging || listState.isScrollInProgress } }
     var active by remember { mutableStateOf(false) }
@@ -384,9 +393,14 @@ visible: Boolean = true,
         val span = trackH - thumbHpx
         val f = if (span > 1f) ((y - thumbHpx / 2f) / span).coerceIn(0f, 1f)
                 else (y / trackH).coerceIn(0f, 1f)
-        dragFraction = f
+        // 先把目标行钳到列表真正可达的范围（第一可见行最大 = total - 可见行数），
+        // 再把钳后的值写回 dragFraction：滑块与列表停在同一处。
+        // 若直通 f*(total-1) 映射到底，最后 1/14 行程列表已经滚不动、滑块却继续
+        // 跟手指，松手切回读回的 scrollProgress 时滑块从指尖位置弹回去。
+        val exact = (f * (total - 1)).coerceIn(0f, currentMaxFirstIndex().toFloat())
+        dragFraction = exact / (total - 1)
         // 跨行刻度震动（滑过同一行不重复）
-        val idx = (f * (total - 1)).toInt().coerceIn(0, total - 1)
+        val idx = exact.toInt().coerceIn(0, total - 1)
         if (idx != dragIndex) Haptics.tick()
         dragIndex = idx
     }

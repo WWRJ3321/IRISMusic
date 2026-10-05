@@ -222,7 +222,8 @@ fun SongDeck(
                         else Modifier
                     )
                     .statusBarsPadding()
-                    .navigationBarsPadding()
+                    .navigationBarsPadding(),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 DeckTopBar(
                     colors = colors,
@@ -233,7 +234,12 @@ fun SongDeck(
                     onOpenSettings = onOpenSettings,
                     onOpenPlaylists = onOpenPlaylists,
                     onReload = onReload,
-                    autoHide = state.topBarAutoHide
+                    autoHide = state.topBarAutoHide,
+                    // 横屏窄化：顶栏玻璃与下方播放卡片同宽（用补偿值抵消 padding 差，
+                    // 唱片墙分支不走这里）
+                    modifier = if (LocalConfiguration.current.orientation ==
+                        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                    ) Modifier.widthIn(max = LANDSCAPE_BAR_MAX_WIDTH) else Modifier
                 )
 
                 Box(

@@ -210,6 +210,12 @@ data class PlayerUiState(
 
 class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
+    init {
+        // 必须在下面读 prefs 之前：新装首启把内置默认设置先灌进 iris_prefs，
+        // 否则这一批 readXxx() 读到的还是代码硬编码值，首帧会闪一下旧样式。
+        DataTransfer.seedDefaultSettingsIfFirstRun(app)
+    }
+
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private val _state = MutableStateFlow(
@@ -308,7 +314,23 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(isPlaying = isPlaying)
         }
 
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = syncFromController()
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // 播放模式「关」的语义是"播完当前歌就停止"（不自动连播下一曲）。
+            // ExoPlayer 到达曲尾总会自动前进到下一条，这里在自动前进的瞬间拦截：
+            // 暂停并把进度拨回新歌开头——用户看到的是"播完了，停着"，
+            // 高亮落在下一曲行首，手动点播放即可继续。
+            // 随机与列表循环的自动连播不走这个分支（repeatMode != OFF）。
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
+                _state.value.repeatMode == RepeatMode.OFF
+            ) {
+                val c = controller
+                if (c != null) {
+                    c.pause()
+                    c.seekTo(c.currentMediaItemIndex, 0L)
+                }
+            }
+            syncFromController()
+        }
 
         override fun onPlaybackStateChanged(playbackState: Int) = syncFromController()
     }
@@ -398,22 +420,26 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         val queue = _state.value.queue
         if (index !in queue.indices) return
-
-        // 播放器里的队列是否就是 UI 现在这份：长度相同还不够，
-        // 筛选后长度可能碰巧一致而内容不同，那样 seekTo 会播成另一首歌，
-        // 所以再核对目标位置上的 mediaId。
         val wantId = queue[index].id.toString()
-        val inSync = c.mediaItemCount == queue.size && c.getMediaItemAt(index).mediaId == wantId
 
-        if (inSync) {
-            c.seekTo(index, 0L)
+        // 播放器时间线开着随机时是洗牌序，主页 index 在时间线里没有对应位置。
+        // 直接在时间线上找目标歌的当前下标；找不到（时间线还是旧队列）就重写。
+        val playIdx = (0 until c.mediaItemCount).firstOrNull { i ->
+            c.getMediaItemAt(i).mediaId == wantId
+        }
+
+        if (playIdx != null && c.mediaItemCount == queue.size) {
+            c.seekTo(playIdx, 0L)
             // 上一首解码失败等原因会让播放器停在 IDLE，此时 play() 不生效
             if (c.playbackState == Player.STATE_IDLE) c.prepare()
         } else {
             // 不能走 pushQueue——它在"当前曲目仍在播放"时会跳过重写直接返回，
-            // 于是播放器一直留着旧队列，用户点哪首都只是高亮变了、声音没换，
-            // 看起来就是点了没反应。用户明确点歌时必须以 UI 队列为准重写。
-            c.setMediaItems(queue.map { it.toMediaItem() }, index, 0L)
+            // 于是播放器一直留着旧队列，用户点哪首都只是高亮变了、声音没换。
+            // 用户明确点歌时必须以 UI 队列为准重写（随机开启时目标置顶重洗）。
+            val pinId = if (_state.value.shuffle) queue[index].id else null
+            val order = playOrder(queue, pinId)
+            val pIdx = if (pinId != null) 0 else index
+            c.setMediaItems(order.map { it.toMediaItem() }, pIdx, 0L)
             c.prepare()
         }
         c.play()
@@ -450,41 +476,46 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val next = !_state.value.shuffle
         prefs.edit().putBoolean(KEY_SHUFFLE, next).apply()
         _state.value = _state.value.copy(shuffle = next)
-        if (next) {
-            // 开随机：按偏好分加权洗牌队列（喜欢的歌更靠前出现），当前播放的歌保持在首位续播
-            shuffleQueueByPreference()
-        } else {
-            // 关随机：恢复原排序并保留当前播放位置
-            applyFilters(resetToFirst = false)
-        }
+        // 随机只改写【播放器时间线】的顺序，state.queue（主页列表）永远保持
+        // 固定的 筛选→排序 结果。旧实现直接把 state.queue 洗掉，主页列表跟着
+        // 变成乱序——这不是随机播放，这是把用户的排序砸了。
+        rebuildPlayOrder()
         applyPlaybackModes()
     }
 
-    /** 偏好加权洗牌：当前播放的歌固定排第 0 位（续播不中断），其余按权重随机排列 */
-    private fun shuffleQueueByPreference() {
-        val queue = _state.value.queue
-        if (queue.isEmpty()) return
-        val curIdx = _state.value.currentIndex
-        val current = queue.getOrNull(curIdx)
+    /**
+     * 按当前 shuffle 状态重建播放器时间线，主页队列（state.queue）不动。
+     *
+     * 随机序 = 偏好加权洗牌（Recommender.weightedPermutation， exploration 控制
+     * 趋近均匀的程度）：当前播放的歌钉在第 0 位续播，其余按权重随机排列。
+     * 正在播放时走 syncQueueAroundCurrent 只替换前后条目——声音不中断
+     * （直接 setMediaItems 会把正在解码的当前曲也重建，听到"咔"一下）。
+     */
+    private fun rebuildPlayOrder() {
+        val c = controller ?: return
+        val base = _state.value.queue
+        if (base.isEmpty()) return
+        val cur = _state.value.currentSong
+        val order = playOrder(base, if (_state.value.shuffle) cur?.id else null)
+        val cIdx = order.indexOfFirst { it.id == cur?.id }.coerceAtLeast(0)
+        val playingId = c.currentMediaItem?.mediaId?.toLongOrNull()
+        if (playingId != null && order.getOrNull(cIdx)?.id == playingId && c.isPlaying) {
+            syncQueueAroundCurrent(c, order, cIdx)
+        } else {
+            c.setMediaItems(order.map { it.toMediaItem() }, cIdx, c.currentPosition.coerceAtLeast(0L))
+            c.prepare()
+        }
+    }
 
-        val rest = if (current != null) queue.filterIndexed { i, _ -> i != curIdx } else queue
+    /** 播放器时间线顺序：shuffle 关闭时等于 base；开启时当前曲置顶 + 其余加权洗牌 */
+    private fun playOrder(base: List<Song>, pinId: Long?): List<Song> {
+        if (pinId == null) return base
+        val curIdx = base.indexOfFirst { it.id == pinId }
+        if (curIdx < 0) return base
+        val current = base[curIdx]
+        val rest = base.filterIndexed { i, _ -> i != curIdx }
         val perm = Recommender.weightedPermutation(rest, exploration = _state.value.exploration)
-        val shuffled = perm.map { rest[it] }
-
-        val newQueue = if (current != null) listOf(current) + shuffled else shuffled
-        val newIndex = if (current != null) 0 else -1
-        _state.value = _state.value.copy(queue = newQueue, currentIndex = newIndex)
-
-        // 交给 pushQueue：正在放的那首在新队列里仍是当前曲目，于是它走
-        // syncQueueAroundCurrent，只重写前后条目，声音不中断。
-        //
-        // 原先这里直接 setMediaItems 重写整条时间线。即使当前曲目被放回同一个下标，
-        // ExoPlayer 也把它当成一个新条目：丢掉已解码的缓冲、重新 seek 到 keepPos，
-        // 于是听到"咔一下停住、再接着播"。切随机的那声停顿就是这么来的。
-        pushQueue(
-            startIndex = newIndex.coerceAtLeast(0),
-            startPositionMs = controller?.currentPosition ?: 0L
-        )
+        return listOf(current) + perm.map { rest[it] }
     }
 
     fun cycleRepeatMode() {
@@ -521,8 +552,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             .apply()
         _state.value = s.copy(shuffle = nextShuffle, repeatMode = nextRepeat)
         if (nextShuffle != s.shuffle) {
-            // 开随机：偏好加权洗牌（当前歌保持在首位续播）；关随机：恢复原排序
-            if (nextShuffle) shuffleQueueByPreference() else applyFilters(resetToFirst = false)
+            // 随机开/关只重排播放器时间线；主页列表恒定不动
+            rebuildPlayOrder()
         }
         applyPlaybackModes()
     }
@@ -1223,13 +1254,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun syncFromController() {
         val c = controller ?: return
-        val newIndex = c.currentMediaItemIndex
+
+        // UI 的 currentIndex 必须落在【主页队列】里正在播的那首上。
+        // 播放器时间线开着随机时是洗牌序，c.currentMediaItemIndex 与主页下标
+        // 完全不对应——必须按 mediaId 反查主页队列下标，高亮才是对的。
+        val cid = c.currentMediaItem?.mediaId?.toLongOrNull()
+        val newIndex = if (cid != null) _state.value.queue.indexOfFirst { it.id == cid }
+            .takeIf { it >= 0 } ?: c.currentMediaItemIndex else c.currentMediaItemIndex
         val newSong = _state.value.queue.getOrNull(newIndex)
 
-        // 队列重建中途（随机/筛选/收藏）：UI 队列已换新，controller 索引还指着
-        // 旧位置，读到的 position/duration 是脏的——这个瞬间同步会把进度点
-        // 抽到别处再弹回来。检测到错位就整轮跳过，等重建完成后事件再对齐。
-        val cid = c.currentMediaItem?.mediaId?.toLongOrNull()
+        // 队列重建中途（筛选/收藏）：UI 队列已换新，controller 索引还指着
+        // 旧位置，读到的 position/duration 是脏的。（按 id 对齐后此错位已基本消除，
+        // 保留防御：id 都对得上才继续。）
         if (newSong != null && cid != null && newSong.id != cid) return
 
         // 切歌追踪：如果歌曲变了，记录上一首歌的播放时长
@@ -1299,7 +1335,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun applyPlaybackModes() {
         val c = controller ?: return
-        // 随机播放由本 App 自己重排队列实现（[shuffleQueueByPreference] 的偏好加权洗牌），
+        // 随机播放由本 App 自己重排【播放器时间线】实现（playOrder 的偏好加权洗牌），
         // 所以播放器的 shuffleModeEnabled 必须保持关闭。
         // 两者同时开会叠加两层随机：播放器在已洗好的队列上再套一个均匀随机序，
         // 偏好权重被抹掉，而且"下一首"跳到的行和列表里高亮行的下一行不是同一首。
@@ -1321,7 +1357,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 loading = false
             )
             applyFilters(resetToFirst = true)
-            if (_state.value.shuffle) shuffleQueueByPreference()
             updateRecommendations()
             refreshReportIfNeeded()
         }
@@ -1347,9 +1382,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             loading = false
         )
         applyFilters(resetToFirst = true)
-        // 随机是持久化的：队列刚按排序建好，开着随机就得立刻洗一遍，
-        // 否则"随机图标亮着但下一首还是按标题顺序"。
-        if (_state.value.shuffle) shuffleQueueByPreference()
+        // 随机序由 applyFilters→pushQueue 内部按 shuffle 状态自动写入播放器时间线，
+        // 主页队列始终保持排序。
         // 首次库加载完成即生成推荐（不依赖当前歌曲）
         updateRecommendations()
         // 库比报告晚到时（打开报告后才扫完库）补一次，避免排行榜显示"已移除的歌曲"
@@ -1458,7 +1492,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        c.setMediaItems(queue.map { it.toMediaItem() }, index, startPositionMs)
+        // 播放器时间线按 shuffle 状态排（随机序只存在于这里）；
+        // state.queue 始终是主页那份固定排序。
+        val pinId = if (_state.value.shuffle) queue[index].id else null
+        val order = playOrder(queue, pinId)
+        val playIdx = if (pinId != null) 0 else index
+        c.setMediaItems(order.map { it.toMediaItem() }, playIdx, startPositionMs)
         c.prepare()
         _state.value = _state.value.copy(currentIndex = index)
     }
@@ -1466,15 +1505,22 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 只替换当前曲目之外的条目：正在放的那一首原地留着，播放不中断。
      * 先删尾再删头，否则删头会让当前曲目的下标位移。
+     *
+     * [queue]/[index] 是主页那份固定排序；实际写入播放器前换成时间线顺序
+     * （开着随机就是洗牌序），当前曲目在两份顺序里指向同一首歌。
      */
     private fun syncQueueAroundCurrent(c: MediaController, queue: List<Song>, index: Int) {
+        val pinId = if (_state.value.shuffle) queue[index].id else null
+        val order = playOrder(queue, pinId)
+        // 当前曲目在时间线顺序里的位置（随机置顶后是 0；非随机时与主页下标一致）
+        val playIdx = order.indexOfFirst { it.id == queue[index].id }.coerceAtLeast(0)
         val cur = c.currentMediaItemIndex
         val count = c.mediaItemCount
         if (cur + 1 < count) c.removeMediaItems(cur + 1, count)
         if (cur > 0) c.removeMediaItems(0, cur)
 
-        val after = queue.drop(index + 1)
-        val before = queue.take(index)
+        val after = order.drop(playIdx + 1)
+        val before = order.take(playIdx)
         if (after.isNotEmpty()) c.addMediaItems(after.map { it.toMediaItem() })
         if (before.isNotEmpty()) c.addMediaItems(0, before.map { it.toMediaItem() })
     }

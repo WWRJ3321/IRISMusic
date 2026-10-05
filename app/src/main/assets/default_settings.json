@@ -1,0 +1,242 @@
+{
+ "bass_haptics_adaptive": {
+  "t": "bool",
+  "v": true
+ },
+ "bass_haptics_enabled": {
+  "t": "bool",
+  "v": false
+ },
+ "bass_haptics_intensity": {
+  "t": "int",
+  "v": 1
+ },
+ "bass_haptics_low_cutoff": {
+  "t": "int",
+  "v": 250
+ },
+ "bass_haptics_pulse_ms": {
+  "t": "int",
+  "v": 4
+ },
+ "bass_haptics_sensitivity": {
+  "t": "int",
+  "v": 5
+ },
+ "bg_blur": {
+  "t": "float",
+  "v": 32.37139129638672
+ },
+ "corner_base": {
+  "t": "float",
+  "v": 30.41910743713379
+ },
+ "cover_lyric": {
+  "t": "bool",
+  "v": true
+ },
+ "cover_shake": {
+  "t": "bool",
+  "v": true
+ },
+ "custom_primary": {
+  "t": "long",
+  "v": 4278238975
+ },
+ "custom_secondary": {
+  "t": "long",
+  "v": 4282056959
+ },
+ "eq_anchors": {
+  "t": "string",
+  "v": "60:0;230:0;910:0;3600:0;14000:0"
+ },
+ "eq_edit_mode": {
+  "t": "string",
+  "v": "CURVE"
+ },
+ "eq_levels": {
+  "t": "string",
+  "v": "0,0,0,0,0"
+ },
+ "eq_loudness": {
+  "t": "bool",
+  "v": true
+ },
+ "eq_loudness_strength": {
+  "t": "int",
+  "v": 25
+ },
+ "exploration": {
+  "t": "float",
+  "v": 0.46337345242500305
+ },
+ "fade_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "fade_ms": {
+  "t": "long",
+  "v": 1221
+ },
+ "float_lyric_enabled": {
+  "t": "bool",
+  "v": false
+ },
+ "font_scale": {
+  "t": "float",
+  "v": 1.0073833465576172
+ },
+ "glass_blur": {
+  "t": "float",
+  "v": 0.7707632780075073
+ },
+ "haptics_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "jelly_anim": {
+  "t": "bool",
+  "v": false
+ },
+ "karaoke_lyric": {
+  "t": "bool",
+  "v": true
+ },
+ "liked_badge": {
+  "t": "bool",
+  "v": true
+ },
+ "loudnorm_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "loudnorm_strength": {
+  "t": "int",
+  "v": 25
+ },
+ "lyric_align": {
+  "t": "int",
+  "v": 0
+ },
+ "lyric_font": {
+  "t": "int",
+  "v": 0
+ },
+ "lyric_font_size": {
+  "t": "float",
+  "v": 20.26892852783203
+ },
+ "mode": {
+  "t": "string",
+  "v": "AUTO"
+ },
+ "range_enhancer_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "range_enhancer_strength": {
+  "t": "int",
+  "v": 25
+ },
+ "repeat_mode": {
+  "t": "string",
+  "v": "OFF"
+ },
+ "row_artist": {
+  "t": "bool",
+  "v": false
+ },
+ "row_cover": {
+  "t": "bool",
+  "v": true
+ },
+ "row_playlist": {
+  "t": "bool",
+  "v": false
+ },
+ "row_size": {
+  "t": "int",
+  "v": 2
+ },
+ "safe_limiter_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "safe_limiter_strength": {
+  "t": "int",
+  "v": 25
+ },
+ "search_persistent": {
+  "t": "bool",
+  "v": false
+ },
+ "show_recommendations": {
+  "t": "bool",
+  "v": true
+ },
+ "shuffle_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "silence_skip_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "spatial_wide_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "spatial_wide_strength": {
+  "t": "int",
+  "v": 25
+ },
+ "surface_style": {
+  "t": "string",
+  "v": "LIQUID"
+ },
+ "theme": {
+  "t": "string",
+  "v": "MONO"
+ },
+ "tilt_spectrum": {
+  "t": "bool",
+  "v": true
+ },
+ "topbar_autohide": {
+  "t": "bool",
+  "v": false
+ },
+ "ui_font": {
+  "t": "int",
+  "v": 0
+ },
+ "ui_layout": {
+  "t": "string",
+  "v": "LIST"
+ },
+ "update_check_enabled": {
+  "t": "bool",
+  "v": false
+ },
+ "virtual_bass_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "virtual_bass_strength": {
+  "t": "int",
+  "v": 25
+ },
+ "virtual_surround_enabled": {
+  "t": "bool",
+  "v": true
+ },
+ "virtual_surround_strength": {
+  "t": "int",
+  "v": 25
+ },
+ "visualizer_enabled": {
+  "t": "bool",
+  "v": true
+ }
+}

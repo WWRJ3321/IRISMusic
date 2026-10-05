@@ -154,6 +154,41 @@ object DataTransfer {
         return out
     }
 
+    // ==================== 出厂默认设置 ====================
+
+    /** 内置默认设置资产名（由项目内置的导出数据里提取，见 assets/default_settings.json） */
+    private const val DEFAULT_SETTINGS_ASSET = "default_settings.json"
+
+    /** 是否已经灌过出厂默认（只做一次，避免覆盖用户后来的修改） */
+    private const val KEY_DEFAULTS_SEEDED = "defaults_seeded_v1"
+    private const val SEED_FLAG_PREFS = "iris_prefs"
+
+    /**
+     * 首次启动时把内置默认设置灌进 iris_prefs。
+     *
+     * 只在 [KEY_DEFAULTS_SEEDED] 未置位时执行一次：用户之后的任何修改都优先，
+     * 不会被下次启动覆盖。写在 ViewModel init 最前面，早于 [PlayerUiState] 的
+     * 首次构造——否则首帧读到的还是代码里的硬编码默认值，界面会先闪一下旧样式。
+     * 资产缺失/解析失败时静默跳过，退回代码内默认值，不影响启动。
+     */
+    fun seedDefaultSettingsIfFirstRun(context: Context) {
+        val prefs = context.getSharedPreferences(SEED_FLAG_PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_DEFAULTS_SEEDED, false)) return
+        // 「首次启动」严格定义为 iris_prefs 还是空的（真正的新装）。
+        // 只看标记位不够：升级安装的老用户没有这个标记，会被当成新装、
+        // 把辛苦调好的设置整套覆盖掉。已有任何一项设置即认定非首启。
+        val alreadyConfigured = prefs.all.keys.any { it != KEY_DEFAULTS_SEEDED }
+        if (!alreadyConfigured) {
+            runCatching {
+                val text = context.assets.open(DEFAULT_SETTINGS_ASSET)
+                    .use { it.readBytes().decodeToString() }
+                applySettings(context, JSONObject(text))
+            }
+        }
+        // 无论成功与否都置位：资产损坏时也不该每次启动都重试
+        prefs.edit().putBoolean(KEY_DEFAULTS_SEEDED, true).apply()
+    }
+
     /**
      * 设置写回：只覆盖导出文件里出现的键，本机多出的键不动。
      * 按导出时记录的类型精确还原，避免 Int/Long 混淆导致 app 读取时崩溃。
