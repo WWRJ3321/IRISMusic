@@ -94,6 +94,34 @@ private class WallTile(
 private const val WALL_GUARD = 2
 
 /**
+ * 可见集行索引的位移余量（格）。
+ *
+ * 可见集改为"按基础行索引只取视口覆盖的那几行"来裁剪，不再全量遍历 allTiles。
+ * 让位求解会把磁贴挪到别的行（place/relocate 的 ring 上限 ~6 格），
+ * 所以行范围要按预留余量外扩，保证被挪走的卡照样能被索引到。取 8 覆盖。
+ */
+private const val VISIBLE_ROW_PAD = 8
+
+/**
+ * 让位求解的局部化半径（格）。
+ *
+ * 基础布局本来就零洞零重叠，画布上所有空洞都产生在 active 让位的那一小片邻域里：
+ * shrinkInPlace 缩边、place 失败被丢弃、副本被搬走，扰动范围不超过
+ * place/relocate 的 ring 上限（5~6 格）。所以回填与膨胀只需要盯住目标区周围这一圈，
+ * 不必扫整张画布。
+ *
+ * 为什么这值对大库关键：3000 首时画布是 16×374 ≈ 6000 格、磁贴数千张。
+ * 旧写法每轮迭代扫整张画布找洞、并在每轮开头把整个 grid 拼成字符串查环
+ * （6000 个数字 → 约 30KB 字符串 × 最多 64 轮），growFill 还要每轮遍历全部
+ * 磁贴。这些开销全部发生在**组合期主线程**，就是大库"切歌瞬间一顿"的来源。
+ * 局部化后每轮工作量从 O(画布) 降到 O(20×20)。
+ */
+private const val SOLVE_LOCAL_PAD = 10
+
+/** 进墙后台预热门控：只预热离初始播放磁贴最近的这么多张，更远的交给按屏加载。 */
+private const val POSTER_WARM_MAX = 240
+
+/**
  * 四分方块装箱：画布划分为 cols×rows 的 2×2 方块网格，每个方块内按种子
  * 随机选择一种分裂方式：
  *   0) 整块 2×2（1 磁贴）
@@ -443,8 +471,13 @@ private fun solveWall(
     // 空洞回填：active 从 1 格撑到 4 格，多吃的 3 格由邻居缩小让出；
     // 缩小造成的面积差会留下窟窿，这里让窟窿旁边的卡片"长回去"填满
     // （1×1→2×1/1×2，2×1/1×2→2×2），迭代直到无洞。
-    fun fillHoles() {
-        // 全画布任意 1×1 兜底搬移（洞旁形状都不匹配时）
+    //
+    // 局部化：只扫 [loC..hiC]×[loR..hiR] 这一圈。洞全部产生在让位邻域内
+    // （见 SOLVE_LOCAL_PAD 注释），扫全画布是纯浪费；每轮开头的环检测也改成
+    // 只哈希局部窗口——旧写法 grid.joinToString 整画布拼串是组合期主线程上
+    // 最贵的一行，大库切歌卡顿的大头。
+    fun fillHoles(loC: Int, hiC: Int, loR: Int, hiR: Int) {
+        // 全画布任意 1×1 兜底搬移（洞旁形状都不匹配时）——限定在局部窗口内
         fun tryMoveInto(o: Int, c: Int, r: Int): Boolean {
             if (grid[gi(c, r)] != -1) return false
             stamp(o, -1)
@@ -452,12 +485,17 @@ private fun solveWall(
             stamp(o, o); return true
         }
         var moved = true; var guard = 0
-        val seen = HashSet<String>()
+        val seen = HashSet<Long>()
         while (moved && guard++ < 64) {
             moved = false
-            val sig = grid.joinToString(",")
-            if (!seen.add(sig)) break   // 布局重复 = 洞在打转，跳出
-            for (r in 0 until rows) for (c in 0 until cols) {
+            // 局部窗口 FNV 哈希（洞位置 + 窗口内占用）做环检测：
+            // 布局重复 = 洞在打转，跳出。等价旧版整图字符串比对，但零分配。
+            var sig = 1469598103934665603L
+            for (r in loR..hiR) for (c in loC..hiC) {
+                sig = (sig xor (gi(c, r) * 31L + grid[gi(c, r)])) * 1099511628211L
+            }
+            if (!seen.add(sig)) break
+            for (r in loR..hiR) for (c in loC..hiC) {
                 if (grid[gi(c, r)] != -1) continue
                 // 近邻优先：离洞最近的卡片先尝试（减少大范围搬动）
                 val ranked = ArrayList<Triple<Int, Int, Int>>(4)
@@ -510,12 +548,20 @@ private fun solveWall(
                     }
                     if (done) { moved = true; filledByNeighbor = true; break }
                 }
-                // 邻居形状都不匹配：全画布找最近的 1×1 直接搬进洞（旧位变新洞继续迭代）
+                // 邻居形状都不匹配：找最近的 1×1 直接搬进洞（旧位变新洞继续迭代）。
+                // 候选限定基础位置在局部窗口附近：这里若允许全画布搬卡，
+                // 远处的卡会被挪进 active 邻域的洞里——渲染层按"基础行 + 位移余量"
+                // 索引可见磁贴，跨半个画布的让位位移会让它查不到而凭空消失。
+                // 找不到候选就留洞（growFill/吞洞还能补，空白格本就是允许状态）。
                 if (!filledByNeighbor) {
                     var bestO = -1; var bestD = Int.MAX_VALUE
+                    val candLoR = loR - SOLVE_LOCAL_PAD - 2; val candHiR = hiR + SOLVE_LOCAL_PAD + 2
+                    val candLoC = loC - SOLVE_LOCAL_PAD - 2; val candHiC = hiC + SOLVE_LOCAL_PAD + 2
                     for (i in 0 until n) {
                         if (i == ai || tiles[i].index == activeIndex) continue
                         if (pw[i] != 1 || ph[i] != 1) continue
+                        val br0 = tiles[i].row; val bc0 = tiles[i].col
+                        if (br0 < candLoR || br0 > candHiR || bc0 < candLoC || bc0 > candHiC) continue
                         val d = abs(pc[i] - c) + abs(pr[i] - r)
                         if (d < bestD) { bestD = d; bestO = i }
                     }
@@ -564,13 +610,17 @@ private fun solveWall(
     // 只吃空格(-1)、不移动已有卡片、绝不碰主卡 → passA 保持无重叠、且不影响主卡展开。
     // 用来吃掉 fillHoles / activeSwallowHoles 处理不了的不规则残洞（主卡右侧的缝）。
     // 每轮只尝试四方向各 +1，多轮迭代直到没有可填的洞（guard 防死循环）。
-    fun growFill() {
+    //
+    // 局部化（同 fillHoles）：洞只在让位邻域里，旧写法每轮扫全部磁贴，
+    // 大库（数千磁贴 × 最多 64 轮）纯浪费；现在只碰锚点在局部窗口内的卡。
+    fun growFill(loC: Int, hiC: Int, loR: Int, hiR: Int) {
         var grew = true; var guard = 0
         while (grew && guard++ < 64) {
             grew = false
             for (i in 0 until n) {
                 if (i == ai || tiles[i].index == activeIndex) continue   // 主卡与 active 副本不动
                 if (pw[i] <= 0 || ph[i] <= 0) continue                   // 已丢弃
+                if (pc[i] < loC || pc[i] > hiC || pr[i] < loR || pr[i] > hiR) continue
                 fun tryGrow(nc2: Int, nr2: Int, nw: Int, nh: Int): Boolean {
                     if (nc2 < 0 || nc2 + nw > cols || nr2 < 0 || nr2 + nh > rows) return false
                     for (dc in 0 until nw) for (dr in 0 until nh) {
@@ -728,9 +778,15 @@ private fun solveWall(
             if (!place(o, 0)) { pw[o] = 0; ph[o] = 0 }
         }
         if (ok) {
-            fillHoles()
+            // 局部窗口：目标区 + 余量。place/relocate 最多把扰动带出 ~6 格，pad=10 富余。
+            val pad = SOLVE_LOCAL_PAD
+            val loC = (c0 - pad).coerceAtLeast(0)
+            val hiC = (c0 + TW - 1 + pad).coerceAtMost(cols - 1)
+            val loR = (r0 - pad).coerceAtLeast(0)
+            val hiR = (r0 + TH - 1 + pad).coerceAtMost(rows - 1)
+            fillHoles(loC, hiC, loR, hiR)
             activeSwallowHoles()
-            growFill()
+            growFill(loC, hiC, loR, hiR)
             if (verifyPerfect()) {
                 return (0 until n).map { SolvedTile(tiles[it], pc[it], pr[it], pw[it], ph[it], it == ai) }
             }
@@ -758,7 +814,8 @@ private fun solveWall(
         pc[ai] = nc(c0); pr[ai] = nr(r0); pw[ai] = TW; ph[ai] = TH
         stamp(ai, ai)
         activeSwallowHoles()
-        growFill()
+        growFill((c0 - SOLVE_LOCAL_PAD).coerceAtLeast(0), (c0 + TW - 1 + SOLVE_LOCAL_PAD).coerceAtMost(cols - 1),
+            (r0 - SOLVE_LOCAL_PAD).coerceAtLeast(0), (r0 + TH - 1 + SOLVE_LOCAL_PAD).coerceAtMost(rows - 1))
         if (verifyPerfect()) {
             return (0 until n).map { SolvedTile(tiles[it], pc[it], pr[it], pw[it], ph[it], it == ai) }
         }
@@ -887,11 +944,26 @@ private fun PosterWallBody(
         // 渲染中点击非当前播放磁贴时写入；solveWall 据此把它定为 active，
         // 避免点小的却展开远处大的、被点卡被隐藏留白。
         val selectedTile = remember { mutableStateOf<WallTile?>(null) }
-        val solvedMap = remember(allTiles, cols, rows, currentIndex, selectedTile.value) {
-            val solved = solveWall(allTiles, cols, rows, currentIndex, selectedTile.value)
-            val m = HashMap<WallTile, SolvedTile>(solved.size * 2)
-            for (s in solved) m[s.tile] = s
-            m
+        // 让位求解异步化（大库卡顿的主修复）：
+        // solveWall 是 O(格子数×轮数) 的纯计算（fillHoles/growFill 最多 64 轮全画布
+        // 扫描 + 每轮 joinToString 签名比对），旧实现同步跑在组合期——每次切歌/点卡
+        // 都在主线程全量重算，上千首的库一帧卡 50~200ms，就是"歌曲过多唱片墙卡顿"。
+        // 移到 Dispatchers.Default：重算期间沿用上一份 solvedMap（磁贴位置动画自然
+        // 过渡，不跳变）；首次无旧值时用基础几何兜底（只延迟 active 放大不到一帧）。
+        var solvedMap by remember(allTiles) {
+            mutableStateOf(
+                HashMap<WallTile, SolvedTile>(allTiles.size * 2).apply {
+                    for (t in allTiles) put(t, SolvedTile(t, t.col, t.row, t.spanW, t.spanH))
+                }
+            )
+        }
+        LaunchedEffect(allTiles, cols, rows, currentIndex, selectedTile.value) {
+            val solved = withContext(Dispatchers.Default) {
+                solveWall(allTiles, cols, rows, currentIndex, selectedTile.value)
+            }
+            solvedMap = HashMap<WallTile, SolvedTile>(solved.size * 2).apply {
+                for (s in solved) put(s.tile, s)
+            }
         }
 
         val offsetX = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
@@ -925,20 +997,38 @@ private fun PosterWallBody(
         // allTiles × 副本数全遍历一遍（几百首歌 × 4~9 个副本 = 每帧上千次
         // HashMap 查找 + 浮点比较），还要新建整条列表和里面的条目对象——
         // 纯主线程开销 + GC 压力，拖动时的隐性掉帧就在这里。
-        // 而可见集合最多每跨一格才需要变一次：裁剪窗口本身有 4 格外扩余量，
-        // 1 格的量化误差绝不会漏卡，最坏只是边缘多渲染一格的卡片。
+        // 可见集合只在量化位移跨档时更新：裁剪窗口本身有 4 格外扩余量，
+        // 2 格的量化误差由行桶余量与视口外扩共同覆盖；相机图层仍逐帧跟手移动。
         val qox = remember { mutableFloatStateOf(0f) }
         val qoy = remember { mutableFloatStateOf(0f) }
-        LaunchedEffect(step) {
+        val visibleQuantum = step * 2f
+        LaunchedEffect(visibleQuantum) {
             snapshotFlow {
                 Offset(
-                    kotlin.math.floor(offsetX.floatValue / step) * step,
-                    kotlin.math.floor(offsetY.floatValue / step) * step
+                    kotlin.math.floor(offsetX.floatValue / visibleQuantum) * visibleQuantum,
+                    kotlin.math.floor(offsetY.floatValue / visibleQuantum) * visibleQuantum
                 )
             }.distinctUntilChanged().collect {
                 qox.floatValue = it.x
                 qoy.floatValue = it.y
             }
+        }
+
+        // 可见集索引（大库优化的第二处）：旧写法每次跨界对 allTiles × 副本全遍历
+        // （3000 首 ≈ 1.8 万次矩形判断 + HashMap 查找）。改为两级：
+        //  · 稳态磁贴（让位后几何没动）按基础行入桶，视口只扫覆盖到的十来行；
+        //  · 被让位挪动过的磁贴单独进 displaced 小列表（一个邻域最多几十张），
+        //    全列表遍历——它是"基础行在视野外但被挪进视野"的唯一来源，
+        //    单独穷举保证不会凭空消失。solvedMap 变化才重建（换歌/点卡/重排）。
+        val (rowBuckets, displacedTiles) = remember(allTiles, solvedMap) {
+            val buckets = Array(rows.coerceAtLeast(1)) { ArrayList<WallTile>(cols * 2) }
+            val disp = ArrayList<WallTile>(64)
+            for (t in allTiles) {
+                val g = solvedMap[t]
+                if (g != null && (g.col != t.col || g.row != t.row)) disp.add(t)
+                else buckets[t.row.coerceIn(0, rows - 1)].add(t)
+            }
+            buckets to disp
         }
 
         // 可见集合：只在跨界时变化，拖动帧零重组。
@@ -986,7 +1076,7 @@ private fun PosterWallBody(
                 val hiX = px + (viewW - px) * invS
                 val loY = py * (1f - invS)
                 val hiY = py + (viewH - py) * invS
-                val out = ArrayList<VisibleTile>(48)
+val out = ArrayList<VisibleTile>(48)
                 if (allTiles.isNotEmpty() && canvasW > 0f && canvasH > 0f) {
 // 外扩余量（世界格数）：量化误差 = 位移 qox floor 滞后 1 格 + 轴心 qpiv 1 格 ≈ 2 格，
                      // 取 3 格足矣。卡片自身跨度（active 展开最多 4 格）由每张卡 vis1/vis2
@@ -1002,78 +1092,64 @@ private fun PosterWallBody(
                      val replicasY = ceil(effH / canvasH).toInt() + 1
                      val baseX = floor((-ox + loX - margin) / canvasW).toInt()
                      val baseY = floor((-oy + loY - margin) / canvasH).toInt()
+
+                     // 单磁贴视口测试：求解位置与基础位置任一命中视口即渲染
+                     // （动画从旧位滑向新位，两端都算，全程不闪）。抽成局部函数，
+                     // 行桶路径与 displaced 路径共用。
+                     fun test(t: WallTile, cx0: Float, cy0: Float): Boolean {
+                         val g = solvedMap[t]
+                         val gw = g?.spanW ?: t.spanW
+                         val gh = g?.spanH ?: t.spanH
+                         // 跳过被丢弃的磁贴（span=0）：它们虽然不占像素，但会覆盖在真正的 active 卡片上吞掉点击
+                         if (gw <= 0 || gh <= 0) return false
+                         val gc = g?.col ?: t.col
+                         val gr = g?.row ?: t.row
+                         val l1 = cx0 + gc * step
+                         val t1 = cy0 + gr * step
+                         val r1 = l1 + gw * step - gap
+                         val b1 = t1 + gh * step - gap
+                         val vis1 = r1 > loX - margin && l1 < hiX + margin &&
+                                 b1 > loY - margin && t1 < hiY + margin
+                         val l2 = cx0 + t.col * step
+                         val t2 = cy0 + t.row * step
+                         val r2 = l2 + t.spanW * step - gap
+                         val b2 = t2 + t.spanH * step - gap
+                         val vis2 = r2 > loX - margin && l2 < hiX + margin &&
+                                 b2 > loY - margin && t2 < hiY + margin
+                         return vis1 || vis2
+                     }
+
                      for (rx in baseX..baseX + replicasX) {
-                        for (ry in baseY..baseY + replicasY) {
-                            val cx0 = rx * canvasW + ox
-                            val cy0 = ry * canvasH + oy
-                            if (cx0 + canvasW <= loX - margin || cx0 >= hiX + margin ||
-                                cy0 + canvasH <= loY - margin || cy0 >= hiY + margin
-                            ) continue
-                            for (t in allTiles) {
-                                val g = solvedMap[t]
-                                val gw = g?.spanW ?: t.spanW
-                                val gh = g?.spanH ?: t.spanH
-                                // 跳过被丢弃的磁贴（span=0）：它们虽然不占像素，但会覆盖在真正的 active 卡片上吞掉点击
-                                if (gw <= 0 || gh <= 0) continue
-                                val gc = g?.col ?: t.col
-                                val gr = g?.row ?: t.row
-                                // 求解位置与基础位置都参与判断：动画从旧位滑向新位，
-                                // 两端任一在视野内就渲染，全程不闪。
-                                val l1 = cx0 + gc * step
-                                val t1 = cy0 + gr * step
-                                val r1 = l1 + gw * step - gap
-                                val b1 = t1 + gh * step - gap
-                                val vis1 = r1 > loX - margin && l1 < hiX + margin &&
-                                        b1 > loY - margin && t1 < hiY + margin
-                                val l2 = cx0 + t.col * step
-                                val t2 = cy0 + t.row * step
-                                val r2 = l2 + t.spanW * step - gap
-                                val b2 = t2 + t.spanH * step - gap
-                                val vis2 = r2 > loX - margin && l2 < hiX + margin &&
-                                        b2 > loY - margin && t2 < hiY + margin
-                                if (vis1 || vis2) out.add(VisibleTile(t, rx, ry))
-                            }
-                        }
-                    }
-                }
-                out
+                         for (ry in baseY..baseY + replicasY) {
+                             val cx0 = rx * canvasW + ox
+                             val cy0 = ry * canvasH + oy
+                             if (cx0 + canvasW <= loX - margin || cx0 >= hiX + margin ||
+                                 cy0 + canvasH <= loY - margin || cy0 >= hiY + margin
+                             ) continue
+                             // 行桶：把视口纵向范围换算回该副本画布的本地行号，
+                             // 只扫覆盖到的行 + VISIBLE_ROW_PAD 余量（覆盖让位挪行）。
+                             // 行坐标用 floor 取整再各外扩 1，宁多勿漏。
+                             val localTop = floor((loY - margin - cy0) / step).toInt() - VISIBLE_ROW_PAD - 1
+                             val localBot = floor((hiY + margin - cy0) / step).toInt() + VISIBLE_ROW_PAD + 1
+                             val rLo = if (localTop < 0) 0 else if (localTop >= rows) rows else localTop
+                             val rHi = if (localBot >= rows) rows - 1 else if (localBot < 0) -1 else localBot
+                             var r = rLo
+                             while (r <= rHi) {
+                                 val bucket = rowBuckets[r]
+                                 for (t in bucket) if (test(t, cx0, cy0)) out.add(VisibleTile(t, rx, ry))
+                                 r++
+                             }
+                             // 挪动过的磁贴：基础行索引不可靠，逐张全测（数量有界）。
+                             for (t in displacedTiles) if (test(t, cx0, cy0)) out.add(VisibleTile(t, rx, ry))
+                         }
+                     }
+                 }
+                 out
             }
         }
+        // 每张可见磁贴由 SongArtwork 自行异步加载；这里不再重复遍历可见集并
+        // 为同一批路径排序、派发任务，避免快速拖动跨格时产生额外主线程与调度负担。
 
-        // 当前屏封面即时加载。
-        // 注意：不能再用 coroutineScope+awaitAll——那会让每次跨格重启本 effect 时
-        // 取消所有在途解析，慢文件（MediaMetadataRetriever 打开一次要几百 ms）
-        // 永远在"开始→被杀→重来"循环里，就是"卡片迟迟不出图"的根因。
-        // 改为 fire-and-forget 到独立 scope：老任务跑完自然结束，
-        // 重复请求由 ArtworkLoader 的 inFlight 合并，不会堆积。
-        //
-        // 关键：按"距屏幕中心距离"排序后并发加载——放大快速扫动时，新露出的
-        // 边缘卡片若排在 prefetch 队列末尾，其封面要等前面几十张解析完才轮到自己，
-        // 视觉就是"拉到位置才出图"。靠近中心的先加载、边缘后加载，扫动方向上的
-        // 卡优先被解析。
-        val prefetchScope = rememberCoroutineScope()
-        LaunchedEffect(visible) {
-            val centerX = (qox.floatValue + viewW * 0.5f)
-            val centerY = (qoy.floatValue + viewH * 0.5f)
-            // 只解析"尚未进内存缓存"的封面：已命中的 peek!=null，跳过——
-            // 避免放大时同屏磁贴暴涨后，每次跨界对几百张全量 launch load
-            // （即便大多已在 LRU，仍触发数百个协程 + 调度）造成主线程尖峰卡顿。
-            val ordered = visible
-                .mapNotNull { vt ->
-                    val p = queue.getOrNull(vt.tile.index)?.filePath ?: return@mapNotNull null
-                    if (ArtworkLoader.peek(p) != null) return@mapNotNull null
-                    val g = solvedMap[vt.tile] ?: return@mapNotNull null
-                    val cx = vt.rx * canvasW + (g.col + g.spanW / 2f) * step
-                    val cy = vt.ry * canvasH + (g.row + g.spanH / 2f) * step
-                    val dx = cx - centerX; val dy = cy - centerY
-                    (dx * dx + dy * dy) to p
-                }
-                .sortedBy { it.first }
-                .map { it.second }
-                .distinct()
-            val io = Dispatchers.IO.limitedParallelism(12)
-            ordered.forEach { p -> prefetchScope.launch(io) { ArtworkLoader.load(p) } }
-        }
 
         // 封面预热：进入海报墙即后台并发预载整个队列封面。
         // key 必须是 Unit：旧版 key=queue 会在每次换歌（viewModel 重建 queue 列表
@@ -1098,8 +1174,13 @@ private fun PosterWallBody(
                 val dy = (t.row + t.spanH / 2f) - ay
                 Triple(dx * dx + dy * dy, idx, p)
             }.sortedBy { it.first }.map { it.third }.distinct()
-            val io = Dispatchers.IO.limitedParallelism(16)
-            coroutineScope { ordered.map { async(io) { ArtworkLoader.load(it) } }.awaitAll() }
+            // 门控：只预热离锚点最近的 POSTER_WARM_MAX 张。全库预热在 5000+ 曲库
+            // 上是几千次 MediaMetadataRetriever 打开（哪怕并发 16 也要几分钟），
+            // 会把 IO 带宽和磁盘打满，正好拖慢用户眼前正在等的按屏加载——
+            // "预热"变成"抢跑"。更远的封面交给按可见区加载 + 磁盘缓存逐次积累。
+            val capped = if (ordered.size > POSTER_WARM_MAX) ordered.subList(0, POSTER_WARM_MAX) else ordered
+            val io = Dispatchers.IO.limitedParallelism(4)
+            coroutineScope { capped.map { async(io) { ArtworkLoader.load(it) } }.awaitAll() }
         }
 
         val scope = rememberCoroutineScope()
@@ -1167,9 +1248,8 @@ private fun PosterWallBody(
                                     val cs = camScaleF.floatValue
                                     offsetX.floatValue += (vX * dt) / cs
                                     offsetY.floatValue += (vY * dt) / cs
-                                    // 阻尼衰减常数 3.4/s：比旧值 2.3 更快收敛，滑行距离缩短约 1/3，
-                                    // 甩动仍有短促余韵但不拖沓。
-                                    val damp = kotlin.math.exp(-(dt) * 3.4).toFloat()
+                                    // 阻尼衰减常数 4.2/s：松手后更快收敛，减少惯性滑行距离。
+                                    val damp = kotlin.math.exp(-(dt) * 4.2).toFloat()
                                     vX *= damp; vY *= damp
                                     if (abs(vX) < 12f && abs(vY) < 12f) break
                                 }

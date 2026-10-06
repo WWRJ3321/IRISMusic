@@ -1,6 +1,7 @@
 package com.iris.music.ui
 
 import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -52,22 +53,24 @@ object IrisMotion {
     var jelly: Boolean = false
 
     /** 按钮按压回弹（按压缩小 → 松手弹回） */
-    fun pressScale(): AnimationSpec<Float> =
+    fun pressScale(): FiniteAnimationSpec<Float> =
         if (jelly) spring(dampingRatio = 0.5f, stiffness = 380f)
         else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
 
     /** 开关拨钮滑动 */
-    fun knob(): AnimationSpec<Float> =
+    fun knob(): FiniteAnimationSpec<Float> =
         if (jelly) spring(dampingRatio = 0.6f, stiffness = 420f)
         else tween(200)
 
     /** 卡片/元素位移动 */
-    fun move(): AnimationSpec<Float> =
+    fun move(): FiniteAnimationSpec<Float> =
         if (jelly) spring(dampingRatio = 0.68f, stiffness = 340f)
         else tween(300)
-
+    fun moveDp(): FiniteAnimationSpec<Dp> =
+        if (jelly) spring(dampingRatio = 0.68f, stiffness = 340f)
+        else tween(300)
     /** 出现/展开（面板、区块） */
-    fun appear(): AnimationSpec<Float> =
+    fun appear(): FiniteAnimationSpec<Float> =
         if (jelly) spring(dampingRatio = 0.7f, stiffness = 300f)
         else tween(300)
 }

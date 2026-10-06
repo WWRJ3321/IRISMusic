@@ -55,13 +55,50 @@ object MusicRepository {
     }
 
     /** 刷新 = 重新扫盘建库（曲库可能有增删改，清空歌词缓存） */
-    suspend fun rescanAndReload(context: Context): List<Song> {
+    suspend fun rescanAndReload(context: Context, scanRoot: String? = null): List<Song> {
         LyricParser.clearCache()
-        return loadSongs(context)
+        return loadSongs(context, scanRoot)
     }
 
-    /** 扫描文件系统收集所有音频文件的绝对路径（BFS） */
-    private fun collectAudioFiles(context: Context): List<String> {
+    /**
+     * 归一化扫描根：去首尾空白与尾部斜杠，空串视为"不限定"。
+     * 不限定（null）即原有行为——遍历整个共享存储。
+     */
+    private fun normalizeRoot(scanRoot: String?): String? =
+        scanRoot?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+
+    /** 路径是否落在扫描根之内（含根本身）。scanRoot 为 null 时恒为真。 */
+    private fun inRoot(path: String, root: String?): Boolean =
+        root == null || path == root || path.startsWith("$root/")
+
+    /**
+     * 扫描文件系统收集所有音频文件的绝对路径（BFS）。
+     *
+     * [scanRoot] 非空时只遍历该子树：这是"只显示指定文件夹内的音乐"的实现，
+     * 顺带让曲库变大后每次刷新不必再走一遍整个共享存储。
+     */
+    private fun collectAudioFiles(context: Context, scanRoot: String?): List<String> {
+        if (scanRoot != null) {
+            val result = mutableListOf<String>()
+            val queue = ArrayDeque<File>().apply { add(File(scanRoot)) }
+            var budget = DIR_BUDGET
+            while (queue.isNotEmpty() && budget-- > 0) {
+                val dir = queue.removeFirst()
+                if (!dir.isDirectory) continue
+                // 用户明确选中的根目录即便带 .nomedia 也照扫；更深层仍按 .nomedia 跳过
+                if (dir.absolutePath != scanRoot && File(dir, ".nomedia").exists()) continue
+                for (e in runCatching { dir.listFiles() }.getOrNull() ?: continue) {
+                    if (e.isDirectory) {
+                        // 隐藏目录（.开头）视为私有，不扫
+                        if (e.name.startsWith(".")) continue
+                        queue.add(e)
+                    } else if (e.extension.lowercase() in AUDIO_EXTS) {
+                        result.add(e.absolutePath)
+                    }
+                }
+            }
+            return result
+        }
         val roots = mutableSetOf<String>()
         runCatching {
             context.getExternalFilesDirs(null).forEach { f -> f?.parentFile?.let { roots.add(it.absolutePath) } }
@@ -162,12 +199,15 @@ object MusicRepository {
      * 注意：这里信任缓存、不校验文件是否还在（校验要 stat 每个文件，又变慢）。
      * 增删改的纠正交给随后后台跑的 [loadSongs]——它会重扫磁盘并回写缓存。
      */
-    suspend fun loadFromCache(context: Context): List<Song> = withContext(Dispatchers.IO) {
-        init(context)
-        readCache().entries
-            .sortedByDescending { it.value.mtime }  // 用缓存里的 mtime，不再 stat 文件
-            .map { (path, meta) -> meta.toSong(path) }
-    }
+    suspend fun loadFromCache(context: Context, scanRoot: String? = null): List<Song> =
+        withContext(Dispatchers.IO) {
+            init(context)
+            val root = normalizeRoot(scanRoot)
+            readCache().entries
+                .filter { inRoot(it.key, root) }
+                .sortedByDescending { it.value.mtime }  // 用缓存里的 mtime，不再 stat 文件
+                .map { (path, meta) -> meta.toSong(path) }
+        }
 
     /** 读单个音频文件元数据 → MetaEntry；太短/读取失败返回 null */
     private fun readMeta(file: File): MetaEntry? {
@@ -251,9 +291,10 @@ object MusicRepository {
      * 扫盘 + 读元数据（命中缓存则跳过重读），构建完整曲库，
      * 按文件修改时间倒序（最近添加在前）。
      */
-    suspend fun loadSongs(context: Context): List<Song> = withContext(Dispatchers.IO) {
+    suspend fun loadSongs(context: Context, scanRoot: String? = null): List<Song> = withContext(Dispatchers.IO) {
         init(context)
-        val paths = collectAudioFiles(context)
+        val root = normalizeRoot(scanRoot)
+        val paths = collectAudioFiles(context, root)
         val cache = readCache()
         val sem = Semaphore(SCAN_CONCURRENCY)
 
@@ -274,11 +315,17 @@ object MusicRepository {
             }.awaitAll().filterNotNull()
         }
 
-        val current = entries.toMap()
-        // 回写缓存前先做移动侦测：旧缓存还在，才能认出"同一首歌换了路径"
-        remapMovedSongs(cache, current)
-        // 回写缓存：只含本轮存活文件，删掉的自然被淘汰
-        writeCache(current)
+        // 全量扫描才做移动侦测：限定根时只能看到子树，别处的文件会"凭空消失"，
+        // 拿去和整份旧缓存比对必然误判成"被移动"，把点赞/歌单/历史错误迁移。
+        if (root == null) remapMovedSongs(cache, entries.toMap())
+        // 回写缓存：全量扫描时的旧缓存会被整份替换（已删文件自然淘汰）；
+        // 限定根扫描只覆盖子树，根之外的条目原样保留，避免切一次目录就把全库缓存清空。
+        val merged = if (root == null) {
+            entries.toMap()
+        } else {
+            HashMap(cache.filterKeys { !inRoot(it, root) }).apply { putAll(entries) }
+        }
+        writeCache(merged)
 
         entries.map { (path, meta) -> meta.toSong(path) }
             .sortedByDescending { File(it.filePath).lastModified() }

@@ -118,6 +118,20 @@ internal fun SettingsPanel(
     onDismiss: () -> Unit
 ) {
     val scrollState = rememberScrollState()
+    // 「指定文件夹」：SAF 目录树选择器。开启后曲库只收录所选文件夹之内的歌曲。
+    var scanRootStatus by remember { mutableStateOf("") }
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val path = viewModel.resolveScanRoot(uri)
+        if (path == null) {
+            scanRootStatus = "无法获取该文件夹的真实路径，请从本地存储中选择"
+        } else {
+            scanRootStatus = ""
+            viewModel.setScanRoot(path)
+        }
+    }
     // 主题色直接当文字用，在浅色模式下会翻车：霓虹青/黄落在白色面板上对比度只有 1.5 左右。
     // 分组标题统一走可读修正，深色模式下修正函数会原样返回，不影响原有观感。
     val headerColor = colors.primary.readableOn(colors.surface, 3.5f)
@@ -599,12 +613,12 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(10.dp))
 
-        // ---- 果冻动效 ----
+        // ---- 灵动动效 ----
         SettingToggleRow(
-            "果冻动效",
+            "灵动动效",
             state.jellyAnim,
             colors,
-            subtitle = "全局弹性动画：按钮、开关、卡片回弹带果冻感"
+            subtitle = "按钮、列表、卡片与面板采用更有弹性的过渡"
         ) { viewModel.setJellyAnim(!state.jellyAnim) }
 
         Spacer(Modifier.height(10.dp))
@@ -757,6 +771,46 @@ internal fun SettingsPanel(
 
         // ==================== 数据 ====================
         CollapsibleSection("数据", colors) {
+
+        // ---- 指定文件夹 ----
+        Text("指定文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (state.scanRoot != null) "当前限定：${state.scanRoot}\n曲库只包含该文件夹之内的歌曲，推荐与搜索同步收窄"
+            else "不限定则扫描整个共享存储；选择后只显示该文件夹之内（含子文件夹）的歌曲",
+            color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(
+                Modifier
+                    .weight(1f).height(40.dp)
+                    .clip(IrisShape.item)
+                    .background(colors.primary.copy(alpha = 0.18f))
+                    .clickable { Haptics.tap(); folderPickerLauncher.launch(null) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("选择文件夹", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+            }
+            if (state.scanRoot != null) {
+                Box(
+                    Modifier
+                        .weight(1f).height(40.dp)
+                        .clip(IrisShape.item)
+                        .background(colors.surface)
+                        .clickable { Haptics.tap(); viewModel.setScanRoot(null) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("恢复全部", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.text)
+                }
+            }
+        }
+        if (scanRootStatus.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(scanRootStatus, color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
+        }
+
+        Spacer(Modifier.height(14.dp))
 
         // ---- 文件夹 ----
         Text("音乐文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)

@@ -305,7 +305,6 @@ visible: Boolean = true,
     onDraggingChange: (Boolean) -> Unit = {}
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
-    val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
     val minThumbPx = with(density) { 48.dp.toPx() }
@@ -319,30 +318,33 @@ visible: Boolean = true,
     var dragFraction by remember { mutableStateOf(0f) }
     var trackH by remember { mutableStateOf(0f) }
     var dragIndex by remember { mutableStateOf(0) }
+    // 一次拖动内固定映射范围，避免 scrollToItem 改变可见项数量后目标来回漂移。
+    var dragMaxFirstIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(isDragging) { onDraggingChange(isDragging) }
 
-    val totalItems by remember { derivedStateOf { listState.layoutInfo.totalItemsCount } }
+    // 滑块长度固定；歌曲数量只影响拖动映射跨度。
+    val canScroll by remember {
+        derivedStateOf { listState.canScrollForward || listState.canScrollBackward }
+    }
 
-    // 滚动进度：所有状态都在 lambda 内读取，保证列表滚动时实时更新
+    /** 列表当前首项可达的近似最大索引；可滚动但所有项均可见时至少保留一个索引单位。 */
+    fun currentMaxFirstIndex(): Int {
+        val info = listState.layoutInfo
+        val maxByVisible = (info.totalItemsCount - info.visibleItemsInfo.size).coerceAtLeast(0)
+        return if (canScroll) maxByVisible.coerceAtLeast(1) else 0
+    }
+
+    // 滚动进度：按 LazyColumn 实际可达首项范围归一化，而非 totalItems - 1。
     val scrollProgress by remember {
         derivedStateOf {
             val info = listState.layoutInfo
-            val total = info.totalItemsCount
-            if (total <= 1) return@derivedStateOf 0f
             val first = info.visibleItemsInfo.firstOrNull() ?: return@derivedStateOf 0f
+            val maxFirst = (info.totalItemsCount - info.visibleItemsInfo.size).coerceAtLeast(1)
+            if (!canScroll) return@derivedStateOf 0f
             val exactIndex = first.index +
                 (if (first.size > 0) (-first.offset.toFloat() / first.size) else 0f)
-            (exactIndex / (total - 1).coerceAtLeast(1)).coerceIn(0f, 1f)
+            (exactIndex / maxFirst).coerceIn(0f, 1f)
         }
-    }
-
-    /** 第一可见行可达的最大索引（LazyList 滚到底会钳制在这里）。
-     *  拖动目标必须先在 [0, max] 内钳制再换算回分数：若直接映射到 total-1，
-     *  滚到底部区间会被列表强制钳回，列表停在原地而滑块继续跟手指——读回
-     *  scrollProgress 时滑块从指尖位置回跳，即"拖过头再弹回来"。 */
-    fun currentMaxFirstIndex(): Int {
-        val info = listState.layoutInfo
-        return (info.totalItemsCount - info.visibleItemsInfo.size).coerceAtLeast(0)
     }
 
     // 活跃态：滚动或拖动时展开，静止 1.1s 后自动收细
@@ -364,19 +366,17 @@ visible: Boolean = true,
         label = "scrollerDrag"
     )
     val visAlpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
+        targetValue = if (visible && canScroll) 1f else 0f,
         animationSpec = tween(220),
         label = "scrollerAlpha"
     )
 
-    // 滑块几何：thumbHpx 只随 trackH/总数变化（低频），留在组合层。
+    // 滑块几何：轨道和滑块长度固定，拖动跨度由列表可滚动范围决定。
     // thumbYpx/thumbWpx 依赖每帧变化的 dragFraction / expand / dragT——
     // 若在组合层求值，拖动时每帧都触发整块重组（Canvas + 气泡）。改为在
     // 绘制/布局阶段（Canvas draw lambda、气泡 offset lambda）内读取这些状态，
     // 让拖动只走重绘、不走重组，是这条滑条跟手流畅度的关键。
-    val maxThumbPx = (trackH * 0.35f).coerceAtLeast(minThumbPx)
-    val thumbHpx = if (trackH > 0f)
-        (trackH / totalItems.coerceAtLeast(1)).coerceIn(minThumbPx, maxThumbPx) else minThumbPx
+    val thumbHpx = minThumbPx.coerceAtMost(trackH.coerceAtLeast(0f))
     // 供 draw / offset 内复用的即时几何（读取快照状态，仅在对应阶段求值）
     fun currentThumbY(): Float =
         (if (isDragging) dragFraction else scrollProgress) * (trackH - thumbHpx).coerceAtLeast(0f)
@@ -388,19 +388,19 @@ visible: Boolean = true,
     // scrollToItem 协程会导致几十个协程并发竞争、乱序打断，这才是抽动的根因。
     fun updateDragFraction(y: Float) {
         if (trackH <= 0f) return
-        val total = listState.layoutInfo.totalItemsCount
-        if (total <= 1) return
+        val maxFirst = if (isDragging && dragMaxFirstIndex > 0) {
+            dragMaxFirstIndex
+        } else {
+            currentMaxFirstIndex()
+        }
+        if (maxFirst <= 0) return
         val span = trackH - thumbHpx
         val f = if (span > 1f) ((y - thumbHpx / 2f) / span).coerceIn(0f, 1f)
                 else (y / trackH).coerceIn(0f, 1f)
-        // 先把目标行钳到列表真正可达的范围（第一可见行最大 = total - 可见行数），
-        // 再把钳后的值写回 dragFraction：滑块与列表停在同一处。
-        // 若直通 f*(total-1) 映射到底，最后 1/14 行程列表已经滚不动、滑块却继续
-        // 跟手指，松手切回读回的 scrollProgress 时滑块从指尖位置弹回去。
-        val exact = (f * (total - 1)).coerceIn(0f, currentMaxFirstIndex().toFloat())
-        dragFraction = exact / (total - 1)
+        val exact = f * maxFirst
+        dragFraction = f
         // 跨行刻度震动（滑过同一行不重复）
-        val idx = exact.toInt().coerceIn(0, total - 1)
+        val idx = exact.toInt().coerceIn(0, maxFirst)
         if (idx != dragIndex) Haptics.tick()
         dragIndex = idx
     }
@@ -411,14 +411,11 @@ visible: Boolean = true,
         if (!isDragging) return@LaunchedEffect
         snapshotFlow { dragFraction }
             .collectLatest { f ->
-                val total = listState.layoutInfo.totalItemsCount
-                if (total <= 1) return@collectLatest
-                val exact = f * (total - 1)
-                val targetIndex = exact.toInt().coerceIn(0, total - 1)
-                val avgItemPx = listState.layoutInfo.visibleItemsInfo
-                    .firstOrNull()?.size?.toFloat() ?: 0f
-                val offsetPx = ((exact - targetIndex) * avgItemPx).toInt()
-                listState.scrollToItem(targetIndex, offsetPx)
+                val maxFirst = dragMaxFirstIndex
+                if (maxFirst <= 0) return@collectLatest
+                val targetIndex = (f * maxFirst).toInt().coerceIn(0, maxFirst)
+                // 不再用当前可见行高度制造 offset：推荐头/歌曲行高度不同会造成回弹。
+                listState.scrollToItem(targetIndex)
             }
     }
 
@@ -432,15 +429,16 @@ visible: Boolean = true,
              .clickable(
                  interactionSource = remember { MutableInteractionSource() },
                  indication = null,
-                 enabled = visible,
+                 enabled = visible && canScroll,
                  onClick = onClick
              )
-             .pointerInput(visible) {
-                // 不可见时（翻到播放页/歌词页覆盖）不注册手势，避免这条右缘热区
-                // 拦截点击（误触震动）或吞掉歌词页的关闭点击
-                if (!visible) return@pointerInput
+             .pointerInput(visible, canScroll) {
+                // 不可见或列表不溢出时不注册手势，避免右缘热区拦截页面交互。
+                if (!visible || !canScroll) return@pointerInput
                 detectVerticalDragGestures(
                     onDragStart = { offset ->
+                        dragMaxFirstIndex = currentMaxFirstIndex()
+                        if (dragMaxFirstIndex <= 0) return@detectVerticalDragGestures
                         isDragging = true
                         Haptics.click()
                         updateDragFraction(offset.y)

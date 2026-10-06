@@ -270,7 +270,7 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                 // 慢一点 + EaseInOut：180ms 直切快得像闪屏，420ms 缓入缓出
                 // 才是"柔和过渡"的节奏。再长会拖泥带水——切布局是低频操作，
                 // 用户愿意多等半秒看清楚，但不愿意等一秒。
-                animationSpec = tween(420, easing = androidx.compose.animation.core.EaseInOut),
+                animationSpec = if (IrisMotion.jelly) IrisMotion.appear() else tween(420, easing = androidx.compose.animation.core.EaseInOut),
                 label = "layoutSwitch"
             ) { layout ->
             if (layout.isDeck) {
@@ -396,7 +396,9 @@ visible = scrollerVisible,
         CompositionLocalProvider(LocalIrisBackdrops provides sheetBackdrops) {
             AnimatedVisibility(
                 visible = state.showSettings,
-                enter = fadeIn(tween(200)),
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
                 exit = fadeOut(tween(180)),
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -422,7 +424,9 @@ visible = scrollerVisible,
             // 歌单管理弹层
             AnimatedVisibility(
                 visible = showPlaylists,
-                enter = fadeIn(tween(200)),
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
                 exit = fadeOut(tween(180)),
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -440,7 +444,9 @@ visible = scrollerVisible,
             // 添加到歌单弹层（长按歌曲触发）
             AnimatedVisibility(
                 visible = pendingAddSong != null,
-                enter = fadeIn(tween(200)),
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
                 exit = fadeOut(tween(180))
             ) {
                 val song = pendingAddSong
@@ -463,7 +469,9 @@ visible = scrollerVisible,
             // 均衡器弹层
             AnimatedVisibility(
                 visible = showEqualizer,
-                enter = fadeIn(tween(200)),
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
                 exit = fadeOut(tween(180))
             ) {
                 EqualizerSheet(
@@ -510,7 +518,9 @@ visible = scrollerVisible,
             // 睡眠定时器弹层
             AnimatedVisibility(
                 visible = showSleepTimer,
-                enter = fadeIn(tween(200)),
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
                 exit = fadeOut(tween(180))
             ) {
                 SleepTimerSheet(
@@ -527,7 +537,9 @@ visible = scrollerVisible,
             // 听歌报告弹层：和设置/均衡器同层，折射「背景 + 页面」两层背板
             AnimatedVisibility(
                 visible = state.showReport,
-                enter = fadeIn(tween(200)),
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
                 exit = fadeOut(tween(180))
             ) {
                 ListenReportSheet(
@@ -1926,11 +1938,11 @@ private fun SongRow(
     onLongPress: () -> Unit
 ) {
     // 指示条高度动画：切歌时旧条收缩、新条生长，平滑过渡不瞬移
-    val barH by animateDpAsState(if (active) 22.dp else 0.dp, tween(260), label = "cursorBar")
+    val barH by animateDpAsState(if (active) 22.dp else 0.dp, IrisMotion.moveDp(), label = "cursorBar")
     // 激活态整体渐变：底色、文字色都走 260ms 补间，切歌时行内所有颜色一起过渡
     val activeT by animateFloatAsState(
         targetValue = if (active) 1f else 0f,
-        animationSpec = tween(260),
+        animationSpec = IrisMotion.move(),
         label = "rowActive"
     )
     val activeBg = lerp(colors.row, colors.secondary.copy(alpha = 0.12f), activeT)
@@ -2002,7 +2014,7 @@ private fun SongRow(
             // 点赞角标：弹性放大 + 淡入，不硬出现（赞/取消时同样平滑）
             val badgeT by animateFloatAsState(
                 targetValue = if (liked) 1f else 0f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                animationSpec = if (IrisMotion.jelly) IrisMotion.pressScale() else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
                 label = "likedBadge"
             )
             if (showLikedBadge && badgeT > 0.01f) {

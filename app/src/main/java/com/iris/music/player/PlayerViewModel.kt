@@ -35,6 +35,7 @@ import com.iris.music.data.Playlist
 import com.iris.music.data.Playlists
 import com.iris.music.data.Recommender
 import com.iris.music.data.RepeatMode
+import com.iris.music.data.ScanPath
 import com.iris.music.data.Song
 import com.iris.music.data.SortOrder
 import com.iris.music.data.StatRange
@@ -200,7 +201,12 @@ data class PlayerUiState(
     /** 自定义主题次色（ARGB_8888，仅 theme==CUSTOM 时生效） */
     val customSecondaryArgb: Long = 0xFFFF2E97L,
     /** 自定义背景图 URI（SAF 持久化 URI）；null = 用专辑封面做背景 */
-    val customBackgroundUri: String? = null
+    val customBackgroundUri: String? = null,
+    /**
+     * 限定扫描目录的绝对路径；null = 不限定（扫描整个共享存储）。
+     * 开启后曲库只包含该目录及子目录内的音频。
+     */
+    val scanRoot: String? = null
 ) {
     val currentSong: Song? get() = queue.getOrNull(currentIndex)
 
@@ -276,7 +282,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             customPrimaryArgb = prefs.getLong(KEY_CUSTOM_PRIMARY, 0xFF00F0FFL),
             customSecondaryArgb = prefs.getLong(KEY_CUSTOM_SECONDARY, 0xFFFF2E97L),
             customBackgroundUri = prefs.getString(KEY_CUSTOM_BG_URI, null),
-            selectedFolders = readSelectedFolders()
+            selectedFolders = readSelectedFolders(),
+            scanRoot = readScanRoot()
         )
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -566,7 +573,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(refreshing = true)
             // 刷新 = 触发媒体扫描（新文件可被索引）+ 重新读库。
             // rescanAndReload 内部走 IO；文件夹聚合也一并放到 IO，避免大库在主线程算。
-            val songs = MusicRepository.rescanAndReload(getApplication())
+            val songs = MusicRepository.rescanAndReload(getApplication(), _state.value.scanRoot)
             val folders = withContext(Dispatchers.Default) { MusicRepository.buildFolders(songs) }
             _state.value = _state.value.copy(
                 allSongs = songs,
@@ -583,6 +590,26 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.IO) { DataTransfer.attachOrphans(getApplication(), songs) }
         }
     }
+
+    // ==================== 限定扫描目录 ====================
+
+    /**
+     * 设定"只显示该目录内的音乐"。传 null 表示取消限定、恢复全盘扫描。
+     *
+     * 目录不存在（被删/换机）时不写入——否则曲库会瞬间变空，用户找不到原因。
+     * 设定后立即重扫：曲库范围变了，没必要也不应该让用户再手动刷新一次。
+     */
+    fun setScanRoot(path: String?) {
+        val normalized = path?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+        if (normalized != null && !java.io.File(normalized).isDirectory) return
+        prefs.edit().putString(KEY_SCAN_ROOT, normalized.orEmpty()).apply()
+        _state.value = _state.value.copy(scanRoot = normalized)
+        reloadLibrary()
+    }
+
+    /** 解析 SAF 选中的目录 → 绝对路径。拿不到真实路径（部分文档提供方）时返回 null。 */
+    fun resolveScanRoot(uri: android.net.Uri): String? =
+        ScanPath.resolve(getApplication(), uri)
 
     /** 仅重新计算推荐（不重扫媒体、不改队列） */
     fun refreshRecommendations() {
@@ -1348,8 +1375,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun loadLibrary() {
+        val root = _state.value.scanRoot
         // 秒开：先只读元数据缓存直接出歌（毫秒级），不等全盘扫描。
-        val cached = MusicRepository.loadFromCache(getApplication())
+        val cached = MusicRepository.loadFromCache(getApplication(), root)
         if (cached.isNotEmpty()) {
             _state.value = _state.value.copy(
                 allSongs = cached,
@@ -1364,7 +1392,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         // 后台校正：完整扫盘一次（增删改会在这里被纠正并回写缓存）。
         // 缓存为空（首次安装/清过数据）时这就是唯一数据来源，需要显示加载态。
         if (cached.isEmpty()) _state.value = _state.value.copy(loading = true)
-        val songs = MusicRepository.loadSongs(getApplication())
+        val songs = MusicRepository.loadSongs(getApplication(), root)
         // 扫描结果与缓存版一致时不重建队列，避免"进来又跳一下/闪一下"。
         if (cached.isNotEmpty() && songs.size == cached.size &&
             songs.map { it.id }.toSet() == cached.map { it.id }.toSet()
@@ -1574,6 +1602,10 @@ private fun refreshSystemDark() {
         prefs.edit().putString(KEY_SELECTED_FOLDERS, sets.joinToString(",")).apply()
     }
 
+    /** 限定扫描目录：空串/缺失 = 不限定（全盘扫描） */
+    private fun readScanRoot(): String? =
+        prefs.getString(KEY_SCAN_ROOT, null)?.trim()?.takeIf { it.isNotEmpty() }
+
     private fun Song.toMediaItem(): MediaItem =
         MediaItem.Builder()
             .setMediaId(id.toString())
@@ -1635,6 +1667,7 @@ private const val KEY_THEME = "theme"
         const val KEY_FONT_SCALE = "font_scale"
         const val KEY_EXPLORATION = "exploration"
         const val KEY_SELECTED_FOLDERS = "selected_folders"
+        const val KEY_SCAN_ROOT = "scan_root"
         const val KEY_SHUFFLE = "shuffle_enabled"
         const val KEY_REPEAT = "repeat_mode"
         const val KEY_LAST_SONG = "last_song_id"
