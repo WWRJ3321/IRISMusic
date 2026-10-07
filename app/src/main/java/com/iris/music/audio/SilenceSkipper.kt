@@ -147,7 +147,11 @@ object SilenceSkipper {
                         busy = true
                         if (silent && remaining > TAIL_MARGIN_MS) {
                             tailDone = true
-                            player.seekToNextMediaItem()
+                            // 不能 seekToNextMediaItem()——它会绕过播放器的循环模式：
+                            // 单曲循环下也会被切到下一首（用户反馈"循环播放没用"的根因）。
+                            // 直接跳到本曲末尾，让 ExoPlayer 按 repeatMode 自行衔接：
+                            // ONE → 重播本曲；ALL → 正常轮循环；OFF → 自动前进后被停止。
+                            player.seekTo(player.currentMediaItemIndex, dur)
                         }
                     } else {
                         tailDone = false

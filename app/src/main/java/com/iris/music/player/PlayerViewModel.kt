@@ -298,9 +298,34 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var statEntries: List<ListenEntry>? = null
 
-    /** 切歌追踪：记录上一首歌的 ID 和开始播放时的时间戳 */
+    /**
+     * 切歌追踪：上一首歌的 ID 与其【实际播放】的累计时长。
+     *
+     * 不能用墙钟差：暂停挂机一小时再切歌，墙钟差会把挂机时间全记成"已播放"，
+     * 还会把只听了几秒的歌误判成完整播放计数，污染推荐权重。
+     * 与 MusicService.settleListenTime 同口径：只在 isPlaying 期间走表。
+     */
     private var prevSongId: Long = -1L
-    private var prevSongStartMs: Long = 0L
+    private var prevAccumMs: Long = 0L
+    /** 当前"正在播放"时间段的起点（elapsedRealtime），0 = 没有在走表 */
+    private var prevLegStartElapsed: Long = 0L
+    /** 结算 prevSong 到目前为止实际播放了多久（含未闭合的当前段） */
+    private fun prevPlayedMs(): Long {
+        val open = if (prevLegStartElapsed > 0L)
+            android.os.SystemClock.elapsedRealtime() - prevLegStartElapsed else 0L
+        return prevAccumMs + open
+    }
+    /** isPlaying 变化时闭合/开启当前播放段（不切歌） */
+    private fun updatePlayLeg(isPlaying: Boolean) {
+        if (prevSongId < 0) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (isPlaying) {
+            if (prevLegStartElapsed == 0L) prevLegStartElapsed = now
+        } else if (prevLegStartElapsed > 0L) {
+            prevAccumMs += now - prevLegStartElapsed
+            prevLegStartElapsed = 0L
+        }
+    }
 
     /**
      * 待恢复的曲目与位置。
@@ -318,6 +343,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            // 暂停/继续影响"实际播放时长"走表，先闭合或开启当前段
+            updatePlayLeg(isPlaying)
             _state.value = _state.value.copy(isPlaying = isPlaying)
         }
 
@@ -522,7 +549,35 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val current = base[curIdx]
         val rest = base.filterIndexed { i, _ -> i != curIdx }
         val perm = Recommender.weightedPermutation(rest, exploration = _state.value.exploration)
-        return listOf(current) + perm.map { rest[it] }
+        return listOf(current) + disperseInitials(perm.map { rest[it] }.toMutableList())
+    }
+    /**
+     * 相邻同名打散：纯随机里"同名/同首字母相连"出现的概率非常高（50 首 10 组的
+     * 模拟里约 98% 的洗牌至少出现一对），算法没错，但听感就是"随机坏了"。
+     * 贪心单遍：发现与前一首标题首字符（忽略大小写）相同就向后找第一首不同的换过来。
+     * 只影响相邻对，整体仍是加权随机的分布。
+     */
+    private fun disperseInitials(order: MutableList<Song>): List<Song> {
+        // 预提取首字符，比较便宜且避免反复 trim
+        val ini = CharArray(order.size) { k ->
+            order[k].title.trim().firstOrNull()?.uppercaseChar() ?: ' '
+        }
+        for (i in 1 until order.size) {
+            if (ini[i] != ini[i - 1]) continue
+            // 找一个 j：交换后 i 位（新歌）与左右邻居、j 位（旧 i 歌）与左右邻居都不撞名。
+            // k==i+1 时两边邻居就是被交换的对家，其互异性由第一条 ini[k]!=ini[i-1] 保证。
+            val j = (i + 1 until order.size).firstOrNull { k ->
+                ini[k] != ini[i - 1] &&
+                    (k == i + 1 || i + 1 >= order.size || ini[k] != ini[i + 1]) &&
+                    ini[i] != ini[k] &&
+                    (k - 1 == i || ini[i] != ini[k - 1]) &&
+                    (k + 1 >= order.size || ini[i] != ini[k + 1])
+            }
+            if (j == null) break // 后面全同名，无解，保留现状
+            val t = order[i]; order[i] = order[j]; order[j] = t
+            val c = ini[i]; ini[i] = ini[j]; ini[j] = c
+        }
+        return order
     }
 
     fun cycleRepeatMode() {
@@ -1297,13 +1352,15 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
         // 切歌追踪：如果歌曲变了，记录上一首歌的播放时长
         if (newSong != null && newSong.id != prevSongId && prevSongId >= 0) {
-            val playedMs = System.currentTimeMillis() - prevSongStartMs
+            val playedMs = prevPlayedMs()
             val prevDuration = _state.value.allSongs.firstOrNull { it.id == prevSongId }?.durationMs ?: 0L
             PlayHistory.recordPlay(prevSongId, playedMs, prevDuration)
         }
         if (newSong != null && newSong.id != prevSongId) {
             prevSongId = newSong.id
-            prevSongStartMs = System.currentTimeMillis()
+            // 新曲从头走表：闭合段清零，当前段按播放器状态开启
+            prevAccumMs = 0L
+            prevLegStartElapsed = if (c.isPlaying) android.os.SystemClock.elapsedRealtime() else 0L
             // 切歌是关键节点，不走限流，立刻落盘
             _state.value = _state.value.copy(currentIndex = newIndex)
             persistPlayback(throttle = false)
