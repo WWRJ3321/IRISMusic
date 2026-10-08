@@ -42,6 +42,7 @@ import android.os.SystemClock
 class MusicService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
+    private var sleepUnsub: (() -> Unit)? = null
 
     /**
      * 听歌时长记账。
@@ -204,10 +205,17 @@ class MusicService : MediaSessionService() {
 
         mediaSession = MediaSession.Builder(this, FadingPlayer(player))
             .setSessionActivity(sessionActivityPendingIntent)
+            // 通知栏/锁屏/车机封面：内嵌封面无法按 URI 被系统解出，需主动提供 Bitmap
+            .setBitmapLoader(ArtworkBitmapLoader.get(this))
             .build()
 
+        // 睡眠定时器：计时权威在本进程，UI 销毁不影响；到期只暂停播放器
+        SleepTimer.attach(this)
+        sleepUnsub = SleepTimer.addExpireObserver { runCatching { player.pause() } }
         // 桌面悬浮歌词：常驻服务里初始化，UI 退到后台也能跟随
         FloatingLyric.init(this, player)
+        // 封面加载器的磁盘缓存在服务侧也要就绪：媒体键起播时 UI 可能从未打开过
+        com.iris.music.ui.ArtworkLoader.init(this)
 
         // 播放/暂停与切歌都要立刻结算，否则一段最多 TICK_MS 的零头会记到下一首头上
         player.addListener(object : Player.Listener {
@@ -221,6 +229,8 @@ class MusicService : MediaSessionService() {
         mediaSession
 
     override fun onDestroy() {
+        // 反注册到期观察者，避免旧 player 引用留在进程级单例里
+        sleepUnsub?.let { it() }; sleepUnsub = null
         // 服务结束前收起悬浮歌词窗
         FloatingLyric.release()
         // 服务结束前把最后一段听歌时长结清并落盘

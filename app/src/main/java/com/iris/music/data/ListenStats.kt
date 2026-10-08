@@ -90,7 +90,26 @@ object ListenStats {
                 val day = epochDayOf(ts).coerceAtMost(today)
                 sb.append(day).append(',').append(id).append(',').append(ms).append('\n')
             }
-            if (sb.isNotEmpty()) runCatching { f.writeText(sb.toString()) }
+            if (sb.isNotEmpty()) runCatching { writeFileAtomic(f, sb.toString()) }
+        }
+    }
+
+    /**
+     * 原子写：先写同目录临时文件再 rename。
+     * 裸 writeText 在进程中途被杀或断电时会留下截断文件，
+     * 一次事故就永久丢光全部听歌历史。ext4/f2fs 同目录 rename 是原子的。
+     */
+    private fun writeFileAtomic(f: File, content: String) {
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        try {
+            tmp.writeText(content)
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                if (!tmp.renameTo(f)) tmp.delete()
+            }
+        } catch (e: Throwable) {
+            runCatching { tmp.delete() }
+            throw e
         }
     }
 
@@ -181,7 +200,7 @@ object ListenStats {
                     out.forEach {
                         sb.append(it.day).append(',').append(it.songId).append(',').append(it.ms).append('\n')
                     }
-                    f.writeText(sb.toString())
+                    writeFileAtomic(f, sb.toString())
                 }
             }
             return out
@@ -239,7 +258,7 @@ object ListenStats {
                     sb.append(day).append(',').append(id).append(',').append(ms).append('\n')
                 }
             }
-            runCatching { f.writeText(sb.toString()) }
+            runCatching { writeFileAtomic(f, sb.toString()) }
         }
     }
 
@@ -299,7 +318,7 @@ object ListenStats {
                     sb.append(day).append(',').append(id).append(',').append(ms).append('\n')
                 }
             }
-            runCatching { f.writeText(sb.toString()) }
+            runCatching { writeFileAtomic(f, sb.toString()) }
             return days
         }
     }

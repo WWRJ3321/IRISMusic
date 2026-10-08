@@ -85,24 +85,28 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestNeededPermissions() {
-        // targetSdk 30+：优先申请「所有文件访问」(MANAGE_EXTERNAL_STORAGE)。
-        // 曲库直扫文件系统需要它才能用 File API 遍历共享存储；未授予时
-        // 仅靠 READ_MEDIA_AUDIO 只能读进 MediaStore 的音频，会漏掉被系统
-        // 误判成 video/image 的 mjpeg 封面歌。
+        // targetSdk 30+：「所有文件访问」(MANAGE_EXTERNAL_STORAGE) 是曲库直扫的推荐权限，
+        // 但属于系统级高危权限且页面常被用户跳过——旧实现每次冷启动都强制跳过去，
+        // 等于每开一次 App 先把用户踢出去一趟。现在只在首次启动引导一次，
+        // 之后设置页「数据 → 存储权限」可随时手动开启。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-            runCatching {
-                val intent = Intent(
-                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-                allFilesLauncher.launch(intent)
-            }.onFailure {
-                // 个别 ROM 不支持带包名的定向页，退回总列表页
+            val prefs = getSharedPreferences("app_state", MODE_PRIVATE)
+            if (!prefs.getBoolean("all_files_prompted", false)) {
+                prefs.edit().putBoolean("all_files_prompted", true).apply()
                 runCatching {
-                    allFilesLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    allFilesLauncher.launch(intent)
+                }.onFailure {
+                    // 个别 ROM 不支持带包名的定向页，退回总列表页
+                    runCatching {
+                        allFilesLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    }
                 }
             }
-            return
+            // 不再 return：继续走下面的常规权限（通知等）一次性申请
         }
 
         val perms = mutableListOf<String>()

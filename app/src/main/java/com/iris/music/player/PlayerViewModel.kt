@@ -40,6 +40,7 @@ import com.iris.music.data.Song
 import com.iris.music.data.SortOrder
 import com.iris.music.data.StatRange
 import com.iris.music.playback.MusicService
+import com.iris.music.playback.SleepTimer
 import com.iris.music.ui.ArtworkLoader
 import com.iris.music.ui.Haptics
 import com.iris.music.ui.theme.BG_BLUR_DEFAULT
@@ -288,7 +289,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
     private var controller: MediaController? = null
-    private var sleepTimerJob: Job? = null
+    private var sleepUnsub: (() -> Unit)? = null
     private var searchJob: Job? = null
     private var reportJob: Job? = null
 
@@ -405,6 +406,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch { loadLibrary() }
         viewModelScope.launch { tickPosition() }
+        // 睡眠定时器状态恢复：计时在 SleepTimer（进程级），若服务已 attach 过
+        // 或上次定时未到期，把剩余定时映射回 UI（进度环、角标）。
+        SleepTimer.attach(getApplication())
+        if (SleepTimer.endMs > 0L) {
+            _state.value = _state.value.copy(
+                sleepTimerMs = SleepTimer.totalMs,
+                sleepTimerEndMs = SleepTimer.endMs
+            )
+        }
+        sleepUnsub = SleepTimer.addExpireObserver {
+            _state.value = _state.value.copy(sleepTimerMs = 0L, sleepTimerEndMs = 0L)
+        }
         // 老版本只有"每首歌累计多久"，没有按天明细。把它折算成一条条记录，
         // 升级用户第一次打开报告才不会是空的（只执行一次，见 seedFromLegacy）。
         viewModelScope.launch(Dispatchers.IO) {
@@ -1143,28 +1156,25 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         applyFilters(resetToFirst = true)
     }
 
-    // ==================== 睡眠定时器 ====================
+// ==================== 睡眠定时器 ====================
+    // 计时权威在 playback.SleepTimer（随 MusicService 进程存活，界面销毁不失效）。
+    // 这里只负责：下发设置 + 把到期/恢复映射到 UI 状态。
 
     /** 设置睡眠定时器，minutes <= 0 视为取消 */
     fun setSleepTimer(minutes: Int) {
-        cancelSleepTimer()
-        if (minutes <= 0) return
-
-        val totalMs = minutes * 60_000L
-        _state.value = _state.value.copy(
-            sleepTimerMs = totalMs,
-            sleepTimerEndMs = System.currentTimeMillis() + totalMs
-        )
-        sleepTimerJob = viewModelScope.launch {
-            delay(totalMs)
-            controller?.pause()
+        val app = getApplication<Application>()
+        if (minutes <= 0) {
+            SleepTimer.cancel()
             _state.value = _state.value.copy(sleepTimerMs = 0L, sleepTimerEndMs = 0L)
+            return
         }
+        val totalMs = minutes * 60_000L
+        val end = SleepTimer.set(app, minutes)
+        _state.value = _state.value.copy(sleepTimerMs = totalMs, sleepTimerEndMs = end)
     }
 
     fun cancelSleepTimer() {
-        sleepTimerJob?.cancel()
-        sleepTimerJob = null
+        SleepTimer.cancel()
         if (_state.value.sleepTimerMs > 0) {
             _state.value = _state.value.copy(sleepTimerMs = 0L, sleepTimerEndMs = 0L)
         }
@@ -1543,7 +1553,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         _state.value = _state.value.copy(queue = list, currentIndex = newIndex)
-
+        // 浏览类筛选（搜索防抖等，resetToFirst=false）且当前歌被筛掉：不动播放器。
+        // 旧实现会 pushQueue(0)——播放中一搜索，当前歌立刻被第一条搜索结果顶掉。
+        // 现在浏览列表与播放队列解耦：筛选只改显示，队列只在点歌/显式重建时改变。
+        if (playing != null && newIndex < 0 && !resetToFirst) return
         // 当前曲目仍在队列里则续播原位置，否则用恢复位置（都没有就从头）
         val keepPosition = when {
             keptIndex >= 0 -> controller?.currentPosition ?: 0L
@@ -1683,6 +1696,7 @@ private fun refreshSystemDark() {
             .build()
 
     override fun onCleared() {
+        sleepUnsub?.let { it() }; sleepUnsub = null
         controller?.removeListener(listener)
         controller?.release()
         controller = null

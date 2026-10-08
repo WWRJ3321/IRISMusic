@@ -118,6 +118,7 @@ internal fun SettingsPanel(
     onDismiss: () -> Unit
 ) {
     val scrollState = rememberScrollState()
+    val panelContext = LocalContext.current
     // 「指定文件夹」：SAF 目录树选择器。开启后曲库只收录所选文件夹之内的歌曲。
     var scanRootStatus by remember { mutableStateOf("") }
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -808,6 +809,40 @@ internal fun SettingsPanel(
         if (scanRootStatus.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(scanRootStatus, color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
+        }
+
+        // ---- 存储权限 ----
+        // 「所有文件访问」未授予时曲库直扫会漏歌。启动只在首次引导一次，
+        // 这里补一个常驻手动入口（旧实现没有：错过首启引导就再也没地方开）。
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+            && !android.os.Environment.isExternalStorageManager()) {
+            Spacer(Modifier.height(12.dp))
+            Text("存储权限", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text("未授予「所有文件访问」，曲库可能漏掉部分歌曲。", color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
+            Spacer(Modifier.height(8.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth().height(40.dp)
+                    .clip(IrisShape.item)
+                    .background(colors.primary.copy(alpha = 0.18f))
+                    .clickable {
+                        Haptics.tap()
+                        val intent = android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                            android.net.Uri.parse("package:${panelContext.packageName}")
+                        )
+                        runCatching { panelContext.startActivity(intent) }.onFailure {
+                            runCatching {
+                                panelContext.startActivity(android.content.Intent(
+                                    android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("去开启", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+            }
         }
 
         Spacer(Modifier.height(14.dp))

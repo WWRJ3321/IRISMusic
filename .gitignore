@@ -57,3 +57,6 @@ irismusic-default-data.json
 
 # 本地设计稿与宣传素材，仅本地
 publicity/
+
+# 音效素材工作目录（审核中，通过后转入 res/raw）
+sfx/
