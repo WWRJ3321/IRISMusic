@@ -101,7 +101,18 @@ object MusicRepository {
         }
         val roots = mutableSetOf<String>()
         runCatching {
-            context.getExternalFilesDirs(null).forEach { f -> f?.parentFile?.let { roots.add(it.absolutePath) } }
+            // getExternalFilesDirs 每个卷返回 .../<vol>/Android/data/<pkg>/files，
+            // 一级 parent 只是 App 自己的沙盒目录。沿路径上溯找卷根：
+            // 找第一个名字不是 data/media/obb/Android 的祖先目录（沙盒路径的
+            // 祖父级即卷根，如 /storage/XXXX-XXXX；主存储同理）。不这样上溯，
+            // SD 卡上的歌除非手动选文件夹否则扫不到。
+            context.getExternalFilesDirs(null).forEach { f ->
+                var dir = f?.parentFile
+                while (dir != null && dir.name.lowercase() in setOf("data", "media", "obb", "android")) {
+                    dir = dir.parentFile
+                }
+                if (dir != null && dir.exists()) roots.add(dir.absolutePath)
+            }
             roots.add(Environment.getExternalStorageDirectory().absolutePath)
         }
         val result = mutableListOf<String>()
@@ -284,7 +295,7 @@ object MusicRepository {
     /** 移动判定指纹：标题+艺术家+曲长。移动不改这些；缺标题则不参与匹配 */
     private fun moveKey(m: MetaEntry): String? {
         if (m.title.isBlank() || m.durationMs <= 0L) return null
-        return m.title + ' ' + m.artist + ' ' + m.durationMs
+        return m.title + '\u0000' + m.artist + '\u0000' + m.durationMs
     }
 
     /**

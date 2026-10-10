@@ -20,6 +20,7 @@ import android.content.Intent
 import com.iris.music.MainActivity
 import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
+import com.iris.music.audio.EqProcessor
 import com.iris.music.audio.FadeController
 import com.iris.music.audio.RangeEnhancer
 import com.iris.music.audio.SafeLimiter
@@ -101,7 +102,7 @@ class MusicService : MediaSessionService() {
         ): AudioSink = DefaultAudioSink.Builder(context)
             .setEnableFloatOutput(enableFloatOutput)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-            // DSP 链顺序：曲间响度均衡 → 动态范围增强 → 虚拟环绕 → 宽场环绕 → 虚拟低音 → 防失真限幅 → 频谱旁路。
+            // DSP 链顺序：曲间响度均衡 → 动态范围增强 → 虚拟环绕 → 宽场环绕 → 虚拟低音 → 十段均衡 → 防失真限幅 → 频谱旁路。
             // TrackGain 放最前：测原始信号，校正后电平让后级（含频谱/震动）看到真实输出。
             // RangeEnhancer 先抬响度会让 VirtualBass 的低频检测跟着抬高，
             // 两者对响度的影响会互相叠加；让 VirtualBass 看到原始低频
@@ -119,6 +120,11 @@ class MusicService : MediaSessionService() {
                 VirtualSurround,
                 SpatialWide,
                 VirtualBass,
+                // EQ 必须在限幅之前：v4.6.8 及之前用的是系统 audiofx.Equalizer，
+                // 挂在 AudioTrack 输出段、排在限幅之后，用户抬频段等于绕过限幅
+                // 直接在系统混音层削波。现在 EQ 是链内 biquad，增益溢出先被
+                // 自动预增益抵消、残余峰值再由限幅兜底。
+                EqProcessor,
                 SafeLimiter,
                 TeeAudioProcessor(SpectrumAnalyzer)
             ))
@@ -154,6 +160,8 @@ class MusicService : MediaSessionService() {
             // 拔耳机/断开蓝牙时自动暂停
             .setHandleAudioBecomingNoisy(true)
             .build()
+        // 锁屏播放期间持有唤醒锁（WAKE_LOCK 权限的消费方，否则 Doze 下 CPU 休眠会断音）
+        player.setWakeMode(C.WAKE_MODE_LOCAL)
 
         // 音量渐变：曲首渐入、曲尾渐出、暂停先渐出。
         // 关闭渐变时仍保留 150ms 防爆音渐入（原来写在这里的 fadeHandler 逻辑已收进控制器）。

@@ -276,7 +276,12 @@ object DataTransfer {
     suspend fun import(context: Context, uri: Uri, songs: List<Song>): ImportResult =
         withContext(Dispatchers.IO) {
             val text = runCatching {
-                context.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() }
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    // 大小护栏：坏文件/超大文件不许整读进内存（32MB 上限，正常导出远小于此）
+                    if (input.available() > 32 * 1024 * 1024) return@use null
+                    val buf = input.readBytes()
+                    if (buf.size > 32 * 1024 * 1024) null else buf.decodeToString()
+                }
             }.getOrNull() ?: return@withContext ImportResult.Failed
 
             val root = runCatching { JSONObject(text) }.getOrNull()

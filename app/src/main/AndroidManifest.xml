@@ -18,8 +18,11 @@
     <!-- 检查更新（opt-in）：仅设置页开关开启并手动检查时访问 GitHub API，无遥测 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <application
-        android:allowBackup="true"
+    <!-- 与"数据只留在本机"的承诺一致：关闭系统备份/设备迁移，
+             避免听歌统计、播放历史经 Google 云备份离开本机 -->
+        <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"

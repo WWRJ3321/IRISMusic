@@ -45,10 +45,23 @@ class ArtworkBitmapLoader private constructor(private val appContext: Context) :
 
     override fun supportsMimeType(mimeType: String): Boolean = true
 
+    /** 系统侧封面（锁屏/车机/蓝牙）最大边：768 足够，也防大图 OOM 和向系统传图 TransactionTooLarge */
+    private val SYSTEM_MAX_PX = 768
+
+    /** 带降采样解码：先读边界算 inSampleSize，目标最大边 ≤ [SYSTEM_MAX_PX] */
+    private fun decodeSampled(bytes: ByteArray): Bitmap? = runCatching {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        if (opts.outWidth <= 0 || opts.outHeight <= 0) return@runCatching null
+        var sample = 1
+        while (maxOf(opts.outWidth, opts.outHeight) / (sample * 2) >= SYSTEM_MAX_PX) sample *= 2
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+    }.getOrNull()
+
     /** 系统偶尔会直接把封面字节交给我们解码——同步解完立即返回即可。 */
     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> {
         val future = SettableFuture.create<Bitmap>()
-        val bmp = runCatching { BitmapFactory.decodeByteArray(data, 0, data.size) }.getOrNull()
+        val bmp = decodeSampled(data)
         if (bmp != null) future.set(bmp)
         else future.setException(IllegalStateException("bitmap decode failed"))
         return future
@@ -77,7 +90,7 @@ class ArtworkBitmapLoader private constructor(private val appContext: Context) :
         return try {
             retriever.setDataSource(appContext, uri)
             val bytes = retriever.embeddedPicture ?: return null
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            decodeSampled(bytes)
         } catch (e: Throwable) {
             null
         } finally {

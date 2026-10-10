@@ -52,7 +52,8 @@ object ListenStats {
 
     /**
      * 落盘线程。单线程：写入必须串行，否则两次 append 可能交错出半行。
-     * 用它而不是协程作用域——本对象也被服务进程用，那边没有 viewModelScope。
+     * 用它而不是协程作用域——Service 与 ViewModel 两条生命周期都会调用到这里，
+     * 而 ViewModel 的 viewModelScope 在主界面销毁时会被取消，不能用来兜底落盘。
      */
     private val ioExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "iris-listen-stats").apply { isDaemon = true }

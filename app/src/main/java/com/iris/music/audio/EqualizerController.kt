@@ -2,7 +2,6 @@ package com.iris.music.audio
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.media.audiofx.Equalizer
 import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,7 +47,7 @@ data class EqualizerState(
 }
 
 /**
- * 系统均衡器封装（android.media.audiofx.Equalizer）。
+ * 均衡器控制器：曲线/预设/等响/持久化的统一入口，DSP 在链内 EqProcessor。
  *
  * 两种调节模式：
  * - CURVE：用户自由摆放锚点，插值曲线后按各频段中心频率采样，写入系统均衡器
@@ -77,7 +76,7 @@ object EqualizerController {
     private const val APPLY_THROTTLE_MS = 45L
 
     private var prefs: SharedPreferences? = null
-    private var equalizer: Equalizer? = null
+    private var initialized = false
     private var attachedSessionId = 0
 
     private val _state = MutableStateFlow(EqualizerState())
@@ -103,38 +102,13 @@ object EqualizerController {
      * 设备不支持时把 available 置为 false 而不抛异常。
      */
     fun attach(sessionId: Int) {
-        if (sessionId == 0 || (sessionId == attachedSessionId && equalizer != null)) return
-
-        releaseEffect()
-
-        val eq = runCatching { Equalizer(EFFECT_PRIORITY, sessionId) }.getOrNull()
-        if (eq == null) {
-            _state.value = EqualizerState(available = false)
-            return
-        }
-
-        equalizer = eq
+        if (sessionId == 0 || (sessionId == attachedSessionId && initialized)) return
+        initialized = true
         attachedSessionId = sessionId
 
-        val bandCount = runCatching { eq.numberOfBands.toInt() }.getOrDefault(0)
-        if (bandCount <= 0) {
-            releaseEffect()
-            _state.value = EqualizerState(available = false)
-            return
-        }
-
-        val range = runCatching { eq.bandLevelRange }.getOrNull()
-        val minMb = range?.getOrNull(0)?.toInt() ?: -1500
-        val maxMb = range?.getOrNull(1)?.toInt() ?: 1500
-
-        val freqs = (0 until bandCount).map { band ->
-            // getCenterFreq 返回毫赫兹
-            runCatching { eq.getCenterFreq(band.toShort()) / 1000 }.getOrDefault(0)
-        }
-
-        // 均衡器始终保持 enabled，避免 effect 链路切换产生爆音
-        // 增益曲线常开：没有开关概念，调整立即生效
-        runCatching { eq.enabled = true }
+        val freqs = EqProcessor.BAND_FREQS.toList()
+        val minMb = EqProcessor.MIN_LEVEL_MB
+        val maxMb = EqProcessor.MAX_LEVEL_MB
 
         val savedMode = runCatching {
             EqEditMode.valueOf(prefs?.getString(KEY_MODE, EqEditMode.CURVE.name)!!)
@@ -143,15 +117,11 @@ object EqualizerController {
             ?.let { name -> runCatching { EqBoost.valueOf(name) }.getOrNull() }
         val savedLoudness = prefs?.getBoolean(KEY_LOUDNESS, false) ?: false
         val savedLoudnessStrength = prefs?.getInt(KEY_LOUDNESS_STRENGTH, 100)?.coerceIn(0, 100) ?: 100
-
         // 锚点：优先读存档，否则按频段生成一条平直曲线
         val anchors = readSavedAnchors()?.takeIf { it.size >= EQ_MIN_ANCHORS }
             ?: freqs.map { EqAnchor(it, 0) }
-
-        // 增益不读硬件、以存档为准：硬件里可能还留着上次写入的「用户曲线 + 等响补偿」
-        // 之和，读回来会被误当成用户曲线，等响开着时每次重启都会把补偿量再叠一层。
-        val levels = readSavedLevels(bandCount)
-
+        // 增益以存档为准（等响补偿在 applyLevelsNow 叠加、从不回读）
+        val levels = readSavedLevels(freqs.size)
         _state.value = EqualizerState(
             available = true,
             centerFreqsHz = freqs,
@@ -164,7 +134,7 @@ object EqualizerController {
             editMode = savedMode,
             anchors = anchors
         )
-        // 状态就绪后再写硬件，applyLevelsNow 要按 state 里的 loudness 叠补偿
+        // 状态就绪后再写处理器，applyLevelsNow 要按 state 里的 loudness 叠补偿
         applyLevelsNow(levels)
     }
 
@@ -179,7 +149,6 @@ object EqualizerController {
         intervalMs: Long,
         onDone: () -> Unit = {}
     ) {
-        val eq = equalizer ?: run { onDone(); return }
         ramping = true
         // 先把硬件设到起点
         applyLevelsNow(from)
@@ -417,42 +386,25 @@ object EqualizerController {
      * 因此面板画的永远是用户自己那条线，开关等响不会改动曲线本身。
      */
     private fun applyLevelsNow(levels: List<Int>) {
-        val eq = equalizer ?: return
         val s = _state.value
         val loudness = s.loudness
         val loudAmount = s.loudnessStrength / 100f
-        levels.forEachIndexed { band, mb ->
+        val out = levels.mapIndexed { band, mb ->
             val comp = if (loudness) loudnessCompensationMb(s.centerFreqsHz.getOrElse(band) { 0 }, loudAmount) else 0
-            val out = (mb + comp).coerceIn(s.minLevelMb, s.maxLevelMb)
-            runCatching { eq.setBandLevel(band.toShort(), out.toShort()) }
+            (mb + comp).coerceIn(s.minLevelMb, s.maxLevelMb)
         }
+        EqProcessor.setLevelsMb(out)
     }
-
     private fun releaseEffect() {
         // 取消正在进行的渐变动画
         handler.removeCallbacksAndMessages(null)
-        val wasRamping = ramping
         ramping = false
-        // 渐变被中断时：直接写回目标曲线，避免中间值残留
-        if (wasRamping && equalizer != null) {
-            val s = _state.value
-            val target = s.levelsMb
-            if (target.isNotEmpty()) {
-                runCatching {
-                    target.forEachIndexed { band, mb ->
-                        equalizer?.setBandLevel(band.toShort(), mb.toShort())
-                    }
-                }
-            }
-        }
-        // 补写被节流跳过的最后一次
-        pendingLevels?.let { applyLevelsNow(it) }
         pendingLevels = null
-        equalizer?.let { eq -> runCatching { eq.release() } }
-        equalizer = null
+        initialized = false
         attachedSessionId = 0
+        // 播放器已释放：处理器无信号可作用，清成直通即可（系数在下个 attach 重建）
+        EqProcessor.setLevelsMb(emptyList())
     }
-
     private fun readSavedLevels(bandCount: Int): List<Int> {
         val raw = prefs?.getString(KEY_LEVELS, null) ?: return List(bandCount) { 0 }
         val parsed = raw.split(',').mapNotNull { it.trim().toIntOrNull() }

@@ -29,13 +29,8 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # gradle.properties 里的 aapt2 覆盖与 JDK 路径是作者手机（aarch64/proot）专用，
-      # 在 x86 runner 上必须剥离，否则 AGP 会去找不存在的本地路径。
-      - name: Strip device-specific gradle overrides
-        run: |
-          sed -i '/aapt2FromMavenOverride/d; /org.gradle.java.home/d' gradle.properties
-          echo "--- effective gradle.properties ---"
-          cat gradle.properties
+      - name: Show effective gradle.properties
+        run: cat gradle.properties
 
       # 权限审计：除了下列已声明权限外不允许出现新的权限。
       # INTERNET 仅用于 opt-in 的检查更新，若被意外扩大会在这里失败。

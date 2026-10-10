@@ -218,9 +218,44 @@ object LyricParser {
             if (id == "USLT" || id == "SYLT") {
                 decodeUslt(body, pos, size)?.takeIf { it.isNotBlank() }?.let { return it }
             }
+            // 网易云等工具把歌词放 TXXX(description=LYRICS) 而不是 USLT
+            if (id == "TXXX") {
+                decodeTxxx(body, pos, size)?.takeIf { it.isNotBlank() }?.let { return it }
+            }
             pos += size
         }
         return null
+    }
+
+    /** 解码 TXXX 帧：编码字节 + 描述(按编码终止) + 文本；仅当描述为 LYRICS 时返回文本 */
+    private fun decodeTxxx(body: ByteArray, start: Int, size: Int): String? {
+        if (size < 3) return null
+        val enc = body[start].toInt() and 0xFF
+        var p = start + 1
+        val dataEnd = start + size
+        if (enc == 1 || enc == 2) {
+            while (p + 1 < dataEnd) {
+                if (body[p].toInt() == 0 && body[p + 1].toInt() == 0) { p += 2; break }
+                p += 2
+            }
+        } else {
+            while (p < dataEnd && body[p].toInt() != 0) p++
+            if (p < dataEnd) p++
+        }
+        if (p >= dataEnd) return null
+        val descBytes = body.copyOfRange(start + 1, (p - 1).coerceAtLeast(start + 1))
+        val desc = String(descBytes, if (enc == 1 || enc == 2) Charsets.UTF_16LE else Charsets.UTF_8)
+            .trimEnd('\u0000')
+        if (!desc.equals("LYRICS", ignoreCase = true) &&
+            !desc.equals("Lyrics", ignoreCase = true)
+        ) return null
+        val textBytes = body.copyOfRange(p, dataEnd)
+        val charset = when (enc) {
+            0 -> Charsets.ISO_8859_1
+            1, 2 -> Charsets.UTF_16LE
+            else -> Charsets.UTF_8
+        }
+        return String(textBytes, charset)
     }
 
     /** 反转 ID3v2 unsynchronisation：把 0xFF 0x00 还原成 0xFF，返回新数组 */
@@ -461,64 +496,103 @@ object LyricParser {
     /** 读取 OGG/Opus 的 Vorbis comment 块中 LYRICS 字段 */
     private fun readOggLyrics(file: File): String? {
         if (!file.exists() || file.length() < 4) return null
+        // 旧实现把前 256KB 当连续内存解析，遇到"comment packet 跨多个 Ogg 页"就崩：
+        // 页与页之间插有 OggS 页头，(续段长度) 会读到页头字节，跳字段时算错位置、
+        // 落进 base64 封面中间读出垃圾长度，随后的 LYRICS 字段永远轮不到被检查。
+        // QQ 音乐的 ogg 常把 METADATA_BLOCK_PICTURE（内嵌封面，上百 KB）排在
+        // LYRICS 之前，正是触发这一缺陷的典型。现在按 Ogg 分页规范重组 packet。
+        val window = minOf(file.length(), 4L * 1024 * 1024).toInt()
+        val buf = ByteArray(window)
         RandomAccessFile(file, "r").use { raf ->
-            // Ogg page: "OggS" + version(1) + headerType(1) + granule(8) + serial(4) + seq(4) + crc(4) + segCount(1) + segTable + data
-            // 只扫前 256KB，歌词 comment 一般在第二个 page（文件头附近）
-            val len = minOf(file.length(), 262_144L).toInt()
-            val buf = ByteArray(len)
             raf.seek(0)
             raf.readFully(buf)
-
-            // 找 Vorbis comment 头：0x03 + "vorbis"（Vorbis）或 "OpusTags"（Opus）
-            var commentStart = -1
-            var headerLen = 0
-            for (i in 0 until len - 40) {
-                if (buf[i] == 0x03.toByte() &&
-                    buf[i + 1] == 'v'.code.toByte() && buf[i + 2] == 'o'.code.toByte() &&
-                    buf[i + 3] == 'r'.code.toByte() && buf[i + 4] == 'b'.code.toByte() &&
-                    buf[i + 5] == 'i'.code.toByte() && buf[i + 6] == 's'.code.toByte()
-                ) {
-                    commentStart = i + 7
-                    headerLen = 0
-                    break
-                }
-                if (buf[i] == 'O'.code.toByte() && buf[i + 1] == 'p'.code.toByte() &&
-                    buf[i + 2] == 'u'.code.toByte() && buf[i + 3] == 's'.code.toByte() &&
-                    buf[i + 4] == 'T'.code.toByte() && buf[i + 5] == 'a'.code.toByte() &&
-                    buf[i + 6] == 'g'.code.toByte() && buf[i + 7] == 's'.code.toByte()
-                ) {
-                    commentStart = i + 8
-                    headerLen = 0
-                    break
-                }
-            }
-            if (commentStart < 0) return null
-
-            var p = commentStart + headerLen
-            if (p + 4 > len) return null
-            // vendor 长度 (LE)
-            val vendorLen = readInt32LE(buf, p)
-            p += 4 + vendorLen
-            if (p + 4 > len) return null
-            // comment 数量
-            val count = readInt32LE(buf, p)
-            p += 4
-            if (count < 0 || count > 10_000) return null
-            repeat(count) {
-                if (p + 4 > len) return null
-                val cLen = readInt32LE(buf, p)
-                p += 4
-                if (cLen <= 0 || cLen > len || p + cLen > len) return null
-                val entry = String(buf, p, cLen, Charsets.UTF_8)
-                p += cLen
-                val eq = entry.indexOf('=')
-                if (eq > 0 && entry.substring(0, eq).equals("LYRICS", ignoreCase = true)) {
-                    val v = entry.substring(eq + 1).trim()
-                    if (v.isNotEmpty()) return v
-                }
-            }
-            return null
         }
+        val packet = extractVorbisCommentPacket(buf) ?: return null
+
+        // Vorbis comment packet: [\\x03"vorbis" | "OpusTags"] + vendorLen + vendor + count + (len+entry)*
+        var p = if (packet.size >= 8 && packet[1] == 'p'.code.toByte()) 8 else 7
+        if (p + 4 > packet.size) return null
+        val vendorLen = readInt32LE(packet, p)
+        if (vendorLen < 0 || vendorLen > packet.size) return null
+        p += 4 + vendorLen
+        if (p + 4 > packet.size) return null
+        val count = readInt32LE(packet, p)
+        p += 4
+        if (count < 0 || count > 10_000) return null
+        repeat(count) {
+            if (p + 4 > packet.size) return null
+            val cLen = readInt32LE(packet, p)
+            p += 4
+            if (cLen <= 0 || cLen > packet.size || p + cLen > packet.size) return null
+            val entry = String(packet, p, cLen, Charsets.UTF_8)
+            p += cLen
+            val eq = entry.indexOf('=')
+            if (eq > 0 && entry.substring(0, eq).equals("LYRICS", ignoreCase = true)) {
+                val v = entry.substring(eq + 1).trim()
+                if (v.isNotEmpty()) return v
+            }
+        }
+        return null
+    }
+
+    /**
+     * 按 Ogg 分页规范把 comment 页重组为完整 packet。
+     *
+     * Ogg 页结构：OggS(4) version(1) headerType(1) granule(8) serial(4) seq(4)
+     *            crc(4) segCount(1) segTable(segCount) payload。
+     * packet 由若干 segment 拼成，segment 值 255 表示"未完待续"、<255 表示 packet 结束；
+     * 跨页时页头不参与 packet 内容。这里只扫到 comment packet 为止（通常是第 2 个 packet）。
+     */
+    private fun extractVorbisCommentPacket(buf: ByteArray): ByteArray? {
+        var pos = 0
+        var cur: java.io.ByteArrayOutputStream? = null
+        while (pos + 27 <= buf.size) {
+            // 页头校验：OggS
+            if (buf[pos] != 'O'.code.toByte() || buf[pos + 1] != 'g'.code.toByte() ||
+                buf[pos + 2] != 'g'.code.toByte() || buf[pos + 3] != 'S'.code.toByte()
+            ) break
+            val segCount = buf[pos + 26].toInt() and 0xFF
+            if (pos + 27 + segCount > buf.size) break
+            var p = pos + 27 + segCount   // payload 起点（跳过段表）
+            var i = 0
+            while (i < segCount) {
+                val segLen = buf[pos + 27 + i].toInt() and 0xFF
+                if (p + segLen > buf.size) return null
+                if (cur == null) {
+                    // packet 起始：判断是不是 comment 头（\x03vorbis / OpusTags）
+                    if (segLen >= 7 && buf[p] == 0x03.toByte() &&
+                        matches(buf, p + 1, "vorbis")
+                    ) {
+                        cur = java.io.ByteArrayOutputStream()
+                    } else if (segLen >= 8 && matches(buf, p, "OpusTags")) {
+                        cur = java.io.ByteArrayOutputStream()
+                    } else {
+                        // 非目标 packet：跳过本页剩余段（不跨页跟踪，audio 页另处理）
+                        p += segLen
+                        i++
+                        continue
+                    }
+                }
+                cur.write(buf, p, segLen)
+                p += segLen
+                i++
+                if (segLen < 255) {
+                    // packet 结束
+                    val done = cur?.toByteArray()
+                    if (done != null) return done
+                    cur = null
+                }
+            }
+            pos = p
+        }
+        // 读到窗口末尾仍未见完整 packet（极少见），返回已拼内容兜底
+        return cur?.toByteArray()?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun matches(b: ByteArray, off: Int, s: String): Boolean {
+        if (off + s.length > b.size) return false
+        for (i in s.indices) if (b[off + i] != s[i].code.toByte()) return false
+        return true
     }
 
     private fun readInt32LE(b: ByteArray, off: Int): Int =
