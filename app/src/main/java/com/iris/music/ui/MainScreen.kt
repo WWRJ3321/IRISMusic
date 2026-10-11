@@ -107,6 +107,8 @@ import com.iris.music.data.RepeatMode
 import com.iris.music.data.Playlist
 import com.iris.music.data.Playlists
 import com.iris.music.data.Song
+import com.iris.music.data.SortDirection
+import com.iris.music.data.SortOrder
 import com.iris.music.data.formatLabel
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
@@ -316,8 +318,10 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                         onReport = { viewModel.toggleReport(true) },
                         onReload = { viewModel.reloadLibrary() },
                         onCycleLayout = { viewModel.setLayout(state.layout.next) },
-                        onOpenPlaylists = { showPlaylists = true },
-                        onAddToPlaylist = { song -> pendingAddSong = song },
+onOpenPlaylists = { showPlaylists = true },
+                         onSortOrder = viewModel::setSortOrder,
+                         onSortDirection = viewModel::setSortDirection,
+                         onAddToPlaylist = { song -> pendingAddSong = song },
                         scrollerDragging = scrollerDragging,
                         showCount = showCountLabel
                     )
@@ -557,8 +561,80 @@ visible = scrollerVisible,
     }
 }
 
-// ==================== 列表页 ====================
+/**
+ * 曲库排序栏：上栏卡片的扩展行（与搜索框同级）。
+ *
+ * 交互是"点一下切换"，没有弹出选单——Popup 悬浮层无法折射上栏背板、
+ * 嵌套圆角和主题适配都容易出缝，循环切换从根上没有这些问题：
+ * 左胶囊点击循环 标题→艺术家→时长→修改/添加时间，右胶囊切换 正序/倒序。
+ * 胶囊与搜索框同形：同圆角（IrisShape.item）、同底色、同字号。
+ */
+@Composable
+private fun LibrarySortBar(
+    order: SortOrder,
+    direction: SortDirection,
+    colors: IrisColors,
+    glass: Boolean,
+    onOrderChange: (SortOrder) -> Unit,
+    onDirectionChange: (SortDirection) -> Unit
+) {
+    val chipHeight = 30.dp
+    val chipBg = if (glass) {
+        if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+    } else {
+        if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .height(chipHeight)
+                .clip(IrisShape.item)
+                .background(chipBg)
+                .clickable {
+                    Haptics.tap()
+                    val next = SortOrder.entries[(order.ordinal + 1) % SortOrder.entries.size]
+                    onOrderChange(next)
+                }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                order.label,
+                color = colors.text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        Box(
+            modifier = Modifier
+                .height(chipHeight)
+                .clip(IrisShape.item)
+                .background(chipBg)
+                .clickable {
+                    Haptics.tap()
+                    onDirectionChange(
+                        if (direction == SortDirection.ASCENDING) SortDirection.DESCENDING
+                        else SortDirection.ASCENDING
+                    )
+                }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                if (direction == SortDirection.ASCENDING) "正序 ↑" else "倒序 ↓",
+                color = colors.text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
 
+// ==================== 列表页 ====================
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LibraryPage(
@@ -574,6 +650,8 @@ private fun LibraryPage(
     onReload: () -> Unit,
     onCycleLayout: () -> Unit,
     onOpenPlaylists: () -> Unit,
+    onSortOrder: (SortOrder) -> Unit,
+    onSortDirection: (SortDirection) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
     showCount: Boolean = true
 ) {
@@ -639,6 +717,22 @@ private fun LibraryPage(
     val hideDistancePx = statusBarHeightDp + with(density) { barTopGap.toPx() } + barHeight.value
     val hideDistanceState = rememberUpdatedState(hideDistancePx)
     val barScope = rememberCoroutineScope()
+    // 排序行是上栏的扩展：上栏几乎完整露出（≈90%）才展开，滚走时随上栏收起。
+    // 与搜索框同款"闲置自动收起"：选完排序/方向后短暂停留自动收起，
+    // 上栏完全收起再重新拉出时恢复展开。不占列表条目，滚动条索引不受影响。
+    val sortBarExposed by remember {
+        derivedStateOf { barOffset.value > -hideDistanceState.value * 0.1f }
+    }
+    var sortBarDismissed by remember { mutableStateOf(false) }
+    var sortInteractionTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(sortBarExposed) { if (!sortBarExposed) sortBarDismissed = false }
+    LaunchedEffect(sortInteractionTick) {
+        if (sortInteractionTick > 0) {
+            delay(1400)
+            sortBarDismissed = true
+        }
+    }
+    val sortBarVisible = state.showSortBar && sortBarExposed && !sortBarDismissed
     var barSettleJob by remember { mutableStateOf<Job?>(null) }
     val settleBarTo: (Float) -> Unit = { target ->
         barSettleJob?.cancel()
@@ -1067,6 +1161,31 @@ private fun LibraryPage(
                         ReportButton(onClick = onReport, colors = colors)
                         Spacer(Modifier.width(8.dp))
                         SettingsButton(onClick = onSettings, colors = colors)
+                    }
+                }
+
+                // 排序行：上栏的扩展，上栏基本露出后才展开，随上栏收起
+                AnimatedVisibility(
+                    visible = sortBarVisible,
+                    enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
+                    exit = fadeOut(tween(160)) + shrinkVertically(tween(200, easing = EaseOutCubic))
+                ) {
+                    Column {
+                        Spacer(Modifier.height(6.dp))
+                        LibrarySortBar(
+                            order = state.sortOrder,
+                            direction = state.sortDirection,
+                            colors = colors,
+                            glass = glass,
+                            onOrderChange = {
+                                onSortOrder(it)
+                                sortInteractionTick++
+                            },
+                            onDirectionChange = {
+                                onSortDirection(it)
+                                sortInteractionTick++
+                            }
+                        )
                     }
                 }
 

@@ -30,7 +30,12 @@ enum class SortOrder(val label: String) {
     TITLE("标题"),
     ARTIST("艺术家"),
     DURATION("时长"),
-    RECENT("最近添加")
+    RECENT("修改/添加时间")
+}
+
+enum class SortDirection(val label: String) {
+    ASCENDING("正序"),
+    DESCENDING("倒序")
 }
 
 /**

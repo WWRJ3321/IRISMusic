@@ -37,6 +37,7 @@ import com.iris.music.data.Recommender
 import com.iris.music.data.RepeatMode
 import com.iris.music.data.ScanPath
 import com.iris.music.data.Song
+import com.iris.music.data.SortDirection
 import com.iris.music.data.SortOrder
 import com.iris.music.data.StatRange
 import com.iris.music.playback.MusicService
@@ -53,6 +54,7 @@ import com.iris.music.ui.theme.IrisMode
 import com.iris.music.ui.theme.IrisLayout
 import com.iris.music.ui.theme.IrisSurfaceStyle
 import com.iris.music.ui.theme.IrisTheme
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -70,6 +72,7 @@ data class PlayerUiState(
     val selectedFolders: Set<String> = emptySet(),
     val searchQuery: String = "",
     val sortOrder: SortOrder = SortOrder.TITLE,
+    val sortDirection: SortDirection = SortDirection.ASCENDING,
     val currentIndex: Int = -1,
     val isPlaying: Boolean = false,
     val positionMs: Long = 0L,
@@ -159,6 +162,8 @@ data class PlayerUiState(
     val hapticsEnabled: Boolean = true,
     /** 歌单页显示"为你推荐"区域 */
     val showRecommendations: Boolean = true,
+    /** 上栏排序行显示开关（关闭后上栏不再展开排序胶囊） */
+    val showSortBar: Boolean = true,
     /** 无声略过（beta）：自动跳过曲首/曲尾静音段 */
     val silenceSkip: Boolean = false,
     /** 低音马达震动（beta · 多维听感） */
@@ -230,6 +235,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             theme = readTheme(),
             mode = readMode(),
             surfaceStyle = readSurfaceStyle(),
+            sortOrder = readSortOrder(),
+            sortDirection = readSortDirection(),
             layout = readLayout(),
             glassBlur = prefs.getFloat(KEY_GLASS_BLUR, GLASS_BLUR_DEFAULT)
                 .coerceIn(GLASS_BLUR_MIN, GLASS_BLUR_MAX),
@@ -260,6 +267,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             fadeMs = prefs.getLong(FadeController.KEY_FADE_MS, FadeController.DEFAULT_FADE_MS),
             hapticsEnabled = prefs.getBoolean(Haptics.KEY_ENABLED, true),
             showRecommendations = prefs.getBoolean(KEY_SHOW_RECS, true),
+            showSortBar = prefs.getBoolean(KEY_SHOW_SORT_BAR, true),
             jellyAnim = prefs.getBoolean(KEY_JELLY_ANIM, false),
             silenceSkip = prefs.getBoolean(SilenceSkipper.KEY_ENABLED, false),
             bassHaptics = prefs.getBoolean(BassHaptics.KEY_ENABLED, false),
@@ -781,7 +789,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setSortOrder(order: SortOrder) {
+        prefs.edit().putString(KEY_SORT_ORDER, order.name).apply()
         _state.value = _state.value.copy(sortOrder = order)
+        applyFilters(resetToFirst = false)
+    }
+    fun setSortDirection(direction: SortDirection) {
+        prefs.edit().putString(KEY_SORT_DIRECTION, direction.name).apply()
+        _state.value = _state.value.copy(sortDirection = direction)
         applyFilters(resetToFirst = false)
     }
 
@@ -998,6 +1012,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(showRecommendations = show)
     }
 
+    /** 上栏排序行显示开关 */
+    fun setShowSortBar(show: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_SORT_BAR, show).apply()
+        _state.value = _state.value.copy(showSortBar = show)
+    }
     /** 海报墙果冻动效开关 */
     fun setJellyAnim(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_JELLY_ANIM, enabled).apply()
@@ -1524,9 +1543,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             SortOrder.TITLE -> list.sortedBy { it.title.lowercase() }
             SortOrder.ARTIST -> list.sortedBy { it.artist.lowercase() }
             SortOrder.DURATION -> list.sortedBy { it.durationMs }
-            // MediaStore 已按 DATE_ADDED DESC 返回，保持原顺序即为“最近添加”
-            SortOrder.RECENT -> list
+            // 文件修改时间作为本地可用的“添加/修改时间”代理，先按旧到新排列。
+            SortOrder.RECENT -> list.sortedBy { File(it.filePath).lastModified() }
         }
+        if (s.sortDirection == SortDirection.DESCENDING) list = list.asReversed()
 
         val keptIndex = if (playing != null) list.indexOfFirst { it.id == playing.id } else -1
 
@@ -1652,6 +1672,12 @@ private fun refreshSystemDark() {
         return runCatching { IrisSurfaceStyle.valueOf(saved) }.getOrDefault(IrisSurfaceStyle.SOLID)
     }
 
+        private fun readSortOrder(): SortOrder =
+        runCatching { SortOrder.valueOf(prefs.getString(KEY_SORT_ORDER, SortOrder.TITLE.name)!!) }
+            .getOrDefault(SortOrder.TITLE)
+    private fun readSortDirection(): SortDirection =
+        runCatching { SortDirection.valueOf(prefs.getString(KEY_SORT_DIRECTION, SortDirection.ASCENDING.name)!!) }
+            .getOrDefault(SortDirection.ASCENDING)
     /** 界面排布。未存过（老版本升级）时为纵向列表，也就是原有观感 */
     private fun readLayout(): IrisLayout =
         runCatching { IrisLayout.valueOf(prefs.getString(KEY_LAYOUT, IrisLayout.LIST.name)!!) }
@@ -1716,6 +1742,8 @@ private const val KEY_THEME = "theme"
         /** 上次选中的歌单 ID，-1 = 无（全部/文件夹视图）。需持久化，否则重启回到默认全部。 */
         const val KEY_ACTIVE_PLAYLIST = "active_playlist_id"
         const val KEY_LAYOUT = "ui_layout"
+        const val KEY_SORT_ORDER = "sort_order"
+        const val KEY_SORT_DIRECTION = "sort_direction"
         const val KEY_GLASS_BLUR = "glass_blur"
         const val KEY_BG_BLUR = "bg_blur"
         const val KEY_ROW_SIZE = "row_size"
@@ -1744,6 +1772,7 @@ private const val KEY_THEME = "theme"
         const val KEY_LAST_SONG = "last_song_id"
         const val KEY_LAST_POS = "last_position_ms"
         const val KEY_SHOW_RECS = "show_recommendations"
+        const val KEY_SHOW_SORT_BAR = "show_sort_bar"
         const val KEY_JELLY_ANIM = "jelly_anim"
     }
 }

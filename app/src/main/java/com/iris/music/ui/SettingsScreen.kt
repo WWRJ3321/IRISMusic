@@ -833,6 +833,14 @@ internal fun SettingsPanel(
             Spacer(Modifier.height(8.dp))
             Text(scanRootStatus, color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
         }
+        Spacer(Modifier.height(12.dp))
+        // ---- 上栏排序行 ----
+        SettingToggleRow(
+            "上栏显示排序",
+            state.showSortBar,
+            colors,
+            subtitle = "关闭后上栏不再展开排序选项，界面更简洁"
+        ) { viewModel.setShowSortBar(!state.showSortBar) }
 
         // ---- 存储权限 ----
         // 「所有文件访问」未授予时曲库直扫会漏歌。启动只在首次引导一次，
