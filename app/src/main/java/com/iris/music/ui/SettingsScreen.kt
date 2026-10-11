@@ -122,17 +122,40 @@ internal fun SettingsPanel(
     // 「指定文件夹」：SAF 目录树选择器。开启后曲库只收录所选文件夹之内的歌曲。
     var scanRootStatus by remember { mutableStateOf("") }
     val folderPickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        val path = viewModel.resolveScanRoot(uri)
-        if (path == null) {
-            scanRootStatus = "无法获取该文件夹的真实路径，请从本地存储中选择"
-        } else {
-            scanRootStatus = ""
-            viewModel.setScanRoot(path)
+    ActivityResultContracts.OpenDocumentTree()
+) { uri ->
+    if (uri == null) return@rememberLauncherForActivityResult
+    val path = viewModel.resolveScanRoot(uri)
+    if (path == null) {
+        scanRootStatus = "无法获取该文件夹的真实路径，请从本地存储中选择"
+    } else {
+        // 选定前探一次可读性——三种"选了却没歌"的常见情形要当场说清，
+        // 不能让用户对着空曲库猜（B站评论反馈：选了全是 mp3 的文件夹却没歌，
+        // 实际选的是 Android/data 下某 App 的沙盒目录）。
+        val dir = java.io.File(path)
+        val probe = runCatching { dir.listFiles() }.getOrNull()
+        val isOtherAppSandbox = path.contains("/Android/data/") &&
+            !path.contains(panelContext.packageName)
+        when {
+            isOtherAppSandbox ->
+                scanRootStatus = "其他应用的 Android/data 目录系统禁止读取（Android 11+ 限制，与权限无关）。请把音乐移到 Music、Download 等普通文件夹后再选择。"
+            probe == null ->
+                scanRootStatus = "无法读取该文件夹，请先在下方「存储权限」开启「所有文件访问」后重新选择。"
+            else -> {
+                // 浅探一层：目录里（含一层子目录）有没有音频文件
+                val exts = setOf("mp3", "flac", "ogg", "oga", "opus", "m4a", "wav", "aac", "ape")
+                val hasAudio = probe.any { it.isFile && it.extension.lowercase() in exts } ||
+                    probe.any { sub ->
+                        sub.isDirectory && runCatching {
+                            sub.listFiles()?.any { it.isFile && it.extension.lowercase() in exts } == true
+                        }.getOrDefault(false)
+                    }
+                viewModel.setScanRoot(path)
+                scanRootStatus = if (hasAudio) "" else "该文件夹（含一层子目录）未发现音频文件；更深层次的子目录会在扫描后收录。"
+            }
         }
     }
+}
     // 主题色直接当文字用，在浅色模式下会翻车：霓虹青/黄落在白色面板上对比度只有 1.5 左右。
     // 分组标题统一走可读修正，深色模式下修正函数会原样返回，不影响原有观感。
     val headerColor = colors.primary.readableOn(colors.surface, 3.5f)

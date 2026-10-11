@@ -130,19 +130,15 @@ object LyricParser {
             val f = File(audioPath)
             val lower = audioPath.lowercase()
             when {
-                lower.endsWith(".mp3") -> readMp3Uslt(f) ?: readTextTags(f)
+                lower.endsWith(".mp3") -> readMp3Uslt(f)
                 lower.endsWith(".flac") -> readFlacLyrics(f)
                 lower.endsWith(".m4a") || lower.endsWith(".mp4") || lower.endsWith(".m4b") -> readMp4Lyrics(f)
                 lower.endsWith(".ogg") || lower.endsWith(".oga") || lower.endsWith(".opus") -> readOggLyrics(f)
-                else -> readTextTags(f)
+ // 其余格式（aac/wav/ape/wv/aiff，或无扩展名）：ID3v2 块可出现在这些容器里，
+                // 交给同一套 ID3 解析兜底——不是 ID3 会立刻返回 null，代价可忽略。
+                else -> readMp3Uslt(f)
             }
         }.getOrNull()
-    }
-
-    /** MP3 歌词兜底：ID3 里可能用 TXXX/LYRICS 或 SYLT 存，扫不到 USLT 时搜原始文本 */
-    private fun readTextTags(file: File): String? {
-        readMp3Uslt(file)?.let { return it }
-        return null
     }
 
     // ===== ID3v2 USLT 解析 =====
@@ -246,9 +242,7 @@ object LyricParser {
         val descBytes = body.copyOfRange(start + 1, (p - 1).coerceAtLeast(start + 1))
         val desc = String(descBytes, if (enc == 1 || enc == 2) Charsets.UTF_16LE else Charsets.UTF_8)
             .trimEnd('\u0000')
-        if (!desc.equals("LYRICS", ignoreCase = true) &&
-            !desc.equals("Lyrics", ignoreCase = true)
-        ) return null
+        if (!isLyricFieldName(desc)) return null
         val textBytes = body.copyOfRange(p, dataEnd)
         val charset = when (enc) {
             0 -> Charsets.ISO_8859_1
@@ -382,15 +376,23 @@ object LyricParser {
             val entry = String(block, p, cLen, Charsets.UTF_8)
             p += cLen
             val eq = entry.indexOf('=')
-            if (eq > 0) {
-                val key = entry.substring(0, eq)
-                if (key.equals("LYRICS", true) || key.equals("UNSYNCEDLYRICS", true)) {
-                    val v = entry.substring(eq + 1).trim()
-                    if (v.isNotEmpty()) return v
-                }
+            if (eq > 0 && isLyricFieldName(entry.substring(0, eq))) {
+                val v = entry.substring(eq + 1).trim()
+                if (v.isNotEmpty()) return v
             }
         }
         return null
+    }
+
+    /**
+     * 歌词字段名归一判定：不同工具写的键五花八门——
+     *   LYRICS / UNSYNCEDLYRICS / UNSYNCED LYRICS / UNSYNCED_LYRICS / LYRICS-XXX
+     * 去空格与下划线后统一比较，避免换个写入端就读不出。
+     */
+    private fun isLyricFieldName(key: String): Boolean {
+        val k = key.trim().uppercase().replace(" ", "").replace("_", "")
+        return k == "LYRICS" || k == "UNSYNCEDLYRICS" ||
+                k == "SYLT" || k == "SYNCEDLYRICS" || k.startsWith("LYRICS-")
     }
 
     // ===== MP4/M4A ©lyr 原子解析 =====
@@ -433,11 +435,55 @@ object LyricParser {
                             if (!s.isNullOrBlank()) return s.trim()
                         }
                     }
+                } else if (type[0] == '-'.code.toByte()) {
+                    // freeform 原子：---- + mean + name + data。
+                    // 部分工具（MusicBee / foobar / 部分转换器）不写 ©lyr，
+                    // 而把歌词写进 ----:com.apple.iTunes:LYRICS。
+                    readMp4FreeformLyrics(raf, pos + 8, pos + size.toLong())?.let { s ->
+                        if (s.isNotBlank()) return s.trim()
+                    }
                 }
                 pos += size
             }
             return null
         }
+    }
+
+    /** 解析 freeform(----) 原子：逐个读子原子，遇到 data 且 name 是歌词字段则返回其文本 */
+    private fun readMp4FreeformLyrics(raf: RandomAccessFile, start: Long, end: Long): String? {
+        var p = start
+        var name = ""
+        while (p + 8 <= end) {
+            raf.seek(p)
+            val size = readInt32BE(raf)
+            val type = ByteArray(4)
+            raf.readFully(type)
+            if (size < 8 || p + size > end) break
+            val t = String(type, Charsets.ISO_8859_1)
+            val body = p + 8
+            val bodyLen = size - 8
+            when (t) {
+                "name" -> {
+                    raf.seek(body + 4) // version(1)+flags(3)
+                    name = String(readN(raf, (bodyLen - 4).coerceAtLeast(0)), Charsets.UTF_8).trim()
+                }
+                "data" -> {
+                    if (isLyricFieldName(name) || name.contains("LYRICS", true)) {
+                        raf.seek(body + 8)
+                        val txt = readN(raf, (bodyLen - 8).coerceAtLeast(0))
+                        decodeTextBytes(txt)?.takeIf { it.isNotBlank() }?.let { return it }
+                    }
+                }
+            }
+            p += size
+        }
+        return null
+    }
+
+    private fun readN(raf: RandomAccessFile, n: Int): ByteArray {
+        val b = ByteArray(n)
+        raf.readFully(b)
+        return b
     }
 
     /** 在 MP4 文件中按原子路径查找，返回目标原子的 body 范围（start, end） */
@@ -527,7 +573,7 @@ object LyricParser {
             val entry = String(packet, p, cLen, Charsets.UTF_8)
             p += cLen
             val eq = entry.indexOf('=')
-            if (eq > 0 && entry.substring(0, eq).equals("LYRICS", ignoreCase = true)) {
+            if (eq > 0 && isLyricFieldName(entry.substring(0, eq))) {
                 val v = entry.substring(eq + 1).trim()
                 if (v.isNotEmpty()) return v
             }
