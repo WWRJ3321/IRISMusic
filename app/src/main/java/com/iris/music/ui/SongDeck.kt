@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.draggable
@@ -1434,6 +1435,10 @@ private fun CompactSeekBar(
 ) {
     val trackColor = colors.card
     val fillColor = colors.primary
+    // 拖动期间显示本地即时值（dragPos），松手才提交 seek——与海报墙封面进度条同款，
+    // 避免拖动途中每帧都真 seek 卡顿。-1f = 未在拖动。
+    val dragPos = remember { mutableFloatStateOf(-1f) }
+    val shown = if (dragPos.floatValue >= 0f) dragPos.floatValue else progress
     Box(
         modifier
             .fillMaxWidth()
@@ -1441,9 +1446,23 @@ private fun CompactSeekBar(
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 detectTapGestures { offset ->
-                    val ratio = (offset.x / size.width).coerceIn(0f, 1f)
-                    onSeek(ratio)
+                    onSeek((offset.x / size.width).coerceIn(0f, 1f))
                 }
+            }
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                detectHorizontalDragGestures(
+                    onDragStart = { dragPos.floatValue = (it.x / size.width).coerceIn(0f, 1f) },
+                    onHorizontalDrag = { change, _ ->
+                        change.consume()
+                        dragPos.floatValue = (change.position.x / size.width).coerceIn(0f, 1f)
+                    },
+                    onDragEnd = {
+                        onSeek(dragPos.floatValue)
+                        dragPos.floatValue = -1f
+                    },
+                    onDragCancel = { dragPos.floatValue = -1f }
+                )
             }
     ) {
         // 轨道：稍加宽的命中区（18dp）内画 3dp 视觉轨道
@@ -1458,7 +1477,7 @@ private fun CompactSeekBar(
             drawRoundRect(
                 fillColor,
                 Offset(0f, trackY),
-                Size(size.width * progress, 3.dp.toPx()),
+                Size(size.width * shown, 3.dp.toPx()),
                 CornerRadius(1.5.dp.toPx())
             )
         }

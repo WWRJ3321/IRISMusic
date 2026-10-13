@@ -362,9 +362,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             // ExoPlayer 到达曲尾总会自动前进到下一条，这里在自动前进的瞬间拦截：
             // 暂停并把进度拨回新歌开头——用户看到的是"播完了，停着"，
             // 高亮落在下一曲行首，手动点播放即可继续。
-            // 随机与列表循环的自动连播不走这个分支（repeatMode != OFF）。
+            // 注意「随机」档在本 App 的按钮模型里 = shuffle=true + repeatMode=OFF
+            // （见 cyclePlayMode），随机必须自动连播，所以拦截条件必须同时要求
+            // shuffle=false。旧注释"随机不走这个分支"是错的——它正是走这个分支，
+            // 导致随机模式下一首播完自动暂停（v4.6.13 修复）。
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
-                _state.value.repeatMode == RepeatMode.OFF
+                _state.value.repeatMode == RepeatMode.OFF &&
+                !_state.value.shuffle
             ) {
                 val c = controller
                 if (c != null) {

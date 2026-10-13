@@ -20,7 +20,6 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
@@ -930,39 +929,15 @@ fun SleepTimerSheet(
 
                     Spacer(Modifier.height(20.dp))
 
-                    Slider(
+                    // 与设置页同款 CompactSlider：白点嵌条内、同高同圆角，不再用 Material 默认样式
+                    CompactSlider(
                         value = selectedIndex.toFloat(),
                         onValueChange = { selectedIndex = it.roundToInt().coerceIn(0, minutesOptions.size - 1) },
                         valueRange = 0f..(minutesOptions.size - 1).toFloat(),
                         steps = minutesOptions.size - 2,
                         modifier = Modifier.fillMaxWidth(),
-                        thumb = {
-                            Box(
-                                Modifier
-                                    .size(16.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White)
-                            )
-                        },
-                        track = { sliderState ->
-                            val fraction = if (sliderState.valueRange.endInclusive - sliderState.valueRange.start == 0f) 0f
-                                else (sliderState.value - sliderState.valueRange.start) / (sliderState.valueRange.endInclusive - sliderState.valueRange.start)
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(16.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (glass) onSheet.copy(alpha = 0.18f) else colors.card)
-                            ) {
-                                Box(
-                                    Modifier
-                                        .fillMaxWidth(fraction)
-                                        .height(16.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(accent)
-                                )
-                            }
-                        }
+                        activeColor = accent,
+                        inactiveColor = if (glass) onSheet.copy(alpha = 0.18f) else colors.card
                     )
 
                     // 刻度标签

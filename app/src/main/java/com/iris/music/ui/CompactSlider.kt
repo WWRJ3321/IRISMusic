@@ -25,7 +25,8 @@ import kotlin.math.roundToInt
 
 /**
  * 紧凑滑条：胶囊轨道 + 圆点嵌在条内滑动（非 Material 的圆点穿在轨道上）。
- * 整体高度 16dp，比默认 Slider（44dp）矮 2/3，用于减小设置项的垂直体积。
+ * 视觉轨道 14dp（命中区 36dp），是全应用唯一的横向滑条实现——设置项、
+ * 均衡器低音、睡眠定时器分钟数都复用它，保证"手指"长得一模一样。
  *
  * 交互（v2.2.21 重做）：**相对拖动**——按压不改变值，只按拖动位移移动圆点。
  * 旧版"点击即跳转到按压位置"在 16dp 细条上手指精度不够，轻轻一碰就跳到
@@ -88,7 +89,7 @@ fun CompactSlider(
     Box(
         modifier
             .fillMaxWidth()
-            // 触摸命中区加高到 36dp（约一指宽），视觉轨道仍是下方居中绘制的 16dp 细胶囊。
+            // 触摸命中区加高到 36dp（约一指宽），视觉轨道仍是下方居中绘制的 14dp 细胶囊。
             // 底部滑条（低音时长/灵敏度）夹在 verticalScroll 末尾 + AnimatedVisibility 内，
             // 手指按下带的竖直漂移会撞上列表滚动/底部过滚；命中区太小就"按住拖不动"。
             // 加高命中区后落点容错大幅提升，Initial pass 消费 + 大命中区 = 稳拖。
@@ -150,9 +151,9 @@ fun CompactSlider(
             }
     ) {
         Canvas(Modifier.matchParentSize()) {
-            // 触摸块 36dp，但视觉轨道固定画成 16dp 细胶囊并垂直居中（cy = 块中心），
+            // 触摸块 36dp，但视觉轨道固定画成 14dp 细胶囊并垂直居中（cy = 块中心），
             // 加高只放大命中区、不增粗观感。
-            val trackHeight = 16.dp.toPx().coerceAtMost(size.height)
+            val trackHeight = 14.dp.toPx().coerceAtMost(size.height)
             val cy = size.height / 2f
             val thumbR = 5.dp.toPx()
             val corner = CornerRadius(trackHeight / 2f)
@@ -165,7 +166,7 @@ fun CompactSlider(
             )
             // 激活段：延伸到圆点右边缘——圆点始终完整地包在填充色内，
             // 而不是横跨在两种颜色的分界线上
-            // 圆点四周留白均等：上下 (trackHeight-2r)/2 = 3dp，左右同为 3dp，
+            // 圆点四周留白均等：上下 (trackHeight-2r)/2 = 2dp，左右同为 2dp，
             // 像药丸胶囊里嵌着一颗点，滑到头也不顶贴边缘
             val inset = (trackHeight - 2f * thumbR) / 2f + thumbR
             val cx = inset + (size.width - 2f * inset) * fraction

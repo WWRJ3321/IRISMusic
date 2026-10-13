@@ -119,137 +119,259 @@ object LyricParser {
     /**
      * 从音频文件内嵌标签读取歌词原文。
      * 按格式分路径：
-     * - MP3: ID3v2 USLT 帧（手写解析）
-     * - FLAC: VORBIS_COMMENT 的 LYRICS 字段
-     * - M4A/MP4: moov/udta/meta/ilst 的 ©lyr 原子（手写解析）
-     * - OGG: Vorbis comment 的 LYRICS 字段（手写解析）
+     * - MP3: ID3v2（USLT 优先，其次 TXXX:LYRICS，最后 SYLT 转 LRC），再兜底文件尾 APEv2
+     * - FLAC: VORBIS_COMMENT 的 LYRICS 字段；文件头带 ID3v2 的 FLAC 先跳过它
+     * - M4A/MP4: moov/udta/meta/ilst 的 ©lyr 原子或 freeform LYRICS
+     * - OGG/Opus: Vorbis comment 的 LYRICS 字段
+     * - WAV/AIFF: RIFF/FORM 里的 "id3 " 块；DSF: 头部指针指向的 ID3v2
+     * - WMA: ASF 扩展内容描述里的 WM/Lyrics
+     * - APE/WV/MPC 等：ID3v2 头或 APEv2 尾
      */
     fun extractEmbeddedLyrics(audioPath: String?): String? {
         if (audioPath.isNullOrBlank()) return null
         return runCatching {
             val f = File(audioPath)
+            if (!f.exists() || f.length() < 16) return@runCatching null
             val lower = audioPath.lowercase()
             when {
-                lower.endsWith(".mp3") -> readMp3Uslt(f)
-                lower.endsWith(".flac") -> readFlacLyrics(f)
-                lower.endsWith(".m4a") || lower.endsWith(".mp4") || lower.endsWith(".m4b") -> readMp4Lyrics(f)
-                lower.endsWith(".ogg") || lower.endsWith(".oga") || lower.endsWith(".opus") -> readOggLyrics(f)
- // 其余格式（aac/wav/ape/wv/aiff，或无扩展名）：ID3v2 块可出现在这些容器里，
-                // 交给同一套 ID3 解析兜底——不是 ID3 会立刻返回 null，代价可忽略。
-                else -> readMp3Uslt(f)
+                lower.endsWith(".mp3") || lower.endsWith(".mp2") ->
+                    readId3(f, 0) ?: readApeTag(f)
+                lower.endsWith(".flac") -> readFlacLyrics(f) ?: readId3(f, 0) ?: readApeTag(f)
+                lower.endsWith(".m4a") || lower.endsWith(".mp4") || lower.endsWith(".m4b") ||
+                        lower.endsWith(".alac") -> readMp4Lyrics(f)
+                lower.endsWith(".ogg") || lower.endsWith(".oga") || lower.endsWith(".opus") ->
+                    readOggLyrics(f) ?: readApeTag(f)
+                lower.endsWith(".wav") || lower.endsWith(".wave") -> readChunkedId3(f, bigEndian = false)
+                lower.endsWith(".aif") || lower.endsWith(".aiff") || lower.endsWith(".aifc") -> readChunkedId3(f, bigEndian = true)
+                lower.endsWith(".dsf") -> readDsfLyrics(f)
+                lower.endsWith(".wma") || lower.endsWith(".asf") -> readAsfLyrics(f)
+                // ape / wv / mpc / tta / aac 等：ID3v2 头或 APEv2 尾
+                else -> readId3(f, 0) ?: readApeTag(f)
             }
         }.getOrNull()
     }
 
-    // ===== ID3v2 USLT 解析 =====
+    // ===== ID3v2 解析 =====
 
-    /** 读取 MP3 文件中的 ID3v2 USLT（未同步歌词）帧 */
-    private fun readMp3Uslt(file: File): String? {
-        if (!file.exists() || file.length() < 10) return null
+    /** 读取位于 [offset] 处的 ID3v2 标签中的歌词 */
+    private fun readId3(file: File, offset: Long): String? {
+        if (file.length() < offset + 10) return null
         RandomAccessFile(file, "r").use { raf ->
+            raf.seek(offset)
             val head = ByteArray(10)
             raf.readFully(head)
-            // "ID3"
             if (head[0] != 'I'.code.toByte() || head[1] != 'D'.code.toByte() || head[2] != '3'.code.toByte()) return null
             val ver = head[3].toInt() and 0xFF
             if (ver < 2 || ver > 4) return null
             val flags = head[5].toInt() and 0xFF
             val tagSize = syncsafe(head, 6)
-            if (tagSize <= 0 || tagSize.toLong() > file.length()) return null
+            if (tagSize <= 0 || offset + 10 + tagSize > file.length()) return null
             var body = ByteArray(tagSize)
             raf.readFully(body)
-            // 处理 v2.4 的 footer（flags & 0x10）
-            var end = if ((flags and 0x10) != 0) tagSize - 10 else tagSize
-            // tag 级 unsynchronisation（header flag 0x80）：还原 0xFF 0x00 -> 0xFF。
-            // QQ 音乐等带内嵌歌词的文件常置此位，不反转会导致帧长错位、歌词读错。
-            if ((flags and 0x80) != 0) {
+            var end = tagSize
+            // 标签级 unsynchronisation：v2.2/v2.3 是整块处理；
+            // v2.4 的帧长按"反同步后"计，必须逐帧还原，不能整块还原（否则帧长全错位）
+            if ((flags and 0x80) != 0 && ver < 4) {
                 body = deunsync(body, end)
                 end = body.size
             }
-            // 跳过扩展头（flag 0x40），否则会把扩展头当成第一帧误读
             var start = 0
             if ((flags and 0x40) != 0 && ver >= 3) {
                 start = if (ver >= 4) syncsafe(body, 0) else beInt(body, 0) + 4
                 if (start < 0 || start >= end) start = 0
             }
-            return if (ver == 2) {
-                // v2.2: 帧头 6 字节（3 字符 ID + 3 字节大小）
-                readV22Frames(body, start, end)
-            } else {
-                // v2.3/v2.4: 帧头 10 字节（4 字符 ID + 4 字节大小 + 2 字节标志）
-                readV23Frames(body, start, end, ver)
-            }
+            return if (ver == 2) readV22Frames(body, start, end)
+            else readV23Frames(body, start, end, ver, tagUnsync = (flags and 0x80) != 0)
         }
     }
 
     private fun readV22Frames(body: ByteArray, start: Int, end: Int): String? {
+        var uslt: String? = null
+        var sylt: String? = null
+        var txxx: String? = null
         var pos = start
         while (pos + 6 <= end) {
-            if (body[pos].toInt() == 0) break // 填充区
+            if (body[pos].toInt() == 0) break
             val id = String(body, pos, 3, Charsets.ISO_8859_1)
             val size = ((body[pos + 3].toInt() and 0xFF) shl 16) or
                     ((body[pos + 4].toInt() and 0xFF) shl 8) or
                     (body[pos + 5].toInt() and 0xFF)
             pos += 6
             if (size <= 0 || pos + size > end) break
-            if (id == "ULT") {
-                // 多个 USLT（原文/翻译）时取第一条有内容的，避免被后续空/翻译帧覆盖
-                decodeUslt(body, pos, size)?.takeIf { it.isNotBlank() }?.let { return it }
+            when (id) {
+                "ULT", "LYR" -> if (uslt == null) uslt = decodeUslt(body, pos, size)?.takeIf { it.isNotBlank() }
+                "SLT" -> if (sylt == null) sylt = decodeSylt(body.copyOfRange(pos, pos + size))
+                "TXX" -> if (txxx == null) txxx = decodeTxxx(body, pos, size)?.takeIf { it.isNotBlank() }
             }
+            if (uslt != null) return uslt
             pos += size
         }
-        return null
+        return uslt ?: txxx ?: sylt
     }
 
-    private fun readV23Frames(body: ByteArray, start: Int, end: Int, ver: Int): String? {
+    /**
+     * v2.3/v2.4 帧遍历。歌词优先级：USLT > TXXX(LYRICS) > SYLT。
+     * SYLT 是二进制同步歌词（文本+时间戳交替），按结构转成 LRC，不能当 USLT 文本读，
+     * 否则会读出一串夹着乱码的单行"歌词"，还会挡住后面真正的 USLT。
+     */
+    private fun readV23Frames(body: ByteArray, start: Int, end: Int, ver: Int, tagUnsync: Boolean): String? {
+        var uslt: String? = null
+        var sylt: String? = null
+        var txxx: String? = null
         var pos = start
+        // 部分写入端（旧 iTunes 等）在 v2.4 里仍写普通 big-endian 帧长，
+        // 遇到 syncsafe 解释下一帧落点不合法、普通解释合法时切换。
+        var syncsafeSizes = ver >= 4
         while (pos + 10 <= end) {
             if (body[pos].toInt() == 0) break // 填充区
+            if (!isFrameId(body, pos)) break
             val id = String(body, pos, 4, Charsets.ISO_8859_1)
-            // v2.4 帧大小是 syncsafe（每字节最高位为 0），v2.3 是普通 big-endian int。
-            // 混用会把帧长算错并提前 break，漏掉后面的 USLT。按版本分开解。
-            val size = if (ver >= 4) syncsafe(body, pos + 4) else beInt(body, pos + 4)
+            var size = if (syncsafeSizes) syncsafe(body, pos + 4) else beInt(body, pos + 4)
+            if (syncsafeSizes && !nextFrameOk(body, pos + 10 + size, end)) {
+                val alt = beInt(body, pos + 4)
+                if (alt != size && nextFrameOk(body, pos + 10 + alt, end)) {
+                    size = alt; syncsafeSizes = false
+                }
+            }
+            val fmt = body[pos + 9].toInt() and 0xFF
             pos += 10
             if (size <= 0 || pos + size > end) break
-            if (id == "USLT" || id == "SYLT") {
-                decodeUslt(body, pos, size)?.takeIf { it.isNotBlank() }?.let { return it }
-            }
-            // 网易云等工具把歌词放 TXXX(description=LYRICS) 而不是 USLT
-            if (id == "TXXX") {
-                decodeTxxx(body, pos, size)?.takeIf { it.isNotBlank() }?.let { return it }
+            if (id == "USLT" || id == "SYLT" || id == "TXXX") {
+                val fb = frameBody(body, pos, size, fmt, ver, tagUnsync)
+                if (fb != null && fb.isNotEmpty()) {
+                    when (id) {
+                        "USLT" -> if (uslt == null) uslt = decodeUslt(fb, 0, fb.size)?.takeIf { it.isNotBlank() }
+                        "SYLT" -> if (sylt == null) sylt = decodeSylt(fb)
+                        "TXXX" -> if (txxx == null) txxx = decodeTxxx(fb, 0, fb.size)?.takeIf { it.isNotBlank() }
+                    }
+                }
+                if (uslt != null) return uslt
             }
             pos += size
         }
-        return null
+        return uslt ?: txxx ?: sylt
     }
 
-    /** 解码 TXXX 帧：编码字节 + 描述(按编码终止) + 文本；仅当描述为 LYRICS 时返回文本 */
+    /** 按帧格式标志还原帧体：分组字节 / 数据长度指示 / 反同步 / zlib 压缩；加密帧返回 null */
+    private fun frameBody(body: ByteArray, pos: Int, size: Int, fmt: Int, ver: Int, tagUnsync: Boolean): ByteArray? {
+        var b = body.copyOfRange(pos, pos + size)
+        if (ver >= 4) {
+            if ((fmt and 0x04) != 0) return null              // 加密
+            var skip = 0
+            if ((fmt and 0x40) != 0) skip += 1                // 分组标识
+            if ((fmt and 0x01) != 0) skip += 4                // 数据长度指示（v2.4 常见，Mp3tag/foobar 压缩帧必带）
+            if (skip > 0) b = if (b.size > skip) b.copyOfRange(skip, b.size) else return null
+            if ((fmt and 0x02) != 0 || tagUnsync) b = deunsync(b, b.size)
+            if ((fmt and 0x08) != 0) b = inflate(b) ?: return null
+        } else {
+            if ((fmt and 0x40) != 0) return null              // v2.3 加密
+            if ((fmt and 0x80) != 0) {                        // v2.3 压缩：4 字节解压后长度 + zlib
+                b = if (b.size > 4) inflate(b.copyOfRange(4, b.size)) ?: return null else return null
+            }
+            if ((fmt and 0x20) != 0 && b.isNotEmpty()) b = b.copyOfRange(1, b.size) // 分组标识
+        }
+        return b
+    }
+
+    private fun inflate(b: ByteArray): ByteArray? = runCatching {
+        java.util.zip.InflaterInputStream(b.inputStream()).use { it.readBytes() }
+    }.getOrNull()
+
+    private fun isFrameId(b: ByteArray, p: Int): Boolean {
+        if (p + 4 > b.size) return false
+        for (i in 0 until 4) {
+            val c = b[p + i].toInt().toChar()
+            if (!(c in 'A'..'Z' || c in '0'..'9')) return false
+        }
+        return true
+    }
+
+    private fun nextFrameOk(b: ByteArray, p: Int, end: Int): Boolean =
+        p == end || (p in 0 until end && (b[p].toInt() == 0 || isFrameId(b, p)))
+
+    /** TXXX：编码 + 描述(终止) + 文本；仅当描述是歌词字段时返回文本 */
     private fun decodeTxxx(body: ByteArray, start: Int, size: Int): String? {
         if (size < 3) return null
         val enc = body[start].toInt() and 0xFF
-        var p = start + 1
         val dataEnd = start + size
+        val descEnd = findTerminator(body, start + 1, dataEnd, enc)
+        val desc = decodeText(body.copyOfRange(start + 1, descEnd), enc)
+            .replace("\uFEFF", "").trim('\u0000', ' ')
+        if (!isLyricFieldName(desc)) return null
+        val p = (descEnd + termLen(enc)).coerceAtMost(dataEnd)
+        if (p >= dataEnd) return null
+        return decodeText(body.copyOfRange(p, dataEnd), enc)
+    }
+
+    /** USLT：编码 + 语言(3) + 描述(终止) + 歌词 */
+    private fun decodeUslt(body: ByteArray, start: Int, size: Int): String? {
+        if (size < 5) return null
+        val enc = body[start].toInt() and 0xFF
+        val dataEnd = start + size
+        val descEnd = findTerminator(body, start + 4, dataEnd, enc)
+        val p = (descEnd + termLen(enc)).coerceAtMost(dataEnd)
+        if (p >= dataEnd) return null
+        return runCatching { decodeText(body.copyOfRange(p, dataEnd), enc) }.getOrNull()
+    }
+
+    /**
+     * SYLT：编码 + 语言(3) + 时间戳格式(1) + 内容类型(1) + 描述(终止)
+     *       + { 文本(终止) + 时间戳(4, BE) }*
+     * 时间戳格式 2 = 毫秒，转成 [mm:ss.xx] LRC；格式 1（MPEG 帧号）无法换算，只保留文本。
+     */
+    private fun decodeSylt(b: ByteArray): String? {
+        if (b.size < 7) return null
+        val enc = b[0].toInt() and 0xFF
+        val tsFormat = b[4].toInt() and 0xFF
+        var p = findTerminator(b, 6, b.size, enc) + termLen(enc)
+        val sb = StringBuilder()
+        while (p < b.size) {
+            val tEnd = findTerminator(b, p, b.size, enc)
+            val text = decodeText(b.copyOfRange(p, tEnd), enc).replace("\uFEFF", "").trimEnd('\u0000')
+            p = tEnd + termLen(enc)
+            if (p + 4 > b.size) break
+            val ts = beInt(b, p).toLong() and 0xFFFFFFFFL
+            p += 4
+            val line = text.trim('\n', '\r')
+            if (tsFormat == 2) {
+                val mm = ts / 60000; val ss = (ts % 60000) / 1000; val cs = (ts % 1000) / 10
+                sb.append(String.format("[%02d:%02d.%02d]", mm, ss, cs)).append(line).append('\n')
+            } else if (line.isNotBlank()) {
+                sb.append(line).append('\n')
+            }
+        }
+        return sb.toString().takeIf { it.isNotBlank() }
+    }
+
+    private fun termLen(enc: Int) = if (enc == 1 || enc == 2) 2 else 1
+
+    /** 找字符串终止符位置（UTF-16 按 2 字节对齐找 00 00），找不到返回 end */
+    private fun findTerminator(b: ByteArray, from: Int, end: Int, enc: Int): Int {
+        var p = from
         if (enc == 1 || enc == 2) {
-            while (p + 1 < dataEnd) {
-                if (body[p].toInt() == 0 && body[p + 1].toInt() == 0) { p += 2; break }
+            while (p + 1 < end) {
+                if (b[p].toInt() == 0 && b[p + 1].toInt() == 0) return p
                 p += 2
             }
-        } else {
-            while (p < dataEnd && body[p].toInt() != 0) p++
-            if (p < dataEnd) p++
+            return end
         }
-        if (p >= dataEnd) return null
-        val descBytes = body.copyOfRange(start + 1, (p - 1).coerceAtLeast(start + 1))
-        val desc = String(descBytes, if (enc == 1 || enc == 2) Charsets.UTF_16LE else Charsets.UTF_8)
-            .trimEnd('\u0000')
-        if (!isLyricFieldName(desc)) return null
-        val textBytes = body.copyOfRange(p, dataEnd)
-        val charset = when (enc) {
-            0 -> Charsets.ISO_8859_1
-            1, 2 -> Charsets.UTF_16LE
-            else -> Charsets.UTF_8
+        while (p < end) {
+            if (b[p].toInt() == 0) return p
+            p++
         }
-        return String(textBytes, charset)
+        return end
+    }
+
+    /** 按 ID3 编码字节解码文本 */
+    private fun decodeText(b: ByteArray, enc: Int): String = when (enc) {
+        0 -> decodeLegacy(b)
+        1 -> decodeUtf16(b, false)
+        2 -> decodeUtf16(b, true)
+        else -> {
+            val s = if (b.size >= 3 && b[0] == 0xEF.toByte() && b[1] == 0xBB.toByte() && b[2] == 0xBF.toByte())
+                String(b, 3, b.size - 3, Charsets.UTF_8) else String(b, Charsets.UTF_8)
+            s
+        }
     }
 
     /** 反转 ID3v2 unsynchronisation：把 0xFF 0x00 还原成 0xFF，返回新数组 */
@@ -261,7 +383,6 @@ object LyricParser {
             val b = src[i]
             out[w++] = b
             i++
-            // 0xFF 后紧跟的 0x00 是填充字节，跳过它
             if (b == 0xFF.toByte() && i < len && src[i].toInt() == 0) i++
         }
         return out.copyOf(w)
@@ -274,46 +395,186 @@ object LyricParser {
                 ((b[off + 2].toInt() and 0xFF) shl 8) or
                 (b[off + 3].toInt() and 0xFF)
 
-    /** 解码 USLT 帧体：编码字节 + 语言(3) + 描述(以00结尾) + 歌词 */
-    private fun decodeUslt(body: ByteArray, start: Int, size: Int): String? {
-        if (size < 5) return null
-        val enc = body[start].toInt() and 0xFF
-        // 跳过 1 编码 + 3 语言
-        var p = start + 4
-        val dataEnd = start + size
-        // 跳过描述（终止符：00 或 0000）
-        if (enc == 1 || enc == 2) {
-            // UTF-16：描述以 00 00 结尾
-            while (p + 1 < dataEnd) {
-                if (body[p].toInt() == 0 && body[p + 1].toInt() == 0) { p += 2; break }
-                p += 2
-            }
-        } else {
-            while (p < dataEnd && body[p].toInt() != 0) p++
-            if (p < dataEnd) p++
-        }
-        if (p >= dataEnd) return null
-        val textBytes = body.copyOfRange(p, dataEnd)
-        return try {
-            when (enc) {
-                0 -> String(textBytes, Charsets.ISO_8859_1)
-                1 -> decodeUtf16(textBytes, false)
-                2 -> decodeUtf16(textBytes, true)
-                3 -> String(textBytes, Charsets.UTF_8)
-                else -> String(textBytes, Charsets.UTF_8)
-            }
-        } catch (e: Exception) {
-            null
-        }
+    /** UTF-16：有 BOM 按 BOM 字节序（FE FF = BE，FF FE = LE），没有 BOM 用 [bigEndian] 默认 */
+    private fun decodeUtf16(b: ByteArray, bigEndian: Boolean): String {
+        if (b.size >= 2 && b[0] == 0xFE.toByte() && b[1] == 0xFF.toByte()) return String(b, 2, b.size - 2, Charsets.UTF_16BE)
+        if (b.size >= 2 && b[0] == 0xFF.toByte() && b[1] == 0xFE.toByte()) return String(b, 2, b.size - 2, Charsets.UTF_16LE)
+        return String(b, if (bigEndian) Charsets.UTF_16BE else Charsets.UTF_16LE)
     }
 
-    private fun decodeUtf16(b: ByteArray, bigEndian: Boolean): String {
-        val utf16 = if (bigEndian) Charsets.UTF_16BE else Charsets.UTF_16LE
-        // 去掉 BOM（如果有）
-        val start = if (b.size >= 2 && b[0].toInt() == 0xFE.toByte().toInt() && b[1].toInt() == 0xFF.toByte().toInt()) 2
-        else if (b.size >= 2 && b[0].toInt() == 0xFF.toByte().toInt() && b[1].toInt() == 0xFE.toByte().toInt()) 2
-        else 0
-        return String(b, start, b.size - start, utf16)
+    /**
+     * "无编码声明"字节的解码：ID3 编码 0 名义上是 Latin-1，但大量国产写入端
+     * 直接塞 GBK 字节，也有工具在编码 0 下写 UTF-8。
+     * 顺序：纯 ASCII → 严格 UTF-8 → 严格 GB18030 且以汉字为主 → 严格 Shift_JIS → Latin-1。
+     */
+    private fun decodeLegacy(b: ByteArray): String {
+        if (b.none { it < 0 }) return String(b, Charsets.ISO_8859_1)
+        strictDecode(b, Charsets.UTF_8)?.let { return it }
+        strictDecode(b, GB18030)?.let { if (cjkRatio(it) >= 0.5) return it }
+        SHIFT_JIS?.let { cs -> strictDecode(b, cs)?.let { if (cjkRatio(it) >= 0.5) return it } }
+        return String(b, Charsets.ISO_8859_1)
+    }
+
+    private val GB18030: java.nio.charset.Charset = java.nio.charset.Charset.forName("GB18030")
+    private val SHIFT_JIS: java.nio.charset.Charset? = runCatching { java.nio.charset.Charset.forName("Shift_JIS") }.getOrNull()
+
+    private fun strictDecode(b: ByteArray, cs: java.nio.charset.Charset): String? = try {
+        cs.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            .decode(java.nio.ByteBuffer.wrap(b)).toString()
+    } catch (e: java.nio.charset.CharacterCodingException) {
+        null
+    }
+
+    /** 非 ASCII 字符里中日文字（汉字/假名/全角标点）的占比 */
+    private fun cjkRatio(s: String): Double {
+        var non = 0; var cjk = 0
+        for (c in s) {
+            if (c.code < 0x80) continue
+            non++
+            if (c in '\u3000'..'\u30FF' || c in '\u4E00'..'\u9FFF' || c in '\uFF00'..'\uFFEF' || c in '\u3400'..'\u4DBF') cjk++
+        }
+        return if (non == 0) 0.0 else cjk.toDouble() / non
+    }
+
+    // ===== 文件尾 APEv2（foobar2000 / Monkey's Audio / WavPack 常用） =====
+
+    private fun readApeTag(file: File): String? {
+        val len = file.length()
+        if (len < 64) return null
+        RandomAccessFile(file, "r").use { raf ->
+            // APEv2 尾可能紧贴文件末尾，也可能在 ID3v1（128 字节）之前
+            for (tail in longArrayOf(0L, 128L)) {
+                val footerPos = len - tail - 32
+                if (footerPos < 0) continue
+                raf.seek(footerPos)
+                val ft = ByteArray(32)
+                raf.readFully(ft)
+                if (String(ft, 0, 8, Charsets.ISO_8859_1) != "APETAGEX") continue
+                val tagSize = readInt32LE(ft, 12).toLong() and 0xFFFFFFFFL   // 含 footer，不含 header
+                val count = readInt32LE(ft, 16)
+                if (tagSize < 32 || tagSize > footerPos + 32 || count !in 0..10_000) return null
+                val itemsStart = footerPos + 32 - tagSize
+                val items = ByteArray((tagSize - 32).toInt())
+                raf.seek(itemsStart)
+                raf.readFully(items)
+                var p = 0
+                repeat(count) {
+                    if (p + 9 > items.size) return null
+                    val vLen = readInt32LE(items, p)
+                    val flags = readInt32LE(items, p + 4)
+                    p += 8
+                    var k = p
+                    while (k < items.size && items[k].toInt() != 0) k++
+                    if (k >= items.size) return null
+                    val key = String(items, p, k - p, Charsets.ISO_8859_1)
+                    p = k + 1
+                    if (vLen < 0 || p + vLen > items.size) return null
+                    // flags bit1-2 = 0 表示 UTF-8 文本
+                    if ((flags and 0x06) == 0 && isLyricFieldName(key)) {
+                        val v = String(items, p, vLen, Charsets.UTF_8).trim()
+                        if (v.isNotEmpty()) return v
+                    }
+                    p += vLen
+                }
+                return null
+            }
+        }
+        return null
+    }
+
+    // ===== WAV / AIFF 里的 ID3 块 =====
+
+    private fun readChunkedId3(file: File, bigEndian: Boolean): String? {
+        val len = file.length()
+        var id3At = -1L
+        RandomAccessFile(file, "r").use { raf ->
+            val hdr = ByteArray(12)
+            raf.readFully(hdr)
+            val magic = String(hdr, 0, 4, Charsets.ISO_8859_1)
+            if (magic != "RIFF" && magic != "RF64" && magic != "FORM") return null
+            var pos = 12L
+            val ch = ByteArray(8)
+            while (pos + 8 <= len) {
+                raf.seek(pos)
+                raf.readFully(ch)
+                val id = String(ch, 0, 4, Charsets.ISO_8859_1)
+                val size = (if (bigEndian) beInt(ch, 4) else readInt32LE(ch, 4)).toLong() and 0xFFFFFFFFL
+                if (id.equals("id3 ", true) || id.equals("ID32", true)) { id3At = pos + 8; break }
+                pos += 8 + size + (size and 1L)
+            }
+        }
+        return if (id3At > 0) readId3(file, id3At) else null
+    }
+
+    // ===== DSF：头部 20..27 字节是 ID3v2 的绝对偏移 =====
+
+    private fun readDsfLyrics(file: File): String? {
+        val ptr = RandomAccessFile(file, "r").use { raf ->
+            val h = ByteArray(28)
+            raf.readFully(h)
+            if (String(h, 0, 4, Charsets.ISO_8859_1) != "DSD ") return null
+            (readInt32LE(h, 20).toLong() and 0xFFFFFFFFL) or ((readInt32LE(h, 24).toLong() and 0xFFFFFFFFL) shl 32)
+        }
+        return if (ptr > 0 && ptr < file.length()) readId3(file, ptr) else null
+    }
+
+    // ===== WMA/ASF：Extended Content Description 里的 WM/Lyrics =====
+
+    private val ASF_HEADER = byteArrayOf(0x30, 0x26, 0xB2.toByte(), 0x75, 0x8E.toByte(), 0x66, 0xCF.toByte(), 0x11,
+        0xA6.toByte(), 0xD9.toByte(), 0x00, 0xAA.toByte(), 0x00, 0x62, 0xCE.toByte(), 0x6C)
+    private val ASF_EXT_CONTENT = byteArrayOf(0x40, 0xA4.toByte(), 0xD0.toByte(), 0xD2.toByte(), 0x07, 0xE3.toByte(), 0xD2.toByte(), 0x11,
+        0x97.toByte(), 0xF0.toByte(), 0x00, 0xA0.toByte(), 0xC9.toByte(), 0x5E, 0xA8.toByte(), 0x50)
+
+    private fun readAsfLyrics(file: File): String? {
+        RandomAccessFile(file, "r").use { raf ->
+            val h = ByteArray(30)
+            raf.readFully(h)
+            if (!h.copyOfRange(0, 16).contentEquals(ASF_HEADER)) return null
+            val headerSize = le64(h, 16)
+            val n = readInt32LE(h, 24)
+            var pos = 30L
+            val oh = ByteArray(24)
+            repeat(n.coerceIn(0, 1000)) {
+                if (pos + 24 > headerSize) return null
+                raf.seek(pos)
+                raf.readFully(oh)
+                val size = le64(oh, 16)
+                if (size < 24 || pos + size > headerSize) return null
+                if (oh.copyOfRange(0, 16).contentEquals(ASF_EXT_CONTENT) && size < 64L * 1024 * 1024) {
+                    val obj = ByteArray((size - 24).toInt())
+                    raf.readFully(obj)
+                    var p = 0
+                    val cnt = (obj[0].toInt() and 0xFF) or ((obj[1].toInt() and 0xFF) shl 8)
+                    p += 2
+                    repeat(cnt) {
+                        if (p + 2 > obj.size) return null
+                        val nl = le16(obj, p); p += 2
+                        if (p + nl + 4 > obj.size) return null
+                        val name = String(obj, p, nl, Charsets.UTF_16LE).trimEnd('\u0000'); p += nl
+                        val type = le16(obj, p); p += 2
+                        val vl = le16(obj, p); p += 2
+                        if (p + vl > obj.size) return null
+                        if (type == 0 && (name.equals("WM/Lyrics", true) || isLyricFieldName(name))) {
+                            val v = String(obj, p, vl, Charsets.UTF_16LE).trimEnd('\u0000').trim()
+                            if (v.isNotEmpty()) return v
+                        }
+                        p += vl
+                    }
+                    return null
+                }
+                pos += size
+            }
+        }
+        return null
+    }
+
+    private fun le16(b: ByteArray, o: Int) = (b[o].toInt() and 0xFF) or ((b[o + 1].toInt() and 0xFF) shl 8)
+    private fun le64(b: ByteArray, o: Int): Long {
+        var v = 0L
+        for (i in 7 downTo 0) v = (v shl 8) or (b[o + i].toLong() and 0xFF)
+        return v
     }
 
     // ===== FLAC VORBIS_COMMENT 歌词 =====
@@ -326,10 +587,20 @@ object LyricParser {
     private fun readFlacLyrics(file: File): String? {
         if (!file.exists() || file.length() < 8) return null
         RandomAccessFile(file, "r").use { raf ->
+            // FLAC 魔数是 "fLaC"（大小写混合）。之前按全小写 "flac" 比较，
+            // 所有 FLAC 都在这里直接返回 null——这是 FLAC 内嵌歌词一律读不出的根因。
+            // 另外有些转换/打标工具会在 FLAC 前面加一段 ID3v2，先跳过它再找魔数。
             val magic = ByteArray(4)
             raf.readFully(magic)
-            if (magic[0] != 'f'.code.toByte() || magic[1] != 'l'.code.toByte() ||
-                magic[2] != 'a'.code.toByte() || magic[3] != 'c'.code.toByte()) return null
+            if (magic[0] == 'I'.code.toByte() && magic[1] == 'D'.code.toByte() && magic[2] == '3'.code.toByte()) {
+                val h = ByteArray(10)
+                raf.seek(0); raf.readFully(h)
+                val skip = 10L + syncsafe(h, 6) + (if ((h[5].toInt() and 0x10) != 0) 10 else 0)
+                if (skip + 4 > file.length()) return null
+                raf.seek(skip); raf.readFully(magic)
+            }
+            if (magic[0] != 'f'.code.toByte() || magic[1] != 'L'.code.toByte() ||
+                magic[2] != 'a'.code.toByte() || magic[3] != 'C'.code.toByte()) return null
             val fileLen = file.length()
             // 遍历 metadata block header：1 字节(最高位=last-block 标志 + 7 位 type) + 3 字节长度
             while (true) {
@@ -396,6 +667,7 @@ object LyricParser {
     }
 
     // ===== MP4/M4A ©lyr 原子解析 =====
+    //（v4.6.14 自研的 readApev2Lyrics 已由外部补丁的 readApeTag 取代并删除）
 
     /** 读取 MP4/M4A 的 ©lyr 原子（moov/udta/meta/ilst/©lyr），文本通常 UTF-8 */
     private fun readMp4Lyrics(file: File): String? {
@@ -659,7 +931,9 @@ object LyricParser {
      * 解析歌词文本：优先按 LRC 时间戳解析；若不含时间戳（纯文本歌词），
      * 按行均匀分配到整首歌时长，使滚动高亮仍然生效
      */
-    fun parseText(raw: String, durationMs: Long = 0L): List<LyricLine> {
+    fun parseText(rawIn: String, durationMs: Long = 0L): List<LyricLine> {
+        // 去掉 BOM 与 UTF-16 残留的 NUL，否则首行 "\uFEFF[00:01.00]" 会被当成非时间戳行丢掉
+        val raw = rawIn.replace("\uFEFF", "").replace("\u0000", "")
         val lrc = parseRaw(raw)
         if (lrc.isNotEmpty()) return lrc
         // 纯文本：均匀分配时间
@@ -677,19 +951,34 @@ object LyricParser {
     fun findLyricFile(audioPath: String?): File? {
         if (audioPath.isNullOrBlank()) return null
         val f = File(audioPath)
-        val lrc = File(f.parent, f.nameWithoutExtension + ".lrc")
-        return if (lrc.exists() && lrc.isFile) lrc else null
+        val base = f.nameWithoutExtension
+        File(f.parent, "$base.lrc").takeIf { it.isFile }?.let { return it }
+        // 大小写不同（.LRC / .Lrc）或 "歌名.mp3.lrc" 这种写法：列一次目录兜底
+        val dir = f.parentFile ?: return null
+        val names = dir.list() ?: return null
+        val hit = names.firstOrNull { it.equals("$base.lrc", true) || it.equals(f.name + ".lrc", true) }
+        return hit?.let { File(dir, it) }?.takeIf { it.isFile }
     }
 
     /** 读取并解析 LRC 文件，返回按时间排序的歌词行 */
     fun parse(file: File): List<LyricLine> {
-        val lines = mutableListOf<LyricLine>()
-        runCatching {
-            file.readLines(Charsets.UTF_8).forEach { raw ->
-                parseLine(raw)?.let { lines.add(it) }
-            }
-        }
-        return lines.sortedBy { it.timeMs }
+        val text = runCatching { decodeLyricFile(file.readBytes()) }.getOrNull() ?: return emptyList()
+        return parseRaw(text.replace("\uFEFF", "").replace("\u0000", ""))
+    }
+
+    /**
+     * 外挂 lrc 编码识别：BOM（UTF-8/UTF-16LE/BE）→ 严格 UTF-8 → GB18030/Shift_JIS。
+     * 网上下载和老播放器导出的 lrc 大量是 GBK/ANSI，只按 UTF-8 读会整篇乱码。
+     */
+    private fun decodeLyricFile(b: ByteArray): String {
+        if (b.size >= 3 && b[0] == 0xEF.toByte() && b[1] == 0xBB.toByte() && b[2] == 0xBF.toByte())
+            return String(b, 3, b.size - 3, Charsets.UTF_8)
+        if (b.size >= 2 && b[0] == 0xFF.toByte() && b[1] == 0xFE.toByte()) return String(b, 2, b.size - 2, Charsets.UTF_16LE)
+        if (b.size >= 2 && b[0] == 0xFE.toByte() && b[1] == 0xFF.toByte()) return String(b, 2, b.size - 2, Charsets.UTF_16BE)
+        strictDecode(b, Charsets.UTF_8)?.let { return it }
+        strictDecode(b, GB18030)?.let { if (cjkRatio(it) >= 0.5) return it }
+        SHIFT_JIS?.let { cs -> strictDecode(b, cs)?.let { return it } }
+        return String(b, GB18030)
     }
 
     /** 从字符串解析 LRC（多个时间戳支持） */
@@ -706,7 +995,7 @@ object LyricParser {
      * 返回解析出的歌词行；非时间戳行（元信息/纯文本）返回 null
      */
     private fun parseLine(raw: String): LyricLine? {
-        val line = raw.trim()
+        val line = raw.trim().trimStart('\uFEFF')
         if (line.isEmpty()) return null
         // 跳过元信息标签 [ti:][ar:][al:][by:][offset:] 等
         if (line.startsWith("[") && !line.contains("]")) return null
@@ -724,12 +1013,67 @@ object LyricParser {
                 break
             }
         }
+        // 行内紧跟词尾的方括号时间戳：网易云/QQ 逐字歌词导出格式。
+        // 旧实现只认 <mm:ss.xx> 尖括号词级标签，这种行会带着原始 [时间] 当正文
+        // 显示（用户截图里"监[00:03.141]制…"就是），或整行解析失败退成纯文本。
+        splitInlineStamps(rest)?.let { segs ->
+            val text = segs.joinToString("") { it.first }
+            if (text.isBlank()) return null
+            // 行首有时间标签时它是首字的开始；没有就用第一个时间戳兜底。
+            val lineStart = times.firstOrNull() ?: segs.first().second
+            val words = ArrayList<LyricWord>(segs.size)
+            var next = lineStart
+            for ((txt, endMs) in segs) {
+                if (txt.isEmpty()) continue
+                words.add(LyricWord(next, txt))
+                next = endMs
+            }
+            return LyricLine(lineStart, text, if (words.size > 1) words else emptyList())
+        }
+
         if (times.isEmpty()) return null
         // rest 里可能含增强型 LRC 的词级标签 <mm:ss.xx>，先拆词
         val words = parseWords(rest, times.first())
         val text = stripWordTags(rest).trim()
         if (text.isEmpty()) return null
         return LyricLine(times.first(), text, words)
+    }
+
+    /**
+     * 拆"字[结束时间]字[结束时间]…"格式：每个紧跟词尾的方括号时间是该词的结束边界
+     * （行首标签是首字的开始）。兼容三种写法：
+     *   [mm:ss.xxx] / [mm:ss.xxx,mm:ss.xxx]（带时长，取开始段的互补端）/ [mm:ss:xxx]
+     * 一个可解析的时间戳都没有时返回 null（不是逐字行，走普通解析）。
+     * 无法解析的方括号（如正文里的备注）原样保留进文本。
+     */
+    private fun splitInlineStamps(rest: String): List<Pair<String, Long>>? {
+        if (!rest.contains('[') || !rest.contains(']')) return null
+        val segs = ArrayList<Pair<String, Long>>()
+        val sb = StringBuilder()
+        var i = 0
+        var stamps = 0
+        while (i < rest.length) {
+            if (rest[i] == '[') {
+                val close = rest.indexOf(']', i)
+                if (close > i) {
+                    // KRC 的 [开始,时长] 写法：只取逗号前的时间部分
+                    val t = parseTime(rest.substring(i + 1, close).substringBefore(','))
+                    if (t != null) {
+                        segs.add(sb.toString() to t)
+                        sb.setLength(0)
+                        stamps++
+                        i = close + 1
+                        continue
+                    }
+                }
+            }
+            sb.append(rest[i])
+            i++
+        }
+        if (stamps == 0) return null
+        // 最后一个时间戳后还有残留文字：给 300ms 估计时长兜底，保证扫光能走完
+        if (sb.isNotEmpty()) segs.add(sb.toString() to (segs.last().second + 300L))
+        return segs
     }
 
     /**

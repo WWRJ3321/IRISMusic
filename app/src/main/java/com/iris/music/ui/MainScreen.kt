@@ -781,6 +781,11 @@ private fun LibraryPage(
     // 刷新中内容停在这个位置，露出指示器
     val holdPullPx = refreshTriggerPx * 0.68f
     var refreshOffset by remember { mutableFloatStateOf(0f) }
+    // 刷新序列是否进行中（触发的瞬间置位，回弹归零后复位）。
+    // 圆圈旋转原本只看 state.refreshing：触发后要先弹簧停到指示位（~300ms），
+    // 扫描又快时圆圈"露脸"时 refreshing 已经false——用户看到圆圈整个刷新期间
+    // 一动不动（v4.6.15 修复）。旋转与最短驻留改由这个"held"状态驱动。
+    var refreshHeld by remember { mutableStateOf(false) }
     val isRefreshing = state.refreshing
     val pullScope = rememberCoroutineScope()
     var settleJob by remember { mutableStateOf<Job?>(null) }
@@ -798,6 +803,37 @@ private fun LibraryPage(
     // remember 块里的连接体不能直接读 state.refreshing / onReload：会永远拿到首帧的值
     val refreshingState = rememberUpdatedState(state.refreshing)
     val reloadState = rememberUpdatedState(onReload)
+    val heldState = rememberUpdatedState(refreshHeld)
+    // 统一触发：置 held（圆圈立即开始转）、弹簧停在指示位、驻留到扫描结束
+    // 且至少转满一圈，再回弹。慢速松手与甩动两条触发路径都走这里；
+    // reloadLibrary 自带 refreshing 去重，双路径先后调用也只刷一次。
+    val runRefresh: () -> Unit = {
+        settleJob?.cancel()
+        refreshHeld = true
+        settleJob = pullScope.launch {
+            reloadState.value.invoke()
+            springOffsetTo(holdPullPx)
+            delay(700)
+            snapshotFlow { refreshingState.value }.first { !it }
+            springOffsetTo(0f)
+            refreshHeld = false
+        }
+    }
+    val runRefreshState = rememberUpdatedState(runRefresh)
+    // 慢速松手兜底：拖过阈值后缓慢释放不产生 fling，onPreFling 根本不会被调——
+    // 位移晾在半空、不触发也不回弹（"圆圈不转"的主根因）。列表停止滚动时统一收尾。
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { inProgress ->
+                if (inProgress) return@collect
+                val off = refreshOffset
+                if (off > 0f && !refreshingState.value && !heldState.value) {
+                    if (off >= refreshTriggerPx) runRefreshState.value.invoke()
+                    else settleTo(0f)
+                }
+            }
+    }
 
     // 下拉位移与上栏位移合并进同一个连接。
     // 拆成两个 nestedScroll 时，同一段手势会被两边各消化一次：下拉时上栏收到同样的
@@ -814,8 +850,10 @@ private fun LibraryPage(
                 if (delta == 0f) return Offset.Zero
                 val byFinger = source == NestedScrollSource.UserInput
 
-                // 1) 已经拉出下拉位移：这段手势先把位移收回，不传给列表也不动上栏
-                if (byFinger && refreshOffset > 0f && delta < 0f) {
+                // 1) 已经拉出下拉位移：这段手势先把位移收回，不传给列表也不动上栏。
+                //    held（刷新序列进行中）时不放行：cancel 会杀掉驱动协程，
+                //    位移与 held 状态都会卡在半途。
+                if (byFinger && refreshOffset > 0f && delta < 0f && !heldState.value) {
                     settleJob?.cancel()
                     val consumed = delta.coerceAtLeast(-refreshOffset)
                     refreshOffset += consumed
@@ -833,7 +871,7 @@ private fun LibraryPage(
                         return Offset(0f, used)
                     }
                     // 2b) 上栏已归位：橡皮筋下拉，越拉越沉（惯性阶段不触发刷新）
-                    if (byFinger && !refreshingState.value) {
+                    if (byFinger && !heldState.value) {
                         settleJob?.cancel()
                         val resistance = (1f - refreshOffset / maxPullPx).coerceIn(0.15f, 1f)
                         refreshOffset = (refreshOffset + delta * resistance).coerceAtMost(maxPullPx)
@@ -880,18 +918,9 @@ private fun LibraryPage(
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (refreshOffset <= 0f) return Velocity.Zero
-                if (refreshOffset >= refreshTriggerPx && !refreshingState.value) {
-                    reloadState.value.invoke()
-                    settleJob?.cancel()
-                    settleJob = pullScope.launch {
-                        // 先收到指示位停住，再等刷新真正结束才弹回。
-                        // 用 snapshotFlow 等待而不是只靠 LaunchedEffect(refreshing)：
-                        // reload 被忽略（已在刷新中）时 refreshing 不变化，那样会永远停在半空。
-                        springOffsetTo(holdPullPx)
-                        snapshotFlow { refreshingState.value }.first { !it }
-                        springOffsetTo(0f)
-                    }
-                } else if (!refreshingState.value) {
+                if (refreshOffset >= refreshTriggerPx && !heldState.value) {
+                    runRefreshState.value.invoke()
+                } else if (!refreshingState.value && !heldState.value) {
                     settleTo(0f)
                 }
                 // 吃掉这段惯性：位移已经消化了手势，再让列表 fling 会突然一跳
@@ -1043,11 +1072,13 @@ private fun LibraryPage(
                             cap = androidx.compose.ui.graphics.StrokeCap.Round
                         )
                     )
-                    // 进度弧：刷新中改成定长弧持续旋转
+                    // 进度弧：刷新序列中（held，含扫描已完成但仍在最短驻留期）改成定长弧持续旋转。
+                    // 只看 state.refreshing 会因"扫描快于动画"整场不转（v4.6.15 修复）。
+                    val spinning = isRefreshing || refreshHeld
                     drawArc(
                         color = colors.primary,
-                        startAngle = if (isRefreshing) spin else -90f,
-                        sweepAngle = if (isRefreshing) 100f else 360f * refreshProgress,
+                        startAngle = if (spinning) spin else -90f,
+                        sweepAngle = if (spinning) 100f else 360f * refreshProgress,
                         useCenter = false,
                         topLeft = Offset(inset, inset),
                         size = arcSize,

@@ -785,10 +785,14 @@ private fun BandSlider(
                     size = Size(14.dp.toPx(), 1.dp.toPx()),
                     cornerRadius = CornerRadius(0.5f.dp.toPx())
                 )
+                val thumbCY = thumbY.coerceIn(7.dp.toPx(), size.height - 7.dp.toPx())
+                drawCircle(color = accent, radius = 7.dp.toPx(), center = Offset(cx, thumbCY))
+                // 与 CompactSlider 圆点同款描边：主色点在深浅底、峰谷贴边时都有轮廓
                 drawCircle(
-                    color = accent,
+                    color = Color.Black.copy(alpha = 0.15f * alpha),
                     radius = 7.dp.toPx(),
-                    center = Offset(cx, thumbY.coerceIn(7.dp.toPx(), size.height - 7.dp.toPx()))
+                    center = Offset(cx, thumbCY),
+                    style = Stroke(width = 1.dp.toPx())
                 )
             }
         }
