@@ -1106,14 +1106,18 @@ private fun LibraryPage(
         } else Modifier
         Column(
             Modifier
-                .fillMaxWidth()
                 // 横屏窄化：上栏玻璃与横屏播放卡片同宽（LANDSCAPE_BAR_MAX_WIDTH
                 // 已含玻璃外 22dp padding 的补偿）；竖屏 fillMaxWidth 原样。
+                // ⚠ 封顶必须在 fillMaxWidth 之外（先 widthIn 再 fillMaxWidth）：
+                // 反过来写 fillMaxWidth 会先把外层尺寸定成整屏、minWidth 抵消封顶
+                // （同款教训见本页播放卡片注释），上栏变成整屏宽、玻璃靠左，
+                // 与居中的 680 播放卡片完全对不齐。
                 .then(
                     if (LocalConfiguration.current.orientation ==
                         android.content.res.Configuration.ORIENTATION_LANDSCAPE
                     ) Modifier.widthIn(max = LANDSCAPE_BAR_MAX_WIDTH) else Modifier
                 )
+                .fillMaxWidth()
                 .align(Alignment.TopCenter)
                 .offset(y = with(density) { statusBarHeightDp.toDp() + barTopGap })
                 .onSizeChanged { barHeight.value = it.height }

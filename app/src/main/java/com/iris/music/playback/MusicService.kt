@@ -46,6 +46,18 @@ class MusicService : MediaSessionService() {
     private var sleepUnsub: (() -> Unit)? = null
 
     /**
+     * 「关」档 = 播完当前歌就停。交给 ExoPlayer 原生的 pauseAtEndOfMediaItems 在服务里做，
+     * 不再由 UI 层 ViewModel 在“已经切到下一首之后”再补一刀 pause()：
+     * 后者依赖 UI 进程状态、晚一拍、且 ViewModel 的判断条件一旦写错就会误伤随机档
+     * （v4.6.13 之前的“随机模式后台播完一首就暂停”即此）。
+     * 必须强引用保存监听器，SharedPreferences 内部是弱引用。
+     */
+    private var modePrefsListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    /** 连续出错计数：防止整张歌单都放不了时无限跳歌 */
+    private var consecutiveErrors = 0
+
+    /**
      * 听歌时长记账。
      *
      * 放在服务而不是 ViewModel 里：UI 划到后台、Activity 被销毁之后音乐还在放，
@@ -180,6 +192,40 @@ class MusicService : MediaSessionService() {
         SpatialWide.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         SafeLimiter.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         TrackGain.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
+        // 「关」档播完即停：按持久化的播放模式同步到播放器（UI 不在也生效）
+        val prefs = getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
+        fun syncStopAfterCurrent() {
+            val shuffle = prefs.getBoolean("shuffle_enabled", false)
+            val repeat = prefs.getString("repeat_mode", "OFF")
+            player.pauseAtEndOfMediaItems = !shuffle && repeat == "OFF"
+        }
+        syncStopAfterCurrent()
+        modePrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "shuffle_enabled" || key == "repeat_mode") syncStopAfterCurrent()
+        }.also { prefs.registerOnSharedPreferenceChangeListener(it) }
+
+        // 播放出错（文件被删/移动、格式不支持如 WMA、解码失败）：原来没有任何处理，
+        // ExoPlayer 会停在 IDLE——后台随机播放时表现就是“切到下一首直接停了”。
+        // 现在自动跳到下一首继续放；连续失败超过队列长度（或 10 次）才放弃。
+        player.addListener(object : Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                android.util.Log.w("IrisPlayback", "play error on ${player.currentMediaItem?.mediaId}", error)
+                consecutiveErrors++
+                val limit = minOf(player.mediaItemCount, 10)
+                if (consecutiveErrors > limit) return
+                if (player.hasNextMediaItem()) {
+                    player.seekToNextMediaItem()
+                } else if (player.mediaItemCount > 1) {
+                    player.seekToDefaultPosition(0)
+                } else return
+                player.prepare()
+                player.playWhenReady = true
+            }
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) consecutiveErrors = 0
+            }
+        })
+
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // 自动切歌不经过 play()，需要在这里重置音量闸门，否则新曲目会继承上一首的渐出值。
@@ -239,6 +285,10 @@ class MusicService : MediaSessionService() {
     override fun onDestroy() {
         // 反注册到期观察者，避免旧 player 引用留在进程级单例里
         sleepUnsub?.let { it() }; sleepUnsub = null
+        modePrefsListener?.let {
+            getSharedPreferences("iris_prefs", Context.MODE_PRIVATE).unregisterOnSharedPreferenceChangeListener(it)
+        }
+        modePrefsListener = null
         // 服务结束前收起悬浮歌词窗
         FloatingLyric.release()
         // 服务结束前把最后一段听歌时长结清并落盘

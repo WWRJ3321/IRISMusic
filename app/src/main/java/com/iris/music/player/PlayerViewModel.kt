@@ -358,24 +358,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            // 播放模式「关」的语义是"播完当前歌就停止"（不自动连播下一曲）。
-            // ExoPlayer 到达曲尾总会自动前进到下一条，这里在自动前进的瞬间拦截：
-            // 暂停并把进度拨回新歌开头——用户看到的是"播完了，停着"，
-            // 高亮落在下一曲行首，手动点播放即可继续。
-            // 注意「随机」档在本 App 的按钮模型里 = shuffle=true + repeatMode=OFF
-            // （见 cyclePlayMode），随机必须自动连播，所以拦截条件必须同时要求
-            // shuffle=false。旧注释"随机不走这个分支"是错的——它正是走这个分支，
-            // 导致随机模式下一首播完自动暂停（v4.6.13 修复）。
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
-                _state.value.repeatMode == RepeatMode.OFF &&
-                !_state.value.shuffle
-            ) {
-                val c = controller
-                if (c != null) {
-                    c.pause()
-                    c.seekTo(c.currentMediaItemIndex, 0L)
-                }
-            }
+            // 「关」档（播完当前歌就停）已移到 MusicService：用 ExoPlayer 的
+            // pauseAtEndOfMediaItems 在播放器内部完成，UI 层不再在切歌后补 pause()。
+            // 旧做法依赖 UI 状态、晚一拍，条件一写错就误伤随机档（后台随机播完即停）。
             syncFromController()
         }
 
@@ -1458,7 +1443,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         // 偏好权重被抹掉，而且"下一首"跳到的行和列表里高亮行的下一行不是同一首。
         c.shuffleModeEnabled = false
         c.repeatMode = when (_state.value.repeatMode) {
-            RepeatMode.OFF -> Player.REPEAT_MODE_OFF
+            // 「随机」档 = shuffle + repeatMode OFF。底层若真用 REPEAT_MODE_OFF，
+            // 洗牌时间线放到最后一首就 STATE_ENDED 停了（小歌单/文件夹很快触发）。
+            // 随机应当一直放下去，所以底层按列表循环处理。
+            RepeatMode.OFF -> if (_state.value.shuffle) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
             RepeatMode.ALL -> Player.REPEAT_MODE_ALL
             RepeatMode.ONE -> Player.REPEAT_MODE_ONE
         }

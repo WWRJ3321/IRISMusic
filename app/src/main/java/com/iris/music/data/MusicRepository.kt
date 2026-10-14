@@ -32,7 +32,7 @@ import java.io.File
  */
 object MusicRepository {
 
-    private val AUDIO_EXTS = setOf("mp3", "flac", "m4a", "aac", "ogg", "wav", "wma", "opus")
+    private val AUDIO_EXTS = setOf("mp3", "flac", "m4a", "aac", "ogg", "wav", "opus") // wma 去掉：ExoPlayer 无 ASF/WMA 解码，扫进来只会播放出错
     private const val MIN_DURATION_MS = 10_000L
     private const val SCAN_CONCURRENCY = 16
     private const val DIR_BUDGET = 20_000  // 目录访问上限，防御异常深树
