@@ -465,7 +465,9 @@ visible = scrollerVisible,
                             viewModel.addToPlaylist(id, song.id)
                             pendingAddSong = null
                         },
-                        onAdd = { pid -> viewModel.addToPlaylist(pid, song.id); pendingAddSong = null }
+                        onAdd = { pid -> viewModel.addToPlaylist(pid, song.id) },
+                        // 移出同样不关弹层：状态实时翻转，可连续操作
+                        onRemove = { pid -> viewModel.removeFromPlaylist(pid, song.id) }
                     )
                 }
             }

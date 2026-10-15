@@ -395,7 +395,9 @@ internal fun AddToPlaylistSheet(
     colors: IrisColors,
     onDismiss: () -> Unit,
     onCreateAndAdd: (String) -> Unit,
-    onAdd: (Long) -> Unit
+    onAdd: (Long) -> Unit,
+    /** 从已加入的歌单移除（弹层不关闭，"已加入"状态实时翻转，可连续操作多个歌单） */
+    onRemove: (Long) -> Unit = {}
 ) {
     val accent = colors.primary.readableOn(colors.surface, 3.2f)
     val onSheet = if (colors.isDark) Color.White else Color.Black
@@ -446,7 +448,12 @@ internal fun AddToPlaylistSheet(
                                         shape = IrisShape.item,
                                         accent = if (alreadyIn) colors.primary else null
                                     )
-                                    .clickable { Haptics.tap(); if (!alreadyIn) onAdd(p.id) }
+                                    .clickable {
+                                        Haptics.tap()
+                                        // 已加入 → 点按移出；未加入 → 点按加入。
+                                        // 加入/移出都不关弹层，可在同一屏连续操作多个歌单。
+                                        if (alreadyIn) onRemove(p.id) else onAdd(p.id)
+                                    }
                                     .padding(horizontal = 14.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -460,7 +467,8 @@ internal fun AddToPlaylistSheet(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    if (alreadyIn) "已加入" else "${p.songCount} 首",
+                                    // 旧版"已加入"行不可点，只能加不能移——现在点它即移出
+                                    if (alreadyIn) "已加入 · 点按移出" else "${p.songCount} 首",
                                     color = if (alreadyIn) accent else colors.subText,
                                     fontSize = 11.sp,
                                     fontWeight = if (alreadyIn) FontWeight.Bold else FontWeight.Medium
