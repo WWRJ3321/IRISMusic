@@ -39,24 +39,21 @@ import kotlin.math.roundToInt
  * 挂在 [MusicService] 上而非 Activity：服务是前台常驻的，App 退到桌面、切到别的
  * 应用，歌词窗依然跟随。所有可调项（开关/字号/长度/透明度）读 `iris_prefs`，
  * 注册 [SharedPreferences.OnSharedPreferenceChangeListener] 实时响应设置页改动。
- *
- * 用原生 TextView 而非 ComposeView：不引新依赖（离线仓库无 ui-view），
- * 且脱离 Activity 的悬浮窗里原生 view 无需自持 Lifecycle owner，最稳。
  */
 object FloatingLyric {
 
     const val PREFS = "iris_prefs"
     const val KEY_ENABLED = "float_lyric_enabled"
-    const val KEY_FONT = "float_lyric_font"          // sp 字号，12~40
-    const val KEY_WIDTH = "float_lyric_width"         // 文本框宽度占屏比，0.3~1.0
-    const val KEY_BG = "float_lyric_bg"               // 黑底透明度 0~1（0 最浓，1 完全消失）
-    const val KEY_POS_X = "float_lyric_x"             // 悬浮窗 gravity-x 偏移（px）
-    const val KEY_POS_Y = "float_lyric_y"             // 悬浮窗 gravity-y 偏移（px）
+    const val KEY_FONT = "float_lyric_font"
+    const val KEY_WIDTH = "float_lyric_width"
+    const val KEY_BG = "float_lyric_bg"
+    const val KEY_POS_X = "float_lyric_x"
+    const val KEY_POS_Y = "float_lyric_y"
     
-    // 新增：固定与样式配置
+    const val KEY_USE_CUSTOM = "float_lyric_use_custom"
     const val KEY_KARAOKE = "float_lyric_karaoke"
     const val KEY_FIXED = "float_lyric_fixed"
-    const val KEY_FIX_MODE = "float_lyric_fix_mode"   // 0=居中, 1=固定
+    const val KEY_FIX_MODE = "float_lyric_fix_mode"
     const val KEY_THEME = "float_lyric_theme"
     const val KEY_CUSTOM_PRIMARY = "float_lyric_custom_primary"
     const val KEY_CUSTOM_SECONDARY = "float_lyric_custom_secondary"
@@ -65,8 +62,8 @@ object FloatingLyric {
     const val WIDTH_DEFAULT = 0.86f
     const val BG_DEFAULT = 0.3f
 
-    /** 进度轮询周期：500ms 足够跟手，又不至于高频读播放器 */
-    private const val POLL_MS = 500L
+    /** 进度轮询周期：50ms 保证逐字流光丝滑跟手 */
+    private const val POLL_MS = 50L
 
     private var appContext: Context? = null
     private var player: Player? = null
@@ -75,13 +72,11 @@ object FloatingLyric {
     private var params: WindowManager.LayoutParams? = null
     private var bgDrawable: GradientDrawable? = null
 
-    /** 黑底透明档（0~1），喂给 applyStyle 计算黑底浓度。 */
     private var bgT = BG_DEFAULT
-    
-    // 新增状态变量
     private var isFixed = false
     private var fixMode = 0
     private var isKaraoke = false
+    private var useCustom = false
     private var theme = IrisTheme.MONO
     private var customPrimary = 0xFF00F0FFL
     private var customSecondary = 0xFFFF2E97L
@@ -92,13 +87,16 @@ object FloatingLyric {
     private var prefs: SharedPreferences? = null
     private var prefListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
-    // 歌词缓存
     private var lyricPath: String? = null
     private var lyricLines: List<LyricLine> = emptyList()
     private var loadingPath: String? = null
 
     private var shown = false
     private var lastWidth = 0
+    
+    // 用于记录上一次的渲染进度，防止 50ms 内的重复渲染
+    private var lastSplit = -1
+    private var lastLineText = ""
 
     private val poll = object : Runnable {
         override fun run() {
@@ -107,7 +105,6 @@ object FloatingLyric {
         }
     }
 
-    /** 由 [MusicService.onCreate] 调用一次：保存上下文与播放器引用，恢复悬浮窗状态。 */
     fun init(context: Context, p: Player) {
         appContext = context.applicationContext
         player = p
@@ -125,9 +122,10 @@ object FloatingLyric {
                 }
                 KEY_BG -> { bgT = sp.getFloat(KEY_BG, BG_DEFAULT); applyStyle() }
                 KEY_ENABLED -> syncVisibility()
-                KEY_KARAOKE, KEY_FIXED, KEY_FIX_MODE, KEY_THEME, KEY_CUSTOM_PRIMARY, KEY_CUSTOM_SECONDARY -> {
+                KEY_KARAOKE, KEY_FIXED, KEY_FIX_MODE, KEY_THEME, KEY_CUSTOM_PRIMARY, KEY_CUSTOM_SECONDARY, KEY_USE_CUSTOM -> {
                     loadPrefs(sp)
                     if (key == KEY_FIXED || key == KEY_FIX_MODE) recalcCenter()
+                    lastLineText = "" // 强制刷新
                 }
             }
         }
@@ -141,6 +139,7 @@ object FloatingLyric {
         isFixed = sp.getBoolean(KEY_FIXED, false)
         fixMode = sp.getInt(KEY_FIX_MODE, 0)
         isKaraoke = sp.getBoolean(KEY_KARAOKE, false)
+        useCustom = sp.getBoolean(KEY_USE_CUSTOM, false)
         theme = runCatching { IrisTheme.valueOf(sp.getString(KEY_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO)
         customPrimary = sp.getLong(KEY_CUSTOM_PRIMARY, 0xFF00F0FFL)
         customSecondary = sp.getLong(KEY_CUSTOM_SECONDARY, 0xFFFF2E97L)
@@ -157,18 +156,14 @@ object FloatingLyric {
     }
 
     private fun enabled(): Boolean = prefs?.getBoolean(KEY_ENABLED, false) ?: false
-
-    /** 外部（设置页授权返回后）主动触发一次显隐同步。 */
     fun refresh() = syncVisibility()
 
-    /** 根据开关 + 悬浮窗权限决定显示/隐藏。 */
     private fun syncVisibility() {
         val ctx = appContext ?: return
         if (enabled() && Settings.canDrawOverlays(ctx)) show(ctx) else hide()
     }
 
-    private fun screenW(): Int =
-        appContext?.resources?.displayMetrics?.widthPixels ?: 1080
+    private fun screenW(): Int = appContext?.resources?.displayMetrics?.widthPixels ?: 1080
 
     @SuppressLint("ClickableViewAccessibility")
     private fun show(ctx: Context) {
@@ -183,7 +178,6 @@ object FloatingLyric {
             val padH = (16 * resources.displayMetrics.density).toInt()
             val padV = (8 * resources.displayMetrics.density).toInt()
             setPadding(padH, padV, padH, padV)
-            // 阴影提升暗背景下的可读性
             setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
             setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
         }
@@ -192,16 +186,10 @@ object FloatingLyric {
         lastWidth = widthPx
 
         val lp = WindowManager.LayoutParams(
-            widthPx,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
-            // 不抢焦点、不挡其它区域触摸（除自身可拖），延伸到状态栏
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            widthPx, WindowManager.LayoutParams.WRAP_CONTENT,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -214,16 +202,12 @@ object FloatingLyric {
         }
 
         attachDrag(tv, lp, sp)
-
         runCatching { wm.addView(tv, lp) }.onFailure { return }
-        textView = tv
-        params = lp
-        shown = true
+        textView = tv; params = lp; shown = true
         applyStyle()
         handler.post(poll)
     }
 
-    /** 窗口旋转、修改宽度时，如果处于居中模式，自动校正 x */
     private fun recalcCenter() {
         val lp = params ?: return
         if (isFixed && fixMode == 0) {
@@ -232,38 +216,23 @@ object FloatingLyric {
         }
     }
 
-    /** 文本区拖动：整体移动悬浮窗，落盘记忆位置。 */
-    @SuppressLint("ClickableViewAccessibility")
     private fun attachDrag(tv: TextView, lp: WindowManager.LayoutParams, sp: SharedPreferences) {
-        var lastX = 0f
-        var lastY = 0f
+        var lastX = 0f; var lastY = 0f
         tv.setOnTouchListener { v, e ->
-            // 完全固定禁止任何拖动
             if (isFixed && fixMode == 1) return@setOnTouchListener false
-
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    lastX = e.rawX; lastY = e.rawY; true
-                }
+                MotionEvent.ACTION_DOWN -> { lastX = e.rawX; lastY = e.rawY; true }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (e.rawX - lastX).roundToInt()
                     val dy = (e.rawY - lastY).roundToInt()
-                    
-                    // 如果是居中模式，只能改变 y
-                    if (!(isFixed && fixMode == 0)) {
-                        lp.x += dx
-                    }
+                    if (!(isFixed && fixMode == 0)) lp.x += dx
                     lp.y += dy
-                    
                     lastX = e.rawX; lastY = e.rawY
                     runCatching { windowManager?.updateViewLayout(v, lp) }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    // 居中模式下保存的 x 无意义（由系统算），但 y 存下来
-                    if (!(isFixed && fixMode == 0)) {
-                        sp.edit().putInt(KEY_POS_X, lp.x).apply()
-                    }
+                    if (!(isFixed && fixMode == 0)) sp.edit().putInt(KEY_POS_X, lp.x).apply()
                     sp.edit().putInt(KEY_POS_Y, lp.y).apply()
                     true
                 }
@@ -275,92 +244,67 @@ object FloatingLyric {
     private fun hide() {
         handler.removeCallbacks(poll)
         textView?.let { v -> runCatching { windowManager?.removeView(v) } }
-        textView = null
-        params = null
-        bgDrawable = null
-        shown = false
+        textView = null; params = null; bgDrawable = null; shown = false
     }
 
-    /**
-     * 黑底颜色：滑条档 t∈[0,1]（0 最浓 → 1 完全消失），全量程线性。
-     * 文字始终不受此档影响。
-     */
-    private fun bgColorFor(t: Float): Int {
-        val maxA = 190 // 最浓时黑底 alpha（约 75%）
-        val a = ((1f - t).coerceIn(0f, 1f) * maxA).roundToInt()
-        return (a shl 24)
-    }
-
-    /**
-     * 统一应用外观：单层圆角黑底。黑底浓度由 [bgT] 全量程决定，文字不受影响。
-     */
     private fun applyStyle() {
         val tv = textView ?: return
-        val radius = 18 * tv.resources.displayMetrics.density
         val fill = GradientDrawable().apply {
-            cornerRadius = radius
-            setColor(bgColorFor(bgT))
+            cornerRadius = 18 * tv.resources.displayMetrics.density
+            setColor(((1f - bgT).coerceIn(0f, 1f) * 190).roundToInt().let { (it shl 24) })
         }
-        bgDrawable = fill
-        tv.background = fill
+        bgDrawable = fill; tv.background = fill
     }
 
     private fun applyWidth(frac: Float) {
         val lp = params ?: return
         lastWidth = (screenW() * frac).roundToInt()
         lp.width = lastWidth
-        if (isFixed && fixMode == 0) {
-            lp.x = (screenW() - lastWidth) / 2
-        }
+        if (isFixed && fixMode == 0) lp.x = (screenW() - lastWidth) / 2
         runCatching { windowManager?.updateViewLayout(textView, lp) }
+        lastLineText = "" // 宽度变化，重新计算渐变
     }
 
-    /** 取当前播放句：歌曲变化时异步解析歌词，之后按 position 取行。 */
     private fun updateLine() {
         val p = player ?: return
         val item = p.currentMediaItem ?: run { setText(""); return }
-        // 真实文件路径由 toMediaItem 透传在 MediaMetadata.extras 里；
-        // content URI 的 .path 不是文件路径，直接读会取不到歌词，故优先取 extras。
-        val path = item.mediaMetadata.extras?.getString("file_path")
-            ?: item.localConfiguration?.uri?.let { if (it.scheme == "file") it.path else null }
+        val path = item.mediaMetadata.extras?.getString("file_path") ?: item.localConfiguration?.uri?.let { if (it.scheme == "file") it.path else null }
         if (path.isNullOrBlank()) { setText(""); return }
 
         if (path != lyricPath && path != loadingPath) {
-            loadingPath = path
-            lyricPath = path
-            lyricLines = emptyList()
+            loadingPath = path; lyricPath = path; lyricLines = emptyList()
             val duration = if (p.duration > 0) p.duration else 0L
             scope.launch {
-                val lines = withContext(Dispatchers.IO) {
-                    runCatching { LyricParser.loadLyrics(path, duration) }.getOrDefault(emptyList())
-                }
-                if (loadingPath == path) {
-                    lyricLines = lines
-                    loadingPath = null
-                }
+                val lines = withContext(Dispatchers.IO) { runCatching { LyricParser.loadLyrics(path, duration) }.getOrDefault(emptyList()) }
+                if (loadingPath == path) { lyricLines = lines; loadingPath = null; lastLineText = "" }
             }
         }
 
         val lines = lyricLines
-        if (lines.isEmpty()) {
-            setRichText(item.mediaMetadata.title?.toString() ?: "", 1f)
-            return
+        if (lines.isEmpty()) { 
+            val title = item.mediaMetadata.title?.toString() ?: ""
+            if (lastLineText != title) setText(title) 
+            return 
         }
+        
         val idx = LyricParser.currentIndex(lines, p.currentPosition)
         if (idx in lines.indices) {
             val line = lines[idx]
-            if (isKaraoke && line.hasWords) {
-                val progress = LyricParser.wordProgressCharsF(line, p.currentPosition, lines.getOrNull(idx+1)?.timeMs ?: p.duration)
-                setRichText(line.text, progress / line.text.length.coerceAtLeast(1))
+            val nextLine = lines.getOrNull(idx + 1)?.timeMs ?: p.duration
+            if (isKaraoke) {
+                // 借用原生插值方法获取浮点进度
+                val progress = LyricParser.wordProgressCharsF(line, p.currentPosition, nextLine)
+                val split = progress.toInt().coerceIn(0, line.text.length)
+                setRichText(line.text, split)
             } else {
-                setRichText(line.text, 1f) // 全亮
+                // 非逐字，整句全亮
+                setRichText(line.text, line.text.length)
             }
-        } else {
-            setText("")
-        }
+        } else { setText("") }
     }
 
     private fun getColors(): Pair<Int, Int> {
+        if (!useCustom) return Color.WHITE to Color.BLACK
         return when (theme) {
             IrisTheme.MONO -> Color.WHITE to Color.BLACK
             IrisTheme.OCEAN -> 0xFF3D7BFF.toInt() to 0xFF00F0FF.toInt()
@@ -370,40 +314,60 @@ object FloatingLyric {
         }
     }
 
-    private fun setText(s: String) = setRichText(s, 1f)
+    private fun setText(s: String) {
+        lastLineText = s
+        textView?.text = s
+    }
 
-    private fun setRichText(text: String, progress: Float) {
+    /**
+     * 核心渲染逻辑：利用 paint.shader 铺渐变底色 + SpannableString 涂黑未唱部分。
+     */
+    private fun setRichText(text: String, split: Int) {
         val tv = textView ?: return
+        if (text == lastLineText && split == lastSplit) return // 防重复渲染
+        
+        lastLineText = text
+        lastSplit = split
+        
         val (c1, c2) = getColors()
+        // 未唱部分的半透明暗色
         val unsungColor = Color.parseColor("#88FFFFFF")
-
-        if (progress >= 0.99f) {
-            // 全亮 + 渐变
-            tv.paint.shader = LinearGradient(0f, 0f, tv.width.toFloat().coerceAtLeast(1f), 0f, c1, c2, Shader.TileMode.CLAMP)
-            tv.setTextColor(c1)
+        
+        if (split >= text.length) {
+            // 已经唱完
+            if (useCustom) {
+                val shaderWidth = tv.width.toFloat().coerceAtLeast(1f)
+                tv.paint.shader = LinearGradient(0f, 0f, shaderWidth, 0f, c1, c2, Shader.TileMode.CLAMP)
+                tv.setTextColor(c1)
+            } else {
+                tv.paint.shader = null
+                tv.setTextColor(c1)
+            }
             tv.text = text
         } else {
             // 逐字流光
-            tv.paint.shader = null 
+            if (useCustom) {
+                val shaderWidth = tv.width.toFloat().coerceAtLeast(1f)
+                tv.paint.shader = LinearGradient(0f, 0f, shaderWidth, 0f, c1, c2, Shader.TileMode.CLAMP)
+                tv.setTextColor(c1)
+            } else {
+                tv.paint.shader = null
+                tv.setTextColor(c1)
+            }
+            
             val ss = SpannableString(text)
-            val split = (text.length * progress).toInt().coerceIn(0, text.length)
-            if (split > 0) ss.setSpan(ForegroundColorSpan(c1), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            if (split < text.length) ss.setSpan(ForegroundColorSpan(unsungColor), split, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (split > 0) {
+                // 已唱部分不需要 Span，直接让底部的 paint.shader 透出来
+                ss.setSpan(ForegroundColorSpan(Color.TRANSPARENT), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            if (split < text.length) {
+                // 未唱部分用半透明暗色覆盖
+                ss.setSpan(ForegroundColorSpan(unsungColor), split, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
             tv.text = ss
         }
     }
 
-    /** 跳转系统悬浮窗授权页。 */
-    fun requestPermission(ctx: Context) {
-        runCatching {
-            ctx.startActivity(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:${ctx.packageName}")
-                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }
-    }
-
+    fun requestPermission(ctx: Context) = runCatching { ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     fun hasPermission(ctx: Context): Boolean = Settings.canDrawOverlays(ctx)
 }
