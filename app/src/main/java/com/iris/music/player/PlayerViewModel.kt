@@ -212,7 +212,27 @@ data class PlayerUiState(
      * 限定扫描目录的绝对路径；null = 不限定（扫描整个共享存储）。
      * 开启后曲库只包含该目录及子目录内的音频。
      */
-    val scanRoot: String? = null
+    val scanRoot: String? = null,
+
+    // ================= 新增：全屏歌词主题与悬浮歌词配置 =================
+    /** 全屏歌词颜色主题 */
+    val lyricTheme: IrisTheme = IrisTheme.MONO,
+    /** 全屏歌词自定义主色 */
+    val lyricCustomPrimary: Long = 0xFF00F0FFL,
+    /** 全屏歌词自定义次色 */
+    val lyricCustomSecondary: Long = 0xFFFF2E97L,
+    /** 悬浮歌词逐字流光开关 */
+    val floatLyricKaraoke: Boolean = false,
+    /** 悬浮歌词固定开关 */
+    val floatLyricFixed: Boolean = false,
+    /** 悬浮歌词固定模式：0=居中(仅上下滑) 1=完全固定 */
+    val floatLyricFixMode: Int = 0,
+    /** 悬浮歌词主题颜色 */
+    val floatLyricTheme: IrisTheme = IrisTheme.MONO,
+    /** 悬浮歌词自定义主色 */
+    val floatLyricCustomPrimary: Long = 0xFF00F0FFL,
+    /** 悬浮歌词自定义次色 */
+    val floatLyricCustomSecondary: Long = 0xFFFF2E97L
 ) {
     val currentSong: Song? get() = queue.getOrNull(currentIndex)
 
@@ -292,7 +312,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             customSecondaryArgb = prefs.getLong(KEY_CUSTOM_SECONDARY, 0xFFFF2E97L),
             customBackgroundUri = prefs.getString(KEY_CUSTOM_BG_URI, null),
             selectedFolders = readSelectedFolders(),
-            scanRoot = readScanRoot()
+            scanRoot = readScanRoot(),
+
+            // === 新增：初始化全屏歌词与悬浮歌词配置 ===
+            lyricTheme = runCatching { IrisTheme.valueOf(prefs.getString(KEY_LYRIC_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO),
+            lyricCustomPrimary = prefs.getLong(KEY_LYRIC_CUSTOM_PRIMARY, 0xFF00F0FFL),
+            lyricCustomSecondary = prefs.getLong(KEY_LYRIC_CUSTOM_SECONDARY, 0xFFFF2E97L),
+            floatLyricKaraoke = prefs.getBoolean(FloatingLyric.KEY_KARAOKE, false),
+            floatLyricFixed = prefs.getBoolean(FloatingLyric.KEY_FIXED, false),
+            floatLyricFixMode = prefs.getInt(FloatingLyric.KEY_FIX_MODE, 0),
+            floatLyricTheme = runCatching { IrisTheme.valueOf(prefs.getString(FloatingLyric.KEY_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO),
+            floatLyricCustomPrimary = prefs.getLong(FloatingLyric.KEY_CUSTOM_PRIMARY, 0xFF00F0FFL),
+            floatLyricCustomSecondary = prefs.getLong(FloatingLyric.KEY_CUSTOM_SECONDARY, 0xFFFF2E97L)
         )
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -301,30 +332,16 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private var reportJob: Job? = null
 
-    /**
-     * 听歌明细缓存。切换日/周/月/年只是同一份数据换个聚合口径，
-     * 每次都重读文件既慢又没必要；打开弹层时才刷新（见 [toggleReport]）。
-     */
     private var statEntries: List<ListenEntry>? = null
 
-    /**
-     * 切歌追踪：上一首歌的 ID 与其【实际播放】的累计时长。
-     *
-     * 不能用墙钟差：暂停挂机一小时再切歌，墙钟差会把挂机时间全记成"已播放"，
-     * 还会把只听了几秒的歌误判成完整播放计数，污染推荐权重。
-     * 与 MusicService.settleListenTime 同口径：只在 isPlaying 期间走表。
-     */
     private var prevSongId: Long = -1L
     private var prevAccumMs: Long = 0L
-    /** 当前"正在播放"时间段的起点（elapsedRealtime），0 = 没有在走表 */
     private var prevLegStartElapsed: Long = 0L
-    /** 结算 prevSong 到目前为止实际播放了多久（含未闭合的当前段） */
     private fun prevPlayedMs(): Long {
         val open = if (prevLegStartElapsed > 0L)
             android.os.SystemClock.elapsedRealtime() - prevLegStartElapsed else 0L
         return prevAccumMs + open
     }
-    /** isPlaying 变化时闭合/开启当前播放段（不切歌） */
     private fun updatePlayLeg(isPlaying: Boolean) {
         if (prevSongId < 0) return
         val now = android.os.SystemClock.elapsedRealtime()
@@ -336,31 +353,17 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * 待恢复的曲目与位置。
-     *
-     * 两种来源：进程复用时播放器里已有的当前曲目，或上次退出时落盘的记录。
-     * 库是异步加载的，连上 controller 的那一刻队列还是空的，没法直接定位下标，
-     * 所以先把 id 记在这里，等 [applyFilters] 建好队列再对齐。
-     */
     private var pendingRestoreId: Long? = null
     private var pendingRestorePos: Long = 0L
-
-    /** 上次把播放进度落盘的时间，用于限流（每 5 秒一次足够） */
     private var lastPersistMs = 0L
-
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            // 暂停/继续影响"实际播放时长"走表，先闭合或开启当前段
             updatePlayLeg(isPlaying)
             _state.value = _state.value.copy(isPlaying = isPlaying)
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            // 「关」档（播完当前歌就停）已移到 MusicService：用 ExoPlayer 的
-            // pauseAtEndOfMediaItems 在播放器内部完成，UI 层不再在切歌后补 pause()。
-            // 旧做法依赖 UI 状态、晚一拍，条件一写错就误伤随机档（后台随机播完即停）。
             syncFromController()
         }
 
@@ -371,16 +374,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         override fun onConfigurationChanged(newConfig: Configuration) = refreshSystemDark()
         override fun onLowMemory() {}
     }
+
     init {
         PlayHistory.init(app)
         ListenStats.init(app)
         ArtworkLoader.init(app)
         Playlists.init(app)
 
-        // 点赞集合在 PlayHistory 初始化后读取（prefs lateinit）
         val allPlaylists = Playlists.all()
-        // 恢复上次选中的歌单：存盘里的 ID 必须仍存在于歌单列表才采纳，
-        // 否则（歌单已被删）回落到全部视图，避免指向不存在的歌单。
         val restoredActive = prefs.getLong(KEY_ACTIVE_PLAYLIST, -1L)
             .takeIf { id -> id >= 0 && allPlaylists.any { it.id == id } }
         _state.value = _state.value.copy(
@@ -388,14 +389,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             playlists = allPlaylists,
             activePlaylistId = restoredActive
         )
-        // 频谱分析器状态跟随持久化开关（服务可能先于本次读取创建）
         SpectrumAnalyzer.enabled = _state.value.visualizerEnabled
-        // 触感与渐变：服务进程内的 FadeController 由 MusicService 自行 init，
-        // 这里只需保证 UI 进程的 Haptics 拿到配置
         Haptics.init(app)
 
-        // 上次退出时播的那首歌。冷启动时播放器是空的，只能靠这份记录恢复；
-        // 若服务还活着（划后台再回来），connectController 会用播放器里的真实曲目覆盖它。
         pendingRestoreId = prefs.getLong(KEY_LAST_SONG, -1L).takeIf { it >= 0 }
         pendingRestorePos = prefs.getLong(KEY_LAST_POS, 0L).coerceAtLeast(0L)
 
@@ -403,8 +399,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch { loadLibrary() }
         viewModelScope.launch { tickPosition() }
-        // 睡眠定时器状态恢复：计时在 SleepTimer（进程级），若服务已 attach 过
-        // 或上次定时未到期，把剩余定时映射回 UI（进度环、角标）。
         SleepTimer.attach(getApplication())
         if (SleepTimer.endMs > 0L) {
             _state.value = _state.value.copy(
@@ -415,8 +409,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         sleepUnsub = SleepTimer.addExpireObserver {
             _state.value = _state.value.copy(sleepTimerMs = 0L, sleepTimerEndMs = 0L)
         }
-        // 老版本只有"每首歌累计多久"，没有按天明细。把它折算成一条条记录，
-        // 升级用户第一次打开报告才不会是空的（只执行一次，见 seedFromLegacy）。
         viewModelScope.launch(Dispatchers.IO) {
             ListenStats.seedFromLegacy(PlayHistory.getTotalPlayedMs(), PlayHistory.getLastPlayed())
         }
@@ -431,7 +423,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         if (c.isPlaying) {
             c.pause()
-            // 暂停后位置就不动了，轮询不会再写，这里补一次
             persistPlayback(throttle = false)
         } else {
             if (c.mediaItemCount == 0) pushQueue(startIndex = 0, startPositionMs = 0L)
@@ -441,7 +432,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun previous() {
         val c = controller ?: return
-        // 播放超过 3 秒时“上一首”先回到开头，符合常见播放器手感
         if (c.currentPosition > 3_000) c.seekTo(0L) else c.seekToPrevious()
     }
 
@@ -449,7 +439,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         controller?.seekToNext()
     }
 
-    /** 按进度比例跳转，fraction 取值 0f..1f */
     fun seekTo(fraction: Float) {
         val c = controller ?: return
         val duration = c.duration
@@ -459,27 +448,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(positionMs = target)
     }
 
-    /** 播放队列中指定位置的歌曲 */
     fun playAt(index: Int) {
         val c = controller ?: return
         val queue = _state.value.queue
         if (index !in queue.indices) return
         val wantId = queue[index].id.toString()
 
-        // 播放器时间线开着随机时是洗牌序，主页 index 在时间线里没有对应位置。
-        // 直接在时间线上找目标歌的当前下标；找不到（时间线还是旧队列）就重写。
         val playIdx = (0 until c.mediaItemCount).firstOrNull { i ->
             c.getMediaItemAt(i).mediaId == wantId
         }
 
         if (playIdx != null && c.mediaItemCount == queue.size) {
             c.seekTo(playIdx, 0L)
-            // 上一首解码失败等原因会让播放器停在 IDLE，此时 play() 不生效
             if (c.playbackState == Player.STATE_IDLE) c.prepare()
         } else {
-            // 不能走 pushQueue——它在"当前曲目仍在播放"时会跳过重写直接返回，
-            // 于是播放器一直留着旧队列，用户点哪首都只是高亮变了、声音没换。
-            // 用户明确点歌时必须以 UI 队列为准重写（随机开启时目标置顶重洗）。
             val pinId = if (_state.value.shuffle) queue[index].id else null
             val order = playOrder(queue, pinId)
             val pIdx = if (pinId != null) 0 else index
@@ -490,13 +472,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(currentIndex = index)
     }
 
-    /**
-     * 按歌曲对象播放（推荐卡片入口）。
-     *
-     * 不接受"UI 先算好下标再传进来"：推荐基于全库打分，而队列可能被文件夹或
-     * 收藏筛选过，推荐的歌不在队列里时 `indexOfFirst` 返回 -1，调用方一句
-     * `if (idx >= 0)` 就把点击静默吞掉了。这里改为找不到就把歌插进队列再播。
-     */
     fun playSong(song: Song) {
         if (controller == null) return
         val queue = _state.value.queue
@@ -507,12 +482,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        // 插到当前曲目后面，保留用户的筛选条件而不是把筛选清掉
         val insertAt = (_state.value.currentIndex + 1).coerceIn(0, queue.size)
         _state.value = _state.value.copy(
             queue = queue.toMutableList().apply { add(insertAt, song) }
         )
-        // 队列变长，playAt 会检测到不同步并重写播放器队列
         playAt(insertAt)
     }
 
@@ -520,21 +493,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val next = !_state.value.shuffle
         prefs.edit().putBoolean(KEY_SHUFFLE, next).apply()
         _state.value = _state.value.copy(shuffle = next)
-        // 随机只改写【播放器时间线】的顺序，state.queue（主页列表）永远保持
-        // 固定的 筛选→排序 结果。旧实现直接把 state.queue 洗掉，主页列表跟着
-        // 变成乱序——这不是随机播放，这是把用户的排序砸了。
         rebuildPlayOrder()
         applyPlaybackModes()
     }
 
-    /**
-     * 按当前 shuffle 状态重建播放器时间线，主页队列（state.queue）不动。
-     *
-     * 随机序 = 偏好加权洗牌（Recommender.weightedPermutation， exploration 控制
-     * 趋近均匀的程度）：当前播放的歌钉在第 0 位续播，其余按权重随机排列。
-     * 正在播放时走 syncQueueAroundCurrent 只替换前后条目——声音不中断
-     * （直接 setMediaItems 会把正在解码的当前曲也重建，听到"咔"一下）。
-     */
     private fun rebuildPlayOrder() {
         val c = controller ?: return
         val base = _state.value.queue
@@ -551,7 +513,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 播放器时间线顺序：shuffle 关闭时等于 base；开启时当前曲置顶 + 其余加权洗牌 */
     private fun playOrder(base: List<Song>, pinId: Long?): List<Song> {
         if (pinId == null) return base
         val curIdx = base.indexOfFirst { it.id == pinId }
@@ -561,21 +522,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val perm = Recommender.weightedPermutation(rest, exploration = _state.value.exploration)
         return listOf(current) + disperseInitials(perm.map { rest[it] }.toMutableList())
     }
-    /**
-     * 相邻同名打散：纯随机里"同名/同首字母相连"出现的概率非常高（50 首 10 组的
-     * 模拟里约 98% 的洗牌至少出现一对），算法没错，但听感就是"随机坏了"。
-     * 贪心单遍：发现与前一首标题首字符（忽略大小写）相同就向后找第一首不同的换过来。
-     * 只影响相邻对，整体仍是加权随机的分布。
-     */
+
     private fun disperseInitials(order: MutableList<Song>): List<Song> {
-        // 预提取首字符，比较便宜且避免反复 trim
         val ini = CharArray(order.size) { k ->
             order[k].title.trim().firstOrNull()?.uppercaseChar() ?: ' '
         }
         for (i in 1 until order.size) {
             if (ini[i] != ini[i - 1]) continue
-            // 找一个 j：交换后 i 位（新歌）与左右邻居、j 位（旧 i 歌）与左右邻居都不撞名。
-            // k==i+1 时两边邻居就是被交换的对家，其互异性由第一条 ini[k]!=ini[i-1] 保证。
             val j = (i + 1 until order.size).firstOrNull { k ->
                 ini[k] != ini[i - 1] &&
                     (k == i + 1 || i + 1 >= order.size || ini[k] != ini[i + 1]) &&
@@ -583,7 +536,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     (k - 1 == i || ini[i] != ini[k - 1]) &&
                     (k + 1 >= order.size || ini[i] != ini[k + 1])
             }
-            if (j == null) break // 后面全同名，无解，保留现状
+            if (j == null) break
             val t = order[i]; order[i] = order[j]; order[j] = t
             val c = ini[i]; ini[i] = ini[j]; ini[j] = c
         }
@@ -601,22 +554,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         applyPlaybackModes()
     }
 
-    /**
-     * 播放模式四档循环（播放页副控制行的合并按钮）：
-     * 关 → 随机 → 列表循环 → 单曲循环 → 关。
-     *
-     * 随机与循环底层仍是两个正交状态（shuffle / repeatMode，各自持久化到
-     * 原有 key，旧版本数据无缝兼容）；这里只是按"一枚按钮"的心智模型切换。
-     * 旧数据里可能存在「随机+循环」同时开的组合（两枚按钮时代的合法状态），
-     * 随机视为主导，第一次点击直接落回「列表循环」档归一。
-     */
     fun cyclePlayMode() {
         val s = _state.value
         val (nextShuffle, nextRepeat) = when {
-            s.shuffle -> false to RepeatMode.ALL                       // 随机（含旧组合）→ 列表循环
-            s.repeatMode == RepeatMode.OFF -> true to RepeatMode.OFF   // 关 → 随机
-            s.repeatMode == RepeatMode.ALL -> false to RepeatMode.ONE  // 列表循环 → 单曲循环
-            else -> false to RepeatMode.OFF                            // 单曲循环 → 关
+            s.shuffle -> false to RepeatMode.ALL
+            s.repeatMode == RepeatMode.OFF -> true to RepeatMode.OFF
+            s.repeatMode == RepeatMode.ALL -> false to RepeatMode.ONE
+            else -> false to RepeatMode.OFF
         }
         prefs.edit()
             .putBoolean(KEY_SHUFFLE, nextShuffle)
@@ -624,7 +568,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             .apply()
         _state.value = s.copy(shuffle = nextShuffle, repeatMode = nextRepeat)
         if (nextShuffle != s.shuffle) {
-            // 随机开/关只重排播放器时间线；主页列表恒定不动
             rebuildPlayOrder()
         }
         applyPlaybackModes()
@@ -636,8 +579,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.refreshing) return
         viewModelScope.launch {
             _state.value = _state.value.copy(refreshing = true)
-            // 刷新 = 触发媒体扫描（新文件可被索引）+ 重新读库。
-            // rescanAndReload 内部走 IO；文件夹聚合也一并放到 IO，避免大库在主线程算。
             val songs = MusicRepository.rescanAndReload(getApplication(), _state.value.scanRoot)
             val folders = withContext(Dispatchers.Default) { MusicRepository.buildFolders(songs) }
             _state.value = _state.value.copy(
@@ -647,23 +588,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 refreshing = false
             )
             applyFilters(resetToFirst = true)
-            // 队列重建后刷新推荐
             updateRecommendations()
-            // 报告里的歌名来自 allSongs，库换了要跟着重算
             refreshReportIfNeeded()
-            // 收编孤儿数据：JSON 解析 + 归并较重，放 IO 线程，别卡刷新动画收尾那一帧
             withContext(Dispatchers.IO) { DataTransfer.attachOrphans(getApplication(), songs) }
         }
     }
 
     // ==================== 限定扫描目录 ====================
 
-    /**
-     * 设定"只显示该目录内的音乐"。传 null 表示取消限定、恢复全盘扫描。
-     *
-     * 目录不存在（被删/换机）时不写入——否则曲库会瞬间变空，用户找不到原因。
-     * 设定后立即重扫：曲库范围变了，没必要也不应该让用户再手动刷新一次。
-     */
     fun setScanRoot(path: String?) {
         val normalized = path?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
         if (normalized != null && !java.io.File(normalized).isDirectory) return
@@ -672,19 +604,15 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         reloadLibrary()
     }
 
-    /** 解析 SAF 选中的目录 → 绝对路径。拿不到真实路径（部分文档提供方）时返回 null。 */
     fun resolveScanRoot(uri: android.net.Uri): String? =
         ScanPath.resolve(getApplication(), uri)
 
-    /** 仅重新计算推荐（不重扫媒体、不改队列） */
     fun refreshRecommendations() {
         if (_state.value.refreshing) return
         _state.value = _state.value.copy(refreshing = true)
         val pool = recommendationPool()
         val exploration = _state.value.exploration
-        // 纯元数据排序，毫秒级
         val recs = Recommender.recommend(pool, exploration = exploration)
-        // 延迟 500ms 后重置（保证旋转动画可见）
         viewModelScope.launch {
             kotlinx.coroutines.delay(500)
             _state.value = _state.value.copy(
@@ -697,7 +625,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun updateSearch(query: String) {
         _state.value = _state.value.copy(searchQuery = query)
-        // 防抖：停止输入 250ms 后才执行过滤，避免每个字符都重写队列
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             delay(250)
@@ -711,11 +638,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(selectedFolders = next)
         saveSelectedFolders(next)
         applyFilters(resetToFirst = true)
-        // 推荐候选池跟随筛选范围，选了文件夹推荐也要跟着收窄
         updateRecommendations()
     }
 
-    /** 清空文件夹选择（回到全部音乐） */
     fun clearFolders() {
         _state.value = _state.value.copy(selectedFolders = emptySet())
         saveSelectedFolders(emptySet())
@@ -725,12 +650,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ==================== 自定义歌单 ====================
 
-    /** 刷新歌单列表（增删后同步到 state） */
     private fun refreshPlaylists() {
         _state.value = _state.value.copy(playlists = Playlists.all())
     }
 
-    /** 创建歌单并选中它 */
     fun createPlaylist(name: String): Long {
         val id = Playlists.create(name)
         refreshPlaylists()
@@ -738,13 +661,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         return id
     }
 
-    /** 重命名歌单 */
     fun renamePlaylist(playlistId: Long, newName: String) {
         Playlists.rename(playlistId, newName)
         refreshPlaylists()
     }
 
-    /** 删除歌单；若正选中则回到全部 */
     fun deletePlaylist(playlistId: Long) {
         Playlists.delete(playlistId)
         if (_state.value.activePlaylistId == playlistId) {
@@ -755,22 +676,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         refreshPlaylists()
     }
 
-    /** 选中歌单（null = 回到文件夹/收藏视图） */
     fun selectPlaylist(playlistId: Long?) {
         _state.value = _state.value.copy(activePlaylistId = playlistId)
         prefs.edit().putLong(KEY_ACTIVE_PLAYLIST, playlistId ?: -1L).apply()
         applyFilters(resetToFirst = true)
     }
 
-    /** 把一首歌加入歌单 */
     fun addToPlaylist(playlistId: Long, songId: Long) {
         Playlists.addSong(playlistId, songId)
         refreshPlaylists()
-        // 若当前正显示该歌单，需要把新歌加入队列
         if (_state.value.activePlaylistId == playlistId) applyFilters(resetToFirst = false)
     }
 
-    /** 把一首歌从歌单移除 */
     fun removeFromPlaylist(playlistId: Long, songId: Long) {
         Playlists.removeSong(playlistId, songId)
         refreshPlaylists()
@@ -804,13 +721,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(mode = mode)
     }
 
-    /** 表面材质：实色 / 毛玻璃 / 液态玻璃 */
     fun setSurfaceStyle(style: IrisSurfaceStyle) {
         prefs.edit().putString(KEY_SURFACE_STYLE, style.name).apply()
         _state.value = _state.value.copy(surfaceStyle = style)
     }
 
-    /** 自定义主题取色：主/次色（ARGB_8888）。调用方通常随后 setTheme(CUSTOM)。 */
     fun setCustomColors(primaryArgb: Long, secondaryArgb: Long) {
         prefs.edit()
             .putLong(KEY_CUSTOM_PRIMARY, primaryArgb)
@@ -822,11 +737,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    /**
-     * 自定义背景图。传入 SAF 返回的 content URI；传 null 清除自定义背景、回退专辑封面。
-     * 这里尝试持久化读权限，使重启后仍能读取该图；若来源不支持持久授权，
-     * 本次会话仍可用，重启后会自动回退到封面（不崩）。
-     */
     fun setCustomBackground(uri: android.net.Uri?) {
         if (uri == null) {
             prefs.edit().remove(KEY_CUSTOM_BG_URI).apply()
@@ -843,12 +753,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(customBackgroundUri = uri.toString())
     }
 
-    /**
-     * 界面排布：纵向列表 / 横向卡片 / 堆叠卡片。
-     *
-     * 切到卡片模式时把队列位置对齐到一个有效下标：卡片模式没有"未选中"这个状态，
-     * currentIndex 还是 -1 的话第一张卡会是空的（冷启动没点过歌就是这个情况）。
-     */
     fun setLayout(layout: IrisLayout) {
         prefs.edit().putString(KEY_LAYOUT, layout.name).apply()
         _state.value = _state.value.copy(layout = layout)
@@ -857,14 +761,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 模糊浓度倍率，同时作用于毛玻璃半径与液态玻璃各层级半径 */
     fun setGlassBlur(scale: Float) {
         val v = scale.coerceIn(GLASS_BLUR_MIN, GLASS_BLUR_MAX)
         prefs.edit().putFloat(KEY_GLASS_BLUR, v).apply()
         _state.value = _state.value.copy(glassBlur = v)
     }
 
-    /** 背景封面模糊半径（dp）。0 = 封面清晰可见，越大越糊 */
     fun setBgBlur(dp: Float) {
         val v = dp.coerceIn(BG_BLUR_MIN, BG_BLUR_MAX)
         prefs.edit().putFloat(KEY_BG_BLUR, v).apply()
@@ -899,45 +801,35 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(showLikedBadge = show)
     }
 
-    /**
-     * 切换可视化频谱。关闭时 SpectrumAnalyzer 会跳过全部 FFT 计算，
-     * 因此这里同步开关分析器而不是只改 UI 标志。
-     */
     fun setVisualizerEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_VISUALIZER, enabled).apply()
         SpectrumAnalyzer.enabled = enabled
         _state.value = _state.value.copy(visualizerEnabled = enabled)
     }
 
-/** 实验性：物理动效开关（频谱倾斜 + 封面摇动 合并，一个开关同时控制）。 */
     fun setPhysicsFx(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_TILT_SPECTRUM, enabled).putBoolean(KEY_COVER_SHAKE, enabled).apply()
         _state.value = _state.value.copy(tiltSpectrum = enabled, coverShake = enabled)
     }
 
-    /** 全屏歌词对齐：0=靠左 1=居中 2=靠右 */
     fun setLyricAlign(align: Int) {
         val a = align.coerceIn(0, 2)
         prefs.edit().putInt(KEY_LYRIC_ALIGN, a).apply()
         _state.value = _state.value.copy(lyricAlign = a)
     }
-    /** 封面左下角单行歌词开关。 */
     fun setCoverLyric(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_COVER_LYRIC, enabled).apply()
         _state.value = _state.value.copy(coverLyric = enabled)
     }
-    /** 全屏歌词伪逐字扫光开关。 */
     fun setKaraokeLyric(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_KARAOKE_LYRIC, enabled).apply()
         _state.value = _state.value.copy(karaokeLyric = enabled)
     }
-    /** 上栏静止时是否淡到完全透明。 */
     fun setTopBarAutoHide(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_TOPBAR_AUTOHIDE, enabled).apply()
         _state.value = _state.value.copy(topBarAutoHide = enabled)
     }
 
-    /** 设置全局圆角基准（dp），0=直角，44=接近胶囊 */
     fun setCornerBase(dp: Float) {
         val v = dp.coerceIn(0f, 44f)
         prefs.edit().putFloat(KEY_CORNER_BASE, v).apply()
@@ -967,10 +859,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(lyricFontSize = v)
     }
 
-    /**
-     * 音乐渐入渐出开关。服务与 UI 同进程，FadeController 的静态字段可直接写，
-     * 无需经由 MediaController 传命令。
-     */
     fun setFadeEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(FadeController.KEY_ENABLED, enabled).apply()
         FadeController.enabled = enabled
@@ -978,7 +866,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(fadeEnabled = enabled)
     }
 
-    /** 渐变时长（毫秒） */
     fun setFadeMs(ms: Long) {
         val v = ms.coerceIn(FadeController.MIN_FADE_MS, FadeController.MAX_FADE_MS)
         prefs.edit().putLong(FadeController.KEY_FADE_MS, v).apply()
@@ -986,56 +873,47 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(fadeMs = v)
     }
 
-    /** 触感反馈开关 */
     fun setHapticsEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(Haptics.KEY_ENABLED, enabled).apply()
         Haptics.enabled = enabled
         _state.value = _state.value.copy(hapticsEnabled = enabled)
-        // 打开时立刻给一次反馈，让用户当场感知强度
         if (enabled) Haptics.click()
     }
 
-    /** 歌单页"为你推荐"区域显示开关 */
     fun setShowRecommendations(show: Boolean) {
         prefs.edit().putBoolean(KEY_SHOW_RECS, show).apply()
         _state.value = _state.value.copy(showRecommendations = show)
     }
 
-    /** 上栏排序行显示开关 */
     fun setShowSortBar(show: Boolean) {
         prefs.edit().putBoolean(KEY_SHOW_SORT_BAR, show).apply()
         _state.value = _state.value.copy(showSortBar = show)
     }
-    /** 海报墙果冻动效开关 */
     fun setJellyAnim(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_JELLY_ANIM, enabled).apply()
         _state.value = _state.value.copy(jellyAnim = enabled)
     }
 
-    /** 无声略过（beta） */
     fun setSilenceSkip(enabled: Boolean) {
         prefs.edit().putBoolean(SilenceSkipper.KEY_ENABLED, enabled).apply()
         SilenceSkipper.setEnabled(enabled)
         _state.value = _state.value.copy(silenceSkip = enabled)
     }
 
-    /** 低音马达震动（beta · 多维听感） */
     fun setBassHaptics(enabled: Boolean) {
         prefs.edit().putBoolean(BassHaptics.KEY_ENABLED, enabled).apply()
         BassHaptics.setEnabled(enabled)
         _state.value = _state.value.copy(bassHaptics = enabled)
     }
 
-    /** 震动强度：0=轻点 1=标准 2=重击 */
     fun setBassHapticsIntensity(level: Int) {
         val lv = level.coerceIn(0, 2)
         prefs.edit().putInt(BassHaptics.KEY_INTENSITY, lv).apply()
         BassHaptics.setIntensity(lv)
-        BassHaptics.preview(lv) // 选档即时预览：用该档波形震一下
+        BassHaptics.preview(lv)
         _state.value = _state.value.copy(bassHapticsIntensity = lv)
     }
 
-    /** 单次震动时长 ms，1-30 */
     fun setBassHapticsPulseMs(ms: Int) {
         val v = ms.coerceIn(1, 30)
         prefs.edit().putInt(BassHaptics.KEY_PULSE_MS, v).apply()
@@ -1043,7 +921,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(bassHapticsPulseMs = v)
     }
 
-    /** 触发灵敏度 1-10，越大越容易触发 */
     fun setBassHapticsSensitivity(level: Int) {
         val v = level.coerceIn(1, 10)
         prefs.edit().putInt(BassHaptics.KEY_SENSITIVITY, v).apply()
@@ -1051,7 +928,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(bassHapticsSensitivity = v)
     }
 
-    /** 低音截止频率 Hz：120–320，多少 Hz 以下算作低音走底鼓闷震 */
     fun setBassHapticsLowCutoff(hz: Int) {
         val v = hz.coerceIn(120, 320)
         prefs.edit().putInt(BassHaptics.KEY_LOW_CUTOFF, v).apply()
@@ -1059,46 +935,40 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(bassHapticsLowCutoff = v)
     }
 
-    /** 自适应：时长/灵敏度跟随音乐实时变化 */
     fun setBassHapticsAdaptive(enabled: Boolean) {
         prefs.edit().putBoolean(BassHaptics.KEY_ADAPTIVE, enabled).apply()
         BassHaptics.setAdaptive(enabled)
         _state.value = _state.value.copy(bassHapticsAdaptive = enabled)
     }
+
     // ==================== V2.2 声音增强 ====================
-    /** 虚拟低音（beta · 多维听感）：心理声学谐波合成 */
     fun setVirtualBass(enabled: Boolean) {
         prefs.edit().putBoolean(VirtualBass.KEY_ENABLED, enabled).apply()
         VirtualBass.setEnabled(enabled)
         _state.value = _state.value.copy(virtualBass = enabled)
     }
-    /** 虚拟低音混合强度 0-100 */
     fun setVirtualBassStrength(v: Int) {
         val x = v.coerceIn(0, 100)
         prefs.edit().putInt(VirtualBass.KEY_STRENGTH, x).apply()
         VirtualBass.setStrength(x)
         _state.value = _state.value.copy(virtualBassStrength = x)
     }
-    /** 动态范围增强（beta · 多维听感）：压缩 + 化妆增益 */
     fun setRangeEnhancer(enabled: Boolean) {
         prefs.edit().putBoolean(RangeEnhancer.KEY_ENABLED, enabled).apply()
         RangeEnhancer.setEnabled(enabled)
         _state.value = _state.value.copy(rangeEnhancer = enabled)
     }
-    /** 动态范围增强强度 0-100 */
     fun setRangeEnhancerStrength(v: Int) {
         val x = v.coerceIn(0, 100)
         prefs.edit().putInt(RangeEnhancer.KEY_STRENGTH, x).apply()
         RangeEnhancer.setStrength(x)
         _state.value = _state.value.copy(rangeEnhancerStrength = x)
     }
-    /** 虚拟环绕（beta · 多维听感）：立体声声场展宽 */
     fun setVirtualSurround(enabled: Boolean) {
         prefs.edit().putBoolean(VirtualSurround.KEY_ENABLED, enabled).apply()
         VirtualSurround.setEnabled(enabled)
         _state.value = _state.value.copy(virtualSurround = enabled)
     }
-    /** 虚拟环绕强度 0-100 */
     fun setVirtualSurroundStrength(v: Int) {
         val x = v.coerceIn(0, 100)
         prefs.edit().putInt(VirtualSurround.KEY_STRENGTH, x).apply()
@@ -1106,13 +976,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(virtualSurroundStrength = x)
     }
 
-    /** 宽场环绕（beta · 多维听感）：多频段展宽 + 早期反射，进一步提升空间感 */
     fun setSpatialWide(enabled: Boolean) {
         prefs.edit().putBoolean(SpatialWide.KEY_ENABLED, enabled).apply()
         SpatialWide.setEnabled(enabled)
         _state.value = _state.value.copy(spatialWide = enabled)
     }
-    /** 宽场环绕强度 0-100 */
     fun setSpatialWideStrength(v: Int) {
         val x = v.coerceIn(0, 100)
         prefs.edit().putInt(SpatialWide.KEY_STRENGTH, x).apply()
@@ -1120,26 +988,22 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(spatialWideStrength = x)
     }
 
-    /** 防失真限幅（V3.10）：防止推高/增强后削波撕裂 */
     fun setSafeLimiter(enabled: Boolean) {
         prefs.edit().putBoolean(SafeLimiter.KEY_ENABLED, enabled).apply()
         SafeLimiter.setEnabled(enabled)
         _state.value = _state.value.copy(safeLimiter = enabled)
     }
-    /** 防失真限幅强度 0-100 */
     fun setSafeLimiterStrength(v: Int) {
         val x = v.coerceIn(0, 100)
         prefs.edit().putInt(SafeLimiter.KEY_STRENGTH, x).apply()
         SafeLimiter.setStrength(x)
         _state.value = _state.value.copy(safeLimiterStrength = x)
     }
-    /** 曲间响度均衡（V3.11）开关 */
     fun setLoudnorm(enabled: Boolean) {
         prefs.edit().putBoolean(TrackGain.KEY_ENABLED, enabled).apply()
         TrackGain.setEnabled(enabled)
         _state.value = _state.value.copy(loudnorm = enabled)
     }
-    /** 响度均衡拉平力度 0-100 */
     fun setLoudnormStrength(v: Int) {
         val x = v.coerceIn(0, 100)
         prefs.edit().putInt(TrackGain.KEY_STRENGTH, x).apply()
@@ -1147,28 +1011,53 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(loudnormStrength = x)
     }
 
+    // ==================== 新增：颜色与悬浮歌词配置 ====================
+    fun setLyricTheme(theme: IrisTheme) {
+        prefs.edit().putString(KEY_LYRIC_THEME, theme.name).apply()
+        _state.value = _state.value.copy(lyricTheme = theme)
+    }
+    fun setLyricCustomColors(primary: Long, secondary: Long) {
+        prefs.edit().putLong(KEY_LYRIC_CUSTOM_PRIMARY, primary).putLong(KEY_LYRIC_CUSTOM_SECONDARY, secondary).apply()
+        _state.value = _state.value.copy(lyricCustomPrimary = primary, lyricCustomSecondary = secondary)
+    }
+
+    fun setFloatLyricKaraoke(enabled: Boolean) {
+        prefs.edit().putBoolean(FloatingLyric.KEY_KARAOKE, enabled).apply()
+        _state.value = _state.value.copy(floatLyricKaraoke = enabled)
+    }
+    fun setFloatLyricFixed(enabled: Boolean) {
+        prefs.edit().putBoolean(FloatingLyric.KEY_FIXED, enabled).apply()
+        _state.value = _state.value.copy(floatLyricFixed = enabled)
+    }
+    fun setFloatLyricFixMode(mode: Int) {
+        prefs.edit().putInt(FloatingLyric.KEY_FIX_MODE, mode).apply()
+        _state.value = _state.value.copy(floatLyricFixMode = mode)
+    }
+    fun setFloatLyricTheme(theme: IrisTheme) {
+        prefs.edit().putString(FloatingLyric.KEY_THEME, theme.name).apply()
+        _state.value = _state.value.copy(floatLyricTheme = theme)
+    }
+    fun setFloatLyricCustomColors(primary: Long, secondary: Long) {
+        prefs.edit().putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, primary).putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, secondary).apply()
+        _state.value = _state.value.copy(floatLyricCustomPrimary = primary, floatLyricCustomSecondary = secondary)
+    }
+
     // ==================== 点赞 ====================
 
     fun toggleLike(songId: Long) {
         PlayHistory.toggleLike(songId)
         _state.value = _state.value.copy(likedSongIds = PlayHistory.getLikes())
-        // 点赞变化后立即刷新推荐
         updateRecommendations()
-        // 收藏筛选模式下点赞取消后要重新过滤队列
         if (_state.value.onlyLiked) applyFilters(resetToFirst = false)
     }
 
-    /** 队列仅显示点赞歌曲（我的收藏） */
     fun setOnlyLiked(only: Boolean) {
         _state.value = _state.value.copy(onlyLiked = only)
         applyFilters(resetToFirst = true)
     }
 
 // ==================== 睡眠定时器 ====================
-    // 计时权威在 playback.SleepTimer（随 MusicService 进程存活，界面销毁不失效）。
-    // 这里只负责：下发设置 + 把到期/恢复映射到 UI 状态。
 
-    /** 设置睡眠定时器，minutes <= 0 视为取消 */
     fun setSleepTimer(minutes: Int) {
         val app = getApplication<Application>()
         if (minutes <= 0) {
@@ -1190,18 +1079,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ==================== 听歌报告 ====================
 
-    /**
-     * 打开/关闭听歌报告。
-     *
-     * 每次打开都重读一次明细：音乐是在服务进程里记账的，UI 这边缓存下来会越看越旧
-     * （挂后台听了一小时回来还是打开前的数字）。读文件 + 聚合都在 IO 线程。
-     */
     fun toggleReport(show: Boolean) {
         _state.value = _state.value.copy(showReport = show)
         if (show) loadReport(_state.value.report.range)
     }
 
-    /** 切换日/周/月/年。明细已在内存里就地重算，不再碰磁盘 */
     fun setReportRange(range: StatRange) {
         val cached = statEntries
         if (cached != null) {
@@ -1213,7 +1095,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 从报告里点歌：按 ID 找回 Song 再走正常播放路径 */
     fun playSongById(songId: Long) {
         val song = _state.value.allSongs.firstOrNull { it.id == songId } ?: return
         playSong(song)
@@ -1221,7 +1102,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadReport(range: StatRange) {
         reportJob?.cancel()
-        // loading 只在没有旧数据时置位：切范围时保留上一份，避免整块闪一下"统计中"
         if (statEntries == null) {
             _state.value = _state.value.copy(report = _state.value.report.copy(loading = true))
         }
@@ -1235,12 +1115,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * 库变化后重算已生成的报告。
-     *
-     * 明细里只有歌曲 ID，标题/艺术家/曲长都要现查 allSongs。库是异步加载的，
-     * 若报告先建好，排行榜会整列显示"已移除的歌曲"，刷新库后新增的歌也对不上。
-     */
     private fun refreshReportIfNeeded() {
         val entries = statEntries ?: return
         _state.value = _state.value.copy(
@@ -1262,21 +1136,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 controller = c
                 applyPlaybackModes()
 
-                // 服务还活着（划后台再回来、Activity 被重建）：播放器里那首才是真相，
-                // 用它覆盖 prefs 里的记录，免得恢复成更早的一首。
                 c.currentMediaItem?.mediaId?.toLongOrNull()?.let { id ->
                     pendingRestoreId = id
                     pendingRestorePos = c.currentPosition.coerceAtLeast(0L)
                 }
 
-                // 这里不能无条件 pushQueue。连上的瞬间 UI 队列通常还是空的（库在异步加载中），
-                // 而 pushQueue 见到空队列会 clearMediaItems，把服务里正在放的队列直接掐掉，
-                // 随后 loadLibrary 又从第 0 首重建 —— "划后台回来变回第一首歌"就是这么来的。
-                //
-                // 队列已就绪才推：这条兜底是必要的，库有可能比连接先加载完，那一次
-                // applyFilters 里的 pushQueue 会因为 controller 还是 null 而空转。
                 if (_state.value.queue.isNotEmpty()) {
-                    // 优先对齐要恢复的那首；找不到就退回队列现有下标
                     val restoreId = pendingRestoreId
                     val hit = if (restoreId != null) {
                         _state.value.queue.indexOfFirst { it.id == restoreId }
@@ -1294,7 +1159,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }, MoreExecutors.directExecutor())
     }
 
-    /** 连接建立初期 controller 状态可能还没就绪，短轮询几次直到拿到有效索引 */
     private suspend fun warmUpSync() {
         repeat(10) {
             delay(200)
@@ -1303,14 +1167,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 播放进度轮询：仅在播放中且进度变化时刷新，减少无谓重组 */
     private suspend fun tickPosition() {
         var lastPos = -1L
         while (true) {
             val c = controller
             if (c != null && c.isPlaying) {
-                // 队列重建窗口（随机/筛选）里索引错位：跳过这一拍，
-                // 等下次轮询时队列与播放器对齐了再刷新进度
                 val song = _state.value.currentSong
                 val cid = c.currentMediaItem?.mediaId?.toLongOrNull()
                 if (song != null && cid != null && song.id != cid) {
@@ -1327,7 +1188,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     persistPlayback(throttle = true)
                 }
             } else {
-                // 暂停/无控制器：位置不会变，降频到 2s 一次只为感知播放恢复
                 delay(2000)
                 continue
             }
@@ -1335,12 +1195,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * 记录"当前在放哪首、放到哪儿"。
-     *
-     * 进程被杀之后 MediaSession 也没了，重启只能靠这份记录恢复，
-     * 否则冷启动永远从第一首开始。写得很频繁没意义，默认每 5 秒落一次。
-     */
     private fun persistPlayback(throttle: Boolean) {
         val song = _state.value.currentSong ?: return
         val now = System.currentTimeMillis()
@@ -1355,20 +1209,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun syncFromController() {
         val c = controller ?: return
 
-        // UI 的 currentIndex 必须落在【主页队列】里正在播的那首上。
-        // 播放器时间线开着随机时是洗牌序，c.currentMediaItemIndex 与主页下标
-        // 完全不对应——必须按 mediaId 反查主页队列下标，高亮才是对的。
         val cid = c.currentMediaItem?.mediaId?.toLongOrNull()
         val newIndex = if (cid != null) _state.value.queue.indexOfFirst { it.id == cid }
             .takeIf { it >= 0 } ?: c.currentMediaItemIndex else c.currentMediaItemIndex
         val newSong = _state.value.queue.getOrNull(newIndex)
 
-        // 队列重建中途（筛选/收藏）：UI 队列已换新，controller 索引还指着
-        // 旧位置，读到的 position/duration 是脏的。（按 id 对齐后此错位已基本消除，
-        // 保留防御：id 都对得上才继续。）
         if (newSong != null && cid != null && newSong.id != cid) return
 
-        // 切歌追踪：如果歌曲变了，记录上一首歌的播放时长
         if (newSong != null && newSong.id != prevSongId && prevSongId >= 0) {
             val playedMs = prevPlayedMs()
             val prevDuration = _state.value.allSongs.firstOrNull { it.id == prevSongId }?.durationMs ?: 0L
@@ -1376,10 +1223,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (newSong != null && newSong.id != prevSongId) {
             prevSongId = newSong.id
-            // 新曲从头走表：闭合段清零，当前段按播放器状态开启
             prevAccumMs = 0L
             prevLegStartElapsed = if (c.isPlaying) android.os.SystemClock.elapsedRealtime() else 0L
-            // 切歌是关键节点，不走限流，立刻落盘
             _state.value = _state.value.copy(currentIndex = newIndex)
             persistPlayback(throttle = false)
         }
@@ -1390,17 +1235,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             positionMs = c.currentPosition,
             durationMs = c.duration.coerceAtLeast(0L)
         )
-
-        // 切歌后不自动刷新推荐——推荐保持稳定，手动刷新或点赞时才更新
     }
 
-    /** 基于用户行为生成推荐（独立打分，不依赖当前歌曲）。候选池跟随选中文件夹。 */
     private fun updateRecommendations() {
         val pool = recommendationPool()
         if (pool.isEmpty()) return
         val exploration = _state.value.exploration
-        // 打分在大库下不算便宜，放后台算，别和刷新/筛选挤在主线程同一帧——
-        // 那正是"刷新时转圈先卡住、结果才一次性刷出来"的主线程阻塞来源。
         viewModelScope.launch {
             val recs = withContext(Dispatchers.Default) {
                 Recommender.recommend(pool, exploration = exploration)
@@ -1412,40 +1252,25 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * 推荐候选池：选了文件夹就只从那几个文件夹里出。
-     * 推荐区应当反映"我正在看的范围"——用户圈定 L1 后还总推荐别目录的歌，
-     * 体验上就像推荐不认筛选。排行/点赞等打分逻辑不变，只是候选集收窄。
-     */
     private fun recommendationPool(): List<Song> {
         val all = _state.value.allSongs
         val sel = _state.value.selectedFolders
         return if (sel.isEmpty()) all else all.filter { it.folderPath in sel }
     }
 
-    /** 库加载完成/刷新后调用 */
     private fun onLibraryChanged() = updateRecommendations()
-
 
     fun setExploration(value: Float) {
         val v = value.coerceIn(0f, 1f)
         prefs.edit().putFloat(KEY_EXPLORATION, v).apply()
         _state.value = _state.value.copy(exploration = v)
-        // 探索度变化后立即刷新推荐
         updateRecommendations()
     }
 
     private fun applyPlaybackModes() {
         val c = controller ?: return
-        // 随机播放由本 App 自己重排【播放器时间线】实现（playOrder 的偏好加权洗牌），
-        // 所以播放器的 shuffleModeEnabled 必须保持关闭。
-        // 两者同时开会叠加两层随机：播放器在已洗好的队列上再套一个均匀随机序，
-        // 偏好权重被抹掉，而且"下一首"跳到的行和列表里高亮行的下一行不是同一首。
         c.shuffleModeEnabled = false
         c.repeatMode = when (_state.value.repeatMode) {
-            // 「随机」档 = shuffle + repeatMode OFF。底层若真用 REPEAT_MODE_OFF，
-            // 洗牌时间线放到最后一首就 STATE_ENDED 停了（小歌单/文件夹很快触发）。
-            // 随机应当一直放下去，所以底层按列表循环处理。
             RepeatMode.OFF -> if (_state.value.shuffle) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
             RepeatMode.ALL -> Player.REPEAT_MODE_ALL
             RepeatMode.ONE -> Player.REPEAT_MODE_ONE
@@ -1454,7 +1279,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun loadLibrary() {
         val root = _state.value.scanRoot
-        // 秒开：先只读元数据缓存直接出歌（毫秒级），不等全盘扫描。
         val cached = MusicRepository.loadFromCache(getApplication(), root)
         if (cached.isNotEmpty()) {
             _state.value = _state.value.copy(
@@ -1467,11 +1291,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             refreshReportIfNeeded()
         }
 
-        // 后台校正：完整扫盘一次（增删改会在这里被纠正并回写缓存）。
-        // 缓存为空（首次安装/清过数据）时这就是唯一数据来源，需要显示加载态。
         if (cached.isEmpty()) _state.value = _state.value.copy(loading = true)
         val songs = MusicRepository.loadSongs(getApplication(), root)
-        // 扫描结果与缓存版一致时不重建队列，避免"进来又跳一下/闪一下"。
         if (cached.isNotEmpty() && songs.size == cached.size &&
             songs.map { it.id }.toSet() == cached.map { it.id }.toSet()
         ) {
@@ -1481,33 +1302,21 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             allSongs = songs,
             folders = MusicRepository.buildFolders(songs),
-            // 库有增删移动时重新拉一遍按 ID 记账的状态：文件移动会触发 ID 迁移，
-            // 点赞/歌单不重读的话，收藏心标和歌单内容会停在旧 ID 上显示丢失。
             likedSongIds = PlayHistory.getLikes(),
             playlists = Playlists.all(),
             loading = false
         )
         applyFilters(resetToFirst = true)
-        // 随机序由 applyFilters→pushQueue 内部按 shuffle 状态自动写入播放器时间线，
-        // 主页队列始终保持排序。
-        // 首次库加载完成即生成推荐（不依赖当前歌曲）
         updateRecommendations()
-        // 库比报告晚到时（打开报告后才扫完库）补一次，避免排行榜显示"已移除的歌曲"
         refreshReportIfNeeded()
     }
 
-    /**
-     * 按 文件夹 → 搜索 → 排序 重建队列。
-     * 当前曲目仍在结果中时保留它的播放位置，否则按 resetToFirst 决定是否从头开始。
-     */
     private fun applyFilters(resetToFirst: Boolean) {
         val s = _state.value
         val playing = s.currentSong
 
         var list = s.allSongs
 
-        // 自定义歌单优先：选中歌单时只显示歌单内的歌（按加入顺序），
-        // 与文件夹/收藏筛选互斥。
         val activePid = _state.value.activePlaylistId
         if (activePid != null) {
             val ids = Playlists.songs(activePid).toSet()
@@ -1535,22 +1344,17 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             SortOrder.TITLE -> list.sortedBy { it.title.lowercase() }
             SortOrder.ARTIST -> list.sortedBy { it.artist.lowercase() }
             SortOrder.DURATION -> list.sortedBy { it.durationMs }
-            // 文件修改时间作为本地可用的“添加/修改时间”代理，先按旧到新排列。
             SortOrder.RECENT -> list.sortedBy { File(it.filePath).lastModified() }
         }
         if (s.sortDirection == SortDirection.DESCENDING) list = list.asReversed()
 
         val keptIndex = if (playing != null) list.indexOfFirst { it.id == playing.id } else -1
 
-        // 首次建队列时按上次那首歌定位。库是异步加载的，队列建好之前 currentSong 一直是 null，
-        // 光靠 keptIndex 只能落到 0，于是每次冷启动/回前台都从第一首开始。
         val restoreId = pendingRestoreId
         val restoreIndex = if (keptIndex < 0 && restoreId != null) {
             list.indexOfFirst { it.id == restoreId }
         } else -1
         val restorePos = if (restoreIndex >= 0) pendingRestorePos else 0L
-        // 只在真的能把位置喂给播放器时才消费掉这条记录。controller 还没连上时
-        // pushQueue 会空转，记录必须留着让 connectController 那边接手。
         if (controller != null && (restoreIndex >= 0 || list.isNotEmpty())) {
             pendingRestoreId = null
             pendingRestorePos = 0L
@@ -1565,11 +1369,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         _state.value = _state.value.copy(queue = list, currentIndex = newIndex)
-        // 浏览类筛选（搜索防抖等，resetToFirst=false）且当前歌被筛掉：不动播放器。
-        // 旧实现会 pushQueue(0)——播放中一搜索，当前歌立刻被第一条搜索结果顶掉。
-        // 现在浏览列表与播放队列解耦：筛选只改显示，队列只在点歌/显式重建时改变。
         if (playing != null && newIndex < 0 && !resetToFirst) return
-        // 当前曲目仍在队列里则续播原位置，否则用恢复位置（都没有就从头）
         val keepPosition = when {
             keptIndex >= 0 -> controller?.currentPosition ?: 0L
             restoreIndex >= 0 -> restorePos
@@ -1578,7 +1378,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         pushQueue(startIndex = newIndex.coerceAtLeast(0), startPositionMs = keepPosition)
     }
 
-    /** 把当前队列写入 controller；队列为空则清空播放器 */
     private fun pushQueue(startIndex: Int, startPositionMs: Long) {
         val c = controller ?: return
         val queue = _state.value.queue
@@ -1591,10 +1390,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
         val index = startIndex.coerceIn(0, queue.lastIndex)
 
-        // 目标位置正好是当前正在播放的那一首：保住这首不重建，只同步它前后的条目。
-        // 原先这里直接 return，播放器会一直留着旧队列——筛选后 UI 显示 30 首、
-        // 播放器里还是全库 500 首，自动切歌会放到筛选外的歌，点歌也会因为
-        // 队列不同步而失效（看起来就是点了没反应）。
         val playingId = c.currentMediaItem?.mediaId?.toLongOrNull()
         if (playingId != null && queue.getOrNull(index)?.id == playingId && c.isPlaying) {
             syncQueueAroundCurrent(c, queue, index)
@@ -1602,8 +1397,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        // 播放器时间线按 shuffle 状态排（随机序只存在于这里）；
-        // state.queue 始终是主页那份固定排序。
         val pinId = if (_state.value.shuffle) queue[index].id else null
         val order = playOrder(queue, pinId)
         val playIdx = if (pinId != null) 0 else index
@@ -1612,17 +1405,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(currentIndex = index)
     }
 
-    /**
-     * 只替换当前曲目之外的条目：正在放的那一首原地留着，播放不中断。
-     * 先删尾再删头，否则删头会让当前曲目的下标位移。
-     *
-     * [queue]/[index] 是主页那份固定排序；实际写入播放器前换成时间线顺序
-     * （开着随机就是洗牌序），当前曲目在两份顺序里指向同一首歌。
-     */
     private fun syncQueueAroundCurrent(c: MediaController, queue: List<Song>, index: Int) {
         val pinId = if (_state.value.shuffle) queue[index].id else null
         val order = playOrder(queue, pinId)
-        // 当前曲目在时间线顺序里的位置（随机置顶后是 0；非随机时与主页下标一致）
         val playIdx = order.indexOfFirst { it.id == queue[index].id }.coerceAtLeast(0)
         val cur = c.currentMediaItemIndex
         val count = c.mediaItemCount
@@ -1635,7 +1420,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (before.isNotEmpty()) c.addMediaItems(0, before.map { it.toMediaItem() })
     }
 
-private fun refreshSystemDark() {
+    private fun refreshSystemDark() {
         val dark = (getApplication<Application>().resources.configuration.uiMode and
             Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         _state.value = _state.value.copy(systemDark = dark)
@@ -1649,10 +1434,6 @@ private fun refreshSystemDark() {
         runCatching { IrisMode.valueOf(prefs.getString(KEY_MODE, IrisMode.LIGHT.name)!!) }
             .getOrDefault(IrisMode.LIGHT)
 
-    /**
-     * 读取材质。v1.41 把「毛玻璃开关」并入材质枚举，老版本的 haze_enabled=true
-     * 且材质仍是默认实色时迁移为 FROSTED，避免升级后观感突然变回纯实色。
-     */
     private fun readSurfaceStyle(): IrisSurfaceStyle {
         val saved = prefs.getString(KEY_SURFACE_STYLE, null)
         if (saved == null) {
@@ -1664,13 +1445,12 @@ private fun refreshSystemDark() {
         return runCatching { IrisSurfaceStyle.valueOf(saved) }.getOrDefault(IrisSurfaceStyle.SOLID)
     }
 
-        private fun readSortOrder(): SortOrder =
+    private fun readSortOrder(): SortOrder =
         runCatching { SortOrder.valueOf(prefs.getString(KEY_SORT_ORDER, SortOrder.TITLE.name)!!) }
             .getOrDefault(SortOrder.TITLE)
     private fun readSortDirection(): SortDirection =
         runCatching { SortDirection.valueOf(prefs.getString(KEY_SORT_DIRECTION, SortDirection.ASCENDING.name)!!) }
             .getOrDefault(SortDirection.ASCENDING)
-    /** 界面排布。未存过（老版本升级）时为纵向列表，也就是原有观感 */
     private fun readLayout(): IrisLayout =
         runCatching { IrisLayout.valueOf(prefs.getString(KEY_LAYOUT, IrisLayout.LIST.name)!!) }
             .getOrDefault(IrisLayout.LIST)
@@ -1681,7 +1461,6 @@ private fun refreshSystemDark() {
         return raw.split(',').mapNotNull { it.trim() }.toSet()
     }
 
-    /** 循环模式：其它开关都持久化了，这两个原先是漏的，重启会回到默认 */
     private fun readRepeatMode(): RepeatMode =
         runCatching { RepeatMode.valueOf(prefs.getString(KEY_REPEAT, RepeatMode.OFF.name)!!) }
             .getOrDefault(RepeatMode.OFF)
@@ -1690,7 +1469,6 @@ private fun refreshSystemDark() {
         prefs.edit().putString(KEY_SELECTED_FOLDERS, sets.joinToString(",")).apply()
     }
 
-    /** 限定扫描目录：空串/缺失 = 不限定（全盘扫描） */
     private fun readScanRoot(): String? =
         prefs.getString(KEY_SCAN_ROOT, null)?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -1704,8 +1482,6 @@ private fun refreshSystemDark() {
                     .setArtist(artist)
                     .setAlbumTitle(album)
                     .setArtworkUri(albumArtUri)
-                    // 悬浮歌词在服务侧解析需要真实文件路径（content URI 的 path 不是文件路径），
-                    // 用 extras 透传 filePath
                     .setExtras(
                         android.os.Bundle().apply { putString("file_path", filePath) }
                     )
@@ -1724,14 +1500,13 @@ private fun refreshSystemDark() {
 
     private companion object {
         const val PREFS = "iris_prefs"
-private const val KEY_THEME = "theme"
+        private const val KEY_THEME = "theme"
         const val KEY_MODE = "mode"
         const val KEY_HAZE = "haze_enabled"
         const val KEY_SURFACE_STYLE = "surface_style"
         const val KEY_CUSTOM_PRIMARY = "custom_primary"
         const val KEY_CUSTOM_SECONDARY = "custom_secondary"
         const val KEY_CUSTOM_BG_URI = "custom_bg_uri"
-        /** 上次选中的歌单 ID，-1 = 无（全部/文件夹视图）。需持久化，否则重启回到默认全部。 */
         const val KEY_ACTIVE_PLAYLIST = "active_playlist_id"
         const val KEY_LAYOUT = "ui_layout"
         const val KEY_SORT_ORDER = "sort_order"
@@ -1766,5 +1541,10 @@ private const val KEY_THEME = "theme"
         const val KEY_SHOW_RECS = "show_recommendations"
         const val KEY_SHOW_SORT_BAR = "show_sort_bar"
         const val KEY_JELLY_ANIM = "jelly_anim"
+        
+        // === 新增的 Key ===
+        const val KEY_LYRIC_THEME = "lyric_theme"
+        const val KEY_LYRIC_CUSTOM_PRIMARY = "lyric_custom_primary"
+        const val KEY_LYRIC_CUSTOM_SECONDARY = "lyric_custom_secondary"
     }
 }
