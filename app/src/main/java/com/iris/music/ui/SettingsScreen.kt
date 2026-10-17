@@ -106,6 +106,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+
 // ==================== 设置面板 ====================
 
 @Composable
@@ -119,7 +120,6 @@ internal fun SettingsPanel(
 ) {
     val scrollState = rememberScrollState()
     val panelContext = LocalContext.current
-    // 「指定文件夹」：SAF 目录树选择器。开启后曲库只收录所选文件夹之内的歌曲。
     var scanRootStatus by remember { mutableStateOf("") }
     val folderPickerLauncher = rememberLauncherForActivityResult(
     ActivityResultContracts.OpenDocumentTree()
@@ -129,9 +129,6 @@ internal fun SettingsPanel(
     if (path == null) {
         scanRootStatus = "无法获取该文件夹的真实路径，请从本地存储中选择"
     } else {
-        // 选定前探一次可读性——三种"选了却没歌"的常见情形要当场说清，
-        // 不能让用户对着空曲库猜（B站评论反馈：选了全是 mp3 的文件夹却没歌，
-        // 实际选的是 Android/data 下某 App 的沙盒目录）。
         val dir = java.io.File(path)
         val probe = runCatching { dir.listFiles() }.getOrNull()
         val isOtherAppSandbox = path.contains("/Android/data/") &&
@@ -142,7 +139,6 @@ internal fun SettingsPanel(
             probe == null ->
                 scanRootStatus = "无法读取该文件夹，请先在下方「存储权限」开启「所有文件访问」后重新选择。"
             else -> {
-                // 浅探一层：目录里（含一层子目录）有没有音频文件
                 val exts = setOf("mp3", "flac", "ogg", "oga", "opus", "m4a", "wav", "aac", "ape")
                 val hasAudio = probe.any { it.isFile && it.extension.lowercase() in exts } ||
                     probe.any { sub ->
@@ -156,14 +152,11 @@ internal fun SettingsPanel(
         }
     }
 }
-    // 主题色直接当文字用，在浅色模式下会翻车：霓虹青/黄落在白色面板上对比度只有 1.5 左右。
-    // 分组标题统一走可读修正，深色模式下修正函数会原样返回，不影响原有观感。
     val headerColor = colors.primary.readableOn(colors.surface, 3.5f)
     Column(
         Modifier
             .fillMaxWidth()
     ) {
-        // ===== 可滚动的设置内容 =====
         Column(
             Modifier
                 .fillMaxWidth()
@@ -179,7 +172,6 @@ internal fun SettingsPanel(
         // ==================== 外观 ====================
         CollapsibleSection("外观", colors) {
 
-        // ---- 明暗模式 ----
         Text("明暗模式", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -193,10 +185,8 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- 主题 ----
         Text("主题", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
-
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).chunked(4).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -219,11 +209,8 @@ internal fun SettingsPanel(
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
-            // 只有选了「自定义」主题才展开调色区：进入时 CustomColorSection 重新组合，
-            // HSV 从外部 argb 同步；离开时整段移出组合树，避免常显死控件。
             Column {
                 Spacer(Modifier.height(14.dp))
-                // ---- 自定义配色（紧跟主题）----
                 Text("自定义配色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -240,10 +227,6 @@ internal fun SettingsPanel(
             }
         }
         Spacer(Modifier.height(14.dp))
-        // ---- 表面材质 ----
-        // 毛玻璃从独立开关并入这里：三者本质是同一维度（浮层背后怎么处理），
-        // 拆成"材质选择 + 毛玻璃开关"会出现"实色 + 毛玻璃""液态玻璃 + 毛玻璃"这类
-        // 语义打架的组合，后者还会把折射素材糊掉。
         Text("界面材质", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -266,8 +249,6 @@ internal fun SettingsPanel(
             }
         }
 
-        // ---- 模糊浓度 ----
-        // 只在毛玻璃/液态玻璃下出现：实色没有可调的模糊，摆着是死控件。
         AnimatedVisibility(
             visible = state.surfaceStyle != IrisSurfaceStyle.SOLID,
             enter = fadeIn() + expandVertically(),
@@ -300,9 +281,6 @@ internal fun SettingsPanel(
             }
         }
 
-        // ---- 背景模糊 ----
-        // 独立于「模糊浓度」：那个管浮层背后的玻璃，这个管最底层封面本身糊多少，
-        // 实色材质下也生效，所以不放在上面那个 AnimatedVisibility 里。
         Column(Modifier.padding(top = 14.dp)) {
             Text("背景模糊 · ${state.bgBlur.toInt()}dp", color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
@@ -328,8 +306,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
 
-        Spacer(Modifier.height(14.dp))
-        // ---- 自定义背景 ----
         Text("自定义背景", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -367,7 +343,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- 界面圆角 ----
         Text("界面圆角", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -390,9 +365,6 @@ internal fun SettingsPanel(
         )
         Spacer(Modifier.height(14.dp))
 
-        // ---- 字号大小 ----
-        // 拖动时只改本地值，松手才提交全局——否则每次 onValueChange 都切 Density，
-        // 触发整树重测量打断手势，表现为"拉不动"。
         var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
         Text("字号大小", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
@@ -416,7 +388,6 @@ internal fun SettingsPanel(
         )
         Spacer(Modifier.height(14.dp))
 
-        // ---- 界面字体 ----
         Text("界面字体", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -425,9 +396,6 @@ internal fun SettingsPanel(
         }
         Spacer(Modifier.height(14.dp))
 
-        // ---- 界面排布 ----
-        // 和材质、配色一样是独立一维：这里决定"整个 App 长什么结构"。
-        // 卡片模式下歌单和上栏都不存在，所以下面那些歌单相关的设置项要跟着藏起来。
         Text("界面排布", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -453,8 +421,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- 歌单行大小 / 行封面 ----
-        // 卡片模式下没有歌单，这两项摆着是死控件
         AnimatedVisibility(
             visible = !state.layout.isDeck,
             enter = fadeIn() + expandVertically(),
@@ -508,7 +474,6 @@ internal fun SettingsPanel(
             subtitle = "开头音量渐起、结尾渐落，暂停也不再突兀"
         ) { viewModel.setFadeEnabled(!state.fadeEnabled) }
 
-        // 时长滑块只在开启时出现：关闭状态下它没有意义，摆着反而干扰
         AnimatedVisibility(
             visible = state.fadeEnabled,
             enter = fadeIn() + expandVertically(),
@@ -532,7 +497,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(10.dp))
 
-        // ---- 无声略过（beta） ----
         SettingToggleRow(
             "无声略过 · beta",
             state.silenceSkip,
@@ -573,32 +537,32 @@ internal fun SettingsPanel(
         
         Spacer(Modifier.height(14.dp))
 
-        // ---- 新增：全屏歌词颜色 ----
-        Text("全屏歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
-                ThemeSwatch(
-                    theme = theme,
-                    selected = state.lyricTheme == theme,
-                    colors = colors,
-                    onClick = { viewModel.setLyricTheme(theme) },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
+        // ---- 新增：全屏歌词颜色总开关 ----
+        SettingToggleRow(
+            "启用全屏歌词颜色",
+            state.lyricUseCustomColor,
+            colors,
+            subtitle = "关闭后恢复原本的纯白/纯黑样式"
+        ) { viewModel.setLyricUseCustomColor(!state.lyricUseCustomColor) }
+
         AnimatedVisibility(
-            visible = state.lyricTheme == IrisTheme.CUSTOM,
+            visible = state.lyricUseCustomColor,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
             Column(Modifier.padding(top = 10.dp)) {
-                CustomColorSection(
-                    primaryArgb = state.lyricCustomPrimary,
-                    secondaryArgb = state.lyricCustomSecondary,
-                    colors = colors,
-                    onColorsChange = viewModel::setLyricCustomColors
-                )
+                Text("全屏歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
+                        ThemeSwatch(theme = theme, selected = state.lyricTheme == theme, colors = colors, onClick = { viewModel.setLyricTheme(theme) }, modifier = Modifier.weight(1f))
+                    }
+                }
+                AnimatedVisibility(visible = state.lyricTheme == IrisTheme.CUSTOM) {
+                    Column(Modifier.padding(top = 10.dp)) {
+                        CustomColorSection(primaryArgb = state.lyricCustomPrimary, secondaryArgb = state.lyricCustomSecondary, colors = colors, onColorsChange = viewModel::setLyricCustomColors)
+                    }
+                }
             }
         }
         // ---------------------------
@@ -618,7 +582,6 @@ internal fun SettingsPanel(
         }
         Spacer(Modifier.height(14.dp))
 
-        // ---- 歌词字体 ----
         Column {
             Text("歌词字体", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
@@ -629,7 +592,6 @@ internal fun SettingsPanel(
         }
         Spacer(Modifier.height(14.dp))
 
-        // ---- 歌词字号 ----
         Text("歌词字号 · ${state.lyricFontSize.toInt()}sp", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         CompactSlider(
             value = state.lyricFontSize,
@@ -640,7 +602,6 @@ internal fun SettingsPanel(
         )
         Spacer(Modifier.height(14.dp))
 
-        // ---- 悬浮歌词 ----
         FloatingLyricSection(colors, headerColor)
 
         Spacer(Modifier.height(18.dp))
@@ -650,7 +611,6 @@ internal fun SettingsPanel(
         // ==================== 动效与反馈 ====================
         CollapsibleSection("动效与反馈", colors) {
 
-        // ---- 触感反馈 ----
         SettingToggleRow(
             "触感反馈",
             state.hapticsEnabled,
@@ -660,7 +620,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(10.dp))
 
-        // ---- 物理动效 ----
         SettingToggleRow(
             "物理动效 · beta",
             state.tiltSpectrum || state.coverShake,
@@ -670,7 +629,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(10.dp))
 
-        // ---- 灵动动效 ----
         SettingToggleRow(
             "灵动动效",
             state.jellyAnim,
@@ -680,7 +638,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(10.dp))
 
-        // ---- 低音马达震动（beta） ----
         SettingToggleRow(
             "低音马达震动 · beta",
             state.bassHaptics,
@@ -688,7 +645,6 @@ internal fun SettingsPanel(
             subtitle = "跟随低频节奏轻微震动，幅度随鼓点强弱变化"
         ) { viewModel.setBassHaptics(!state.bassHaptics) }
 
-        // 强度档位只在开启时出现（同渐变时长的做法）
         AnimatedVisibility(
             visible = state.bassHaptics,
             enter = fadeIn() + expandVertically(),
@@ -708,7 +664,6 @@ internal fun SettingsPanel(
 
                 Spacer(Modifier.height(10.dp))
 
-                // 自适应：震动强度跟随鼓点力度、时长跟随鼓点时长，开启后隐藏手动时长档
                 Spacer(Modifier.height(4.dp))
                 SettingToggleRow(
                     "自适应旋律",
@@ -717,7 +672,6 @@ internal fun SettingsPanel(
                     subtitle = "强度随鼓点力度、时长随鼓点长短自动变化"
                 ) { viewModel.setBassHapticsAdaptive(!state.bassHapticsAdaptive) }
 
-                // 单次震动时长仅在「自适应」关闭时显示（自适应时由鼓点时长接管）
                 AnimatedVisibility(
                     visible = !state.bassHapticsAdaptive,
                     enter = fadeIn() + expandVertically(),
@@ -725,9 +679,6 @@ internal fun SettingsPanel(
                 ) {
                     Column {
                         Spacer(Modifier.height(10.dp))
-
-                        // 单次震动时长：三档（短/中/长 = 8/20/30ms），按钮替代滑条——
-                        // 底部滑条手势竞争太强调不动，改成点选一档最稳。
                         Text("单次震动时长", color = colors.subText, fontSize = 11.sp)
                         Spacer(Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -750,7 +701,6 @@ internal fun SettingsPanel(
 
                 Spacer(Modifier.height(10.dp))
 
-                // 触发灵敏度：三档（低/中/高）。始终可单独调节，不受自适应影响。
                 Text("触发灵敏度", color = colors.subText, fontSize = 11.sp)
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -765,8 +715,6 @@ internal fun SettingsPanel(
 
                 Spacer(Modifier.height(12.dp))
 
-                // 低音截止频率：多少 Hz 以下算作"低音"（走底鼓闷震），120–320Hz 可调。
-                // 调高 → 更多中低频鼓（如厚底鼓/低 tom）归入低音走沉震；调低 → 只有最低的底鼓算低音。
                 Text("低音范围（截止频率）", color = colors.subText, fontSize = 11.sp)
                 Spacer(Modifier.height(2.dp))
                 Text(
@@ -777,7 +725,6 @@ internal fun SettingsPanel(
                 CompactSlider(
                     value = (state.bassHapticsLowCutoff - 120) / 200f,
                     onValueChange = {
-                        // 120–320Hz，步进 10Hz
                         val hz = (120 + (it * 200f)).toInt().let { v -> (v / 10) * 10 }.coerceIn(120, 320)
                         viewModel.setBassHapticsLowCutoff(hz)
                     },
@@ -795,7 +742,6 @@ internal fun SettingsPanel(
         // ==================== 推荐 ====================
         CollapsibleSection("推荐", colors) {
 
-        // ---- 推荐探索度 ----
         Text("推荐探索度", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -829,7 +775,6 @@ internal fun SettingsPanel(
         // ==================== 数据 ====================
         CollapsibleSection("数据", colors) {
 
-        // ---- 指定文件夹 ----
         Text("指定文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
@@ -867,7 +812,6 @@ internal fun SettingsPanel(
             Text(scanRootStatus, color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
         }
         Spacer(Modifier.height(12.dp))
-        // ---- 上栏排序行 ----
         SettingToggleRow(
             "上栏显示排序",
             state.showSortBar,
@@ -875,9 +819,6 @@ internal fun SettingsPanel(
             subtitle = "关闭后上栏不再展开排序选项，界面更简洁"
         ) { viewModel.setShowSortBar(!state.showSortBar) }
 
-        // ---- 存储权限 ----
-        // 「所有文件访问」未授予时曲库直扫会漏歌。启动只在首次引导一次，
-        // 这里补一个常驻手动入口（旧实现没有：错过首启引导就再也没地方开）。
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
             && !android.os.Environment.isExternalStorageManager()) {
             Spacer(Modifier.height(12.dp))
@@ -911,7 +852,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- 文件夹 ----
         Text("音乐文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
 
@@ -949,7 +889,6 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
 
-        // ---- 检查更新（opt-in）----
         UpdateCheckSection(colors)
 
         Spacer(Modifier.height(18.dp))
@@ -966,7 +905,6 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(24.dp))
         } // ===== 结束可滚动内容 =====
 
-        // ===== 底部固定：完成按钮 =====
         Spacer(Modifier.height(10.dp))
         Box(
             Modifier
@@ -985,7 +923,6 @@ internal fun SettingsPanel(
     }
 }
 
-/** 一级分组标题：醒目、中性（用主文字色），与彩色子项标题区分开层级。 */
 @Composable
 private fun SectionHeader(text: String, colors: IrisColors) {
     Text(
@@ -996,12 +933,6 @@ private fun SectionHeader(text: String, colors: IrisColors) {
     )
 }
 
-/**
- * 可折叠分区：默认收起，只显示一行标题 + 右侧箭头；点标题展开整段详细设置。
- *
- * 设置项太多，一屏塞不下、第一眼也显得杂乱。把每个一级分区做成默认折叠，
- * 收起时就是一列干净的分区名，想看哪块点哪块。箭头指向随展开状态旋转（› 收起 / ⌄ 展开）。
- */
 @Composable
 private fun CollapsibleSection(
     title: String,
@@ -1024,7 +955,6 @@ private fun CollapsibleSection(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(title, color = colors.text, fontSize = 15.sp, fontWeight = FontWeight.Black)
-            // 右侧箭头：收起指向右、展开指向下，220ms 旋转过渡
             val rot by animateFloatAsState(
                 targetValue = if (expanded) 90f else 0f,
                 animationSpec = tween(220, easing = EaseInOutCubic),
@@ -1062,12 +992,6 @@ private fun CollapsibleSection(
     }
 }
 
-/**
- * 我的数据：导出 / 导入听歌数据（JSON，全程离线）。
- *
- * 存在意义是让推荐算法依赖的长期行为数据可以跟着人走——换机、刷机、重装不再清零。
- * 走 SAF（ACTION_CREATE_DOCUMENT / OpenDocument），因此不需要任何存储写权限。
- */
 @Composable
 private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
     val ctx = LocalContext.current
@@ -1146,7 +1070,6 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
                     .clickable(enabled = !busy) {
                         Haptics.tap()
                         status = ""
-                        // 部分机型对 application/json 过滤过严，放宽到任意类型再由解析兜底
                         importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                     },
                 contentAlignment = Alignment.Center
@@ -1166,11 +1089,6 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
     }
 }
 
-/**
- * 检查更新（opt-in）：开关默认关；关闭时完全不碰网络。
- * 开启后显示「检查更新」按钮，手动点按才发起一次 GitHub API GET，
- * 结果三态：已是最新 / 发现新版本（点击跳转 release 页）/ 检查失败。
- */
 @Composable
 private fun UpdateCheckSection(colors: IrisColors) {
     val ctx = LocalContext.current
@@ -1192,7 +1110,6 @@ private fun UpdateCheckSection(colors: IrisColors) {
             enabled = !enabled
             prefs.edit().putBoolean(UpdateChecker.KEY_ENABLED, enabled).apply()
             if (!enabled) {
-                // 关闭时清掉结果残留
                 statusText = ""
                 newTag = null
             }
@@ -1205,7 +1122,6 @@ private fun UpdateCheckSection(colors: IrisColors) {
         ) {
             Column(Modifier.padding(top = 10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // 检查按钮：主色，与设置页其它按钮同构
                     Box(
                         Modifier
                             .weight(1f).height(40.dp)
@@ -1245,7 +1161,6 @@ private fun UpdateCheckSection(colors: IrisColors) {
                         color = colors.subText, fontSize = 12.sp,
                         fontWeight = if (newTag != null) FontWeight.Bold else FontWeight.Normal
                     )
-                    // 发现新版本时给个跳转 release 页的入口
                     if (newTag != null) {
                         Spacer(Modifier.height(8.dp))
                         Box(
@@ -1273,11 +1188,6 @@ private fun UpdateCheckSection(colors: IrisColors) {
     }
 }
 
-/**
- * 悬浮歌词设置区：开关 + 字号/长度/透明度三个滑条，全部读写 iris_prefs，
- * 由服务侧 FloatingLyric 的 OnSharedPreferenceChangeListener 实时生效。
- * 无悬浮窗权限时给出授权入口，从系统授权页返回后自动重新同步显隐。
- */
 @Composable
 private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
     val ctx = LocalContext.current
@@ -1289,7 +1199,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
     var widthFrac by remember { mutableFloatStateOf(prefs.getFloat(FloatingLyric.KEY_WIDTH, FloatingLyric.WIDTH_DEFAULT)) }
     var bg by remember { mutableFloatStateOf(prefs.getFloat(FloatingLyric.KEY_BG, FloatingLyric.BG_DEFAULT)) }
     
-    // --- 新增状态 ---
+    var useCustomColor by remember { mutableStateOf(prefs.getBoolean(FloatingLyric.KEY_USE_CUSTOM, false)) }
     var karaoke by remember { mutableStateOf(prefs.getBoolean(FloatingLyric.KEY_KARAOKE, false)) }
     var fixed by remember { mutableStateOf(prefs.getBoolean(FloatingLyric.KEY_FIXED, false)) }
     var fixMode by remember { mutableIntStateOf(prefs.getInt(FloatingLyric.KEY_FIX_MODE, 0)) }
@@ -1297,7 +1207,6 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
     var customPrimary by remember { mutableLongStateOf(prefs.getLong(FloatingLyric.KEY_CUSTOM_PRIMARY, 0xFF00F0FFL)) }
     var customSecondary by remember { mutableLongStateOf(prefs.getLong(FloatingLyric.KEY_CUSTOM_SECONDARY, 0xFFFF2E97L)) }
 
-    // 从系统授权页返回时刷新权限并让服务重新同步显隐
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -1331,7 +1240,6 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
         val next = !enabled
         enabled = next
         writeBool(FloatingLyric.KEY_ENABLED, next)
-        // 首次开启且无权限：跳系统授权页（授权返回后 ON_RESUME 自动显示）
         if (next && !FloatingLyric.hasPermission(ctx)) FloatingLyric.requestPermission(ctx)
     }
 
@@ -1357,14 +1265,12 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(10.dp))
-            // 1. 逐字流光开关
             SettingToggleRow("逐字流光", karaoke, colors) {
                 karaoke = !karaoke
                 writeBool(FloatingLyric.KEY_KARAOKE, karaoke)
             }
 
             Spacer(Modifier.height(10.dp))
-            // 2. 悬浮歌词固定开关
             SettingToggleRow("固定位置", fixed, colors, subtitle = "开启后无法随意拖动") {
                 fixed = !fixed
                 writeBool(FloatingLyric.KEY_FIXED, fixed)
@@ -1386,38 +1292,53 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(14.dp))
-            // 5. 悬浮歌词颜色
-            Text("悬浮歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
-                    ThemeSwatch(
-                        theme = theme,
-                        selected = floatTheme == theme,
-                        colors = colors,
-                        onClick = { 
-                            floatTheme = theme
-                            prefs.edit().putString(FloatingLyric.KEY_THEME, theme.name).apply()
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+            
+            // 悬浮歌词颜色总开关
+            SettingToggleRow(
+                "启用悬浮歌词颜色",
+                useCustomColor,
+                colors,
+                subtitle = "关闭后恢复原本的纯白样式"
+            ) { 
+                useCustomColor = !useCustomColor
+                writeBool(FloatingLyric.KEY_USE_CUSTOM, useCustomColor)
             }
-            AnimatedVisibility(visible = floatTheme == IrisTheme.CUSTOM) {
+
+            AnimatedVisibility(visible = useCustomColor) {
                 Column(Modifier.padding(top = 10.dp)) {
-                    CustomColorSection(
-                        primaryArgb = customPrimary,
-                        secondaryArgb = customSecondary,
-                        colors = colors,
-                        onColorsChange = { p, s ->
-                            customPrimary = p
-                            customSecondary = s
-                            prefs.edit()
-                                .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
-                                .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
-                                .apply()
+                    Text("悬浮歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
+                            ThemeSwatch(
+                                theme = theme,
+                                selected = floatTheme == theme,
+                                colors = colors,
+                                onClick = { 
+                                    floatTheme = theme
+                                    prefs.edit().putString(FloatingLyric.KEY_THEME, theme.name).apply()
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
                         }
-                    )
+                    }
+                    AnimatedVisibility(visible = floatTheme == IrisTheme.CUSTOM) {
+                        Column(Modifier.padding(top = 10.dp)) {
+                            CustomColorSection(
+                                primaryArgb = customPrimary,
+                                secondaryArgb = customSecondary,
+                                colors = colors,
+                                onColorsChange = { p, s ->
+                                    customPrimary = p
+                                    customSecondary = s
+                                    prefs.edit()
+                                        .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
+                                        .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
+                                        .apply()
+                                }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1454,10 +1375,6 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
     }
 }
 
-/**
- * 设置项开关行。原来每个开关都是一整段 Row + Box 手写胶囊，
- * 加一个开关就复制 20 行；抽出来后新增开关只需一行调用。
- */
 @Composable
 private fun SettingToggleRow(
     label: String,
@@ -1482,7 +1399,6 @@ private fun SettingToggleRow(
             }
         }
         Spacer(Modifier.width(10.dp))
-        // 拨钮位置走动画，不是瞬移（果冻开关下为弹性滑动）
         val knobAlign by animateFloatAsState(
             targetValue = if (checked) 1f else 0f,
             animationSpec = IrisMotion.knob(),
@@ -1530,12 +1446,6 @@ private fun ModeSwatch(
     }
 }
 
-/**
- * 界面排布选择卡：上方一枚手机缩略预览，下方标签。
- *
- * 只用色块表达结构——纵向是两列格子，横向是三张并排的竖卡，堆叠是错开的一沓。
- * 和参考图同构，但完全 Canvas 自绘（项目不引图标库，也不该为三张示意图加位图资源）。
- */
 @Composable
 private fun LayoutSwatch(
     layout: IrisLayout,
@@ -1565,7 +1475,6 @@ private fun LayoutSwatch(
             val r = CornerRadius(4.dp.toPx(), 4.dp.toPx())
             val inner = CornerRadius(2.dp.toPx(), 2.dp.toPx())
 
-            // 手机外框
             drawRoundRect(
                 color = frame,
                 topLeft = Offset(stroke / 2f, stroke / 2f),
@@ -1580,7 +1489,6 @@ private fun LayoutSwatch(
 
             when (layout) {
                 IrisLayout.LIST -> {
-// 纵向歌单：标题栏 + 一条条歌曲行
                      val gap = 2.5.dp.toPx()
                      val rowH = (h - gap * 4f) / 5f
                      drawRoundRect(fill, Offset(pad, pad), Size(w, rowH * 0.72f), inner)
@@ -1591,7 +1499,6 @@ private fun LayoutSwatch(
                 }
 
                 IrisLayout.CAROUSEL -> {
-                    // 三张并排竖卡，中间那张满高、两侧被裁掉一半
                     val cw = w * 0.46f
                     val gap = w * 0.10f
                     val cy = pad + h * 0.16f
@@ -1608,7 +1515,6 @@ private fun LayoutSwatch(
                 }
 
                 IrisLayout.STACK -> {
-                    // 一沓错开的卡：从最里层往外画，最后那张最实
                     val cw = w * 0.62f
                     val ch = h * 0.60f
                     val stepX = w * 0.09f
@@ -1627,7 +1533,6 @@ private fun LayoutSwatch(
                 }
 
 IrisLayout.COMPACT -> {
-                     // 唱片墙：手机框内铺满一格格方形封面卡（3 列 × 4 行网格）
                      val cols = 3
                      val rows = 4
                      val cellGap = 1.6.dp.toPx()
@@ -1635,7 +1540,6 @@ IrisLayout.COMPACT -> {
                      val cellH = (h - cellGap * (rows - 1)) / rows
                      for (row in 0 until rows) {
                          for (col in 0 until cols) {
-                             // 交替深浅让"一格格封面"更清楚，不是一块实心
                              val a = if ((row + col) % 2 == 0) fill.alpha else fill.alpha * 0.6f
                              drawRoundRect(
                                  color = fill.copy(alpha = a),
@@ -1662,11 +1566,8 @@ IrisLayout.COMPACT -> {
 
 @Composable
 private fun ThemeSwatch(theme: IrisTheme, selected: Boolean, colors: IrisColors, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    // 色板必须用「当前明暗模式下实际生效」的色对：黑白主题的枚举值是白+黑，
-    // 浅色模式下白色圆点和白色标题会直接消失在白卡上。
     val (swatchPrimary, swatchSecondary) = theme.resolvedPair(colors.isDark)
     val cardBg = if (selected) swatchPrimary.copy(alpha = 0.15f) else colors.card
-    // 选中态标题落在半透明主题底上，仍以卡片色为背景基准反算可读色
     val labelColor = if (selected) swatchPrimary.readableOn(colors.card) else colors.text.copy(alpha = 0.8f)
     Column(
         modifier
@@ -1682,7 +1583,6 @@ private fun ThemeSwatch(theme: IrisTheme, selected: Boolean, colors: IrisColors,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Row {
-            // 圆点描边：纯白/纯黑圆点在同色卡片上没有边界，加一圈细描边兜底
             val dotBorder = colors.subText.copy(alpha = 0.45f)
             Box(
                 Modifier.size(12.dp).clip(RoundedCornerShape(6.dp))
@@ -1707,7 +1607,6 @@ private fun ThemeSwatch(theme: IrisTheme, selected: Boolean, colors: IrisColors,
     }
 }
 
-
 // ==================== 自定义配色（HSV 取色） ====================
 
 private fun argbOf(hsv: FloatArray): Long =
@@ -1726,12 +1625,6 @@ private fun CustomColorSection(
     colors: IrisColors,
     onColorsChange: (Long, Long) -> Unit
 ) {
-    // HSV 草稿：改成「持有 FloatArray 的 mutableStateOf」，每次改动写入一个**新数组**。
-    // 原来用无 key 的 remember { FloatArray } 原地改 + 一个从未被读取的 bump，
-    // 拖动时本节根本不重组，预览/滑块只能靠上层回传的间接重组刷新，
-    // 表现为「拖动不跟手、要重进设置才看到颜色变」。
-    // 用新数组引用触发重组：滑块 value 读当前数组，引用一变就重绘，且不重建滑块子树，
-    // 拖动手势状态得以保留（比 key(bump) 更安全）。
     var primaryHsv by remember { mutableStateOf(hsvOf(primaryArgb)) }
     var secondaryHsv by remember { mutableStateOf(hsvOf(secondaryArgb)) }
     var editSecondary by remember { mutableStateOf(false) }
