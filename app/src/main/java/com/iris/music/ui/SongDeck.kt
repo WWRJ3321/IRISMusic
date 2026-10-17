@@ -363,7 +363,12 @@ fun SongDeck(
                 backdrops = lyricsBackdrops,
                 onSeek = onSeek,
                 lyricAlign = state.lyricAlign,
+                lyricFont = state.lyricFont,
+                lyricFontSize = state.lyricFontSize,
                 karaoke = state.karaokeLyric,
+                lyricTheme = state.lyricTheme,
+                lyricCustomPrimary = state.lyricCustomPrimary,
+                lyricCustomSecondary = state.lyricCustomSecondary,
                 onDismiss = { showLyrics = false }
             )
         }
