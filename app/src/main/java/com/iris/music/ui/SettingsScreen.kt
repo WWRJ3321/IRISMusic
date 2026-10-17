@@ -570,6 +570,39 @@ internal fun SettingsPanel(
             colors,
             subtitle = "全屏歌词当前行按进度扫光点亮（无词级时间时按句长估算）"
         ) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
+        
+        Spacer(Modifier.height(14.dp))
+
+        // ---- 新增：全屏歌词颜色 ----
+        Text("全屏歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
+                ThemeSwatch(
+                    theme = theme,
+                    selected = state.lyricTheme == theme,
+                    colors = colors,
+                    onClick = { viewModel.setLyricTheme(theme) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = state.lyricTheme == IrisTheme.CUSTOM,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(Modifier.padding(top = 10.dp)) {
+                CustomColorSection(
+                    primaryArgb = state.lyricCustomPrimary,
+                    secondaryArgb = state.lyricCustomSecondary,
+                    colors = colors,
+                    onColorsChange = viewModel::setLyricCustomColors
+                )
+            }
+        }
+        // ---------------------------
+
         Spacer(Modifier.height(14.dp))
         Column {
             Text("歌词对齐", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -1255,6 +1288,14 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
     var font by remember { mutableFloatStateOf(prefs.getFloat(FloatingLyric.KEY_FONT, FloatingLyric.FONT_DEFAULT)) }
     var widthFrac by remember { mutableFloatStateOf(prefs.getFloat(FloatingLyric.KEY_WIDTH, FloatingLyric.WIDTH_DEFAULT)) }
     var bg by remember { mutableFloatStateOf(prefs.getFloat(FloatingLyric.KEY_BG, FloatingLyric.BG_DEFAULT)) }
+    
+    // --- 新增状态 ---
+    var karaoke by remember { mutableStateOf(prefs.getBoolean(FloatingLyric.KEY_KARAOKE, false)) }
+    var fixed by remember { mutableStateOf(prefs.getBoolean(FloatingLyric.KEY_FIXED, false)) }
+    var fixMode by remember { mutableIntStateOf(prefs.getInt(FloatingLyric.KEY_FIX_MODE, 0)) }
+    var floatTheme by remember { mutableStateOf(runCatching { IrisTheme.valueOf(prefs.getString(FloatingLyric.KEY_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO)) }
+    var customPrimary by remember { mutableLongStateOf(prefs.getLong(FloatingLyric.KEY_CUSTOM_PRIMARY, 0xFF00F0FFL)) }
+    var customSecondary by remember { mutableLongStateOf(prefs.getLong(FloatingLyric.KEY_CUSTOM_SECONDARY, 0xFFFF2E97L)) }
 
     // 从系统授权页返回时刷新权限并让服务重新同步显隐
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
@@ -1271,6 +1312,8 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
 
     fun writeBool(key: String, v: Boolean) = prefs.edit().putBoolean(key, v).apply()
     fun writeFloat(key: String, v: Float) = prefs.edit().putFloat(key, v).apply()
+    fun writeInt(key: String, v: Int) = prefs.edit().putInt(key, v).apply()
+    fun writeLong(key: String, v: Long) = prefs.edit().putLong(key, v).apply()
 
     Text("悬浮歌词", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(4.dp))
@@ -1314,6 +1357,71 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(10.dp))
+            // 1. 逐字流光开关
+            SettingToggleRow("逐字流光", karaoke, colors) {
+                karaoke = !karaoke
+                writeBool(FloatingLyric.KEY_KARAOKE, karaoke)
+            }
+
+            Spacer(Modifier.height(10.dp))
+            // 2. 悬浮歌词固定开关
+            SettingToggleRow("固定位置", fixed, colors, subtitle = "开启后无法随意拖动") {
+                fixed = !fixed
+                writeBool(FloatingLyric.KEY_FIXED, fixed)
+            }
+
+            AnimatedVisibility(visible = fixed, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                Column(Modifier.padding(top = 6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ModeSwatch("居中(仅上下滑)", fixMode == 0, colors, modifier = Modifier.weight(1f)) {
+                            fixMode = 0
+                            writeInt(FloatingLyric.KEY_FIX_MODE, 0)
+                        }
+                        ModeSwatch("完全固定", fixMode == 1, colors, modifier = Modifier.weight(1f)) {
+                            fixMode = 1
+                            writeInt(FloatingLyric.KEY_FIX_MODE, 1)
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            // 5. 悬浮歌词颜色
+            Text("悬浮歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
+                    ThemeSwatch(
+                        theme = theme,
+                        selected = floatTheme == theme,
+                        colors = colors,
+                        onClick = { 
+                            floatTheme = theme
+                            prefs.edit().putString(FloatingLyric.KEY_THEME, theme.name).apply()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            AnimatedVisibility(visible = floatTheme == IrisTheme.CUSTOM) {
+                Column(Modifier.padding(top = 10.dp)) {
+                    CustomColorSection(
+                        primaryArgb = customPrimary,
+                        secondaryArgb = customSecondary,
+                        colors = colors,
+                        onColorsChange = { p, s ->
+                            customPrimary = p
+                            customSecondary = s
+                            prefs.edit()
+                                .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
+                                .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
+                                .apply()
+                        }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
             Text("字号 · ${font.toInt()} sp", color = colors.subText, fontSize = 11.sp)
             CompactSlider(
                 value = font,
