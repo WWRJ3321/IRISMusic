@@ -216,12 +216,17 @@ data class PlayerUiState(
     val scanRoot: String? = null,
 
     // ================= 新增：全屏歌词主题与悬浮歌词配置 =================
+    /** 全屏歌词颜色总开关 */
+    val lyricUseCustomColor: Boolean = false,
     /** 全屏歌词颜色主题 */
     val lyricTheme: IrisTheme = IrisTheme.MONO,
     /** 全屏歌词自定义主色 */
     val lyricCustomPrimary: Long = 0xFF00F0FFL,
     /** 全屏歌词自定义次色 */
     val lyricCustomSecondary: Long = 0xFFFF2E97L,
+    
+    /** 悬浮歌词颜色总开关 */
+    val floatLyricUseCustomColor: Boolean = false,
     /** 悬浮歌词逐字流光开关 */
     val floatLyricKaraoke: Boolean = false,
     /** 悬浮歌词固定开关 */
@@ -316,9 +321,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             scanRoot = readScanRoot(),
 
             // === 新增：初始化全屏歌词与悬浮歌词配置 ===
+            lyricUseCustomColor = prefs.getBoolean(KEY_LYRIC_USE_CUSTOM, false),
             lyricTheme = runCatching { IrisTheme.valueOf(prefs.getString(KEY_LYRIC_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO),
             lyricCustomPrimary = prefs.getLong(KEY_LYRIC_CUSTOM_PRIMARY, 0xFF00F0FFL),
             lyricCustomSecondary = prefs.getLong(KEY_LYRIC_CUSTOM_SECONDARY, 0xFFFF2E97L),
+            
+            floatLyricUseCustomColor = prefs.getBoolean(FloatingLyric.KEY_USE_CUSTOM, false),
             floatLyricKaraoke = prefs.getBoolean(FloatingLyric.KEY_KARAOKE, false),
             floatLyricFixed = prefs.getBoolean(FloatingLyric.KEY_FIXED, false),
             floatLyricFixMode = prefs.getInt(FloatingLyric.KEY_FIX_MODE, 0),
@@ -1013,6 +1021,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ==================== 新增：颜色与悬浮歌词配置 ====================
+    fun setLyricUseCustomColor(on: Boolean) {
+        prefs.edit().putBoolean(KEY_LYRIC_USE_CUSTOM, on).apply()
+        _state.value = _state.value.copy(lyricUseCustomColor = on)
+    }
     fun setLyricTheme(theme: IrisTheme) {
         prefs.edit().putString(KEY_LYRIC_THEME, theme.name).apply()
         _state.value = _state.value.copy(lyricTheme = theme)
@@ -1022,6 +1034,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(lyricCustomPrimary = primary, lyricCustomSecondary = secondary)
     }
 
+    fun setFloatLyricUseCustomColor(on: Boolean) {
+        prefs.edit().putBoolean(FloatingLyric.KEY_USE_CUSTOM, on).apply()
+        _state.value = _state.value.copy(floatLyricUseCustomColor = on)
+    }
     fun setFloatLyricKaraoke(enabled: Boolean) {
         prefs.edit().putBoolean(FloatingLyric.KEY_KARAOKE, enabled).apply()
         _state.value = _state.value.copy(floatLyricKaraoke = enabled)
@@ -1544,6 +1560,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_JELLY_ANIM = "jelly_anim"
         
         // === 新增的 Key ===
+        const val KEY_LYRIC_USE_CUSTOM = "lyric_use_custom"
         const val KEY_LYRIC_THEME = "lyric_theme"
         const val KEY_LYRIC_CUSTOM_PRIMARY = "lyric_custom_primary"
         const val KEY_LYRIC_CUSTOM_SECONDARY = "lyric_custom_secondary"
