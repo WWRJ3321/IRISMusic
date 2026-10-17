@@ -1631,17 +1631,18 @@ private fun KaraokeLine(
     val start = (center - half).coerceIn(0f, 1f)
     val end = (center + half).coerceIn(0f, 1f)
     
-    val sweep = if (end <= start) {
+    // 关键修复：确保所有分支返回的都是 Brush 类型，而不是混用 Color
+    val sweep: Brush = if (end <= start) {
         if (frac >= 0.5f) {
-            if (lyricUseCustomColor) themePrimary else originalColor
+            if (lyricUseCustomColor) SolidColor(themePrimary) else SolidColor(originalColor)
         } else {
-            unsungColor
+            SolidColor(unsungColor)
         }
     } else {
         val stops = buildList {
             if (lyricUseCustomColor) {
                 add(0f to themePrimary)
-                // 关键点：光带前沿的颜色是主色和次色的过渡色，这样才平滑！
+                // 光带前沿的颜色是主色和次色的过渡色
                 if (start > 0f) {
                     val startColor = lerp(themePrimary, themeSecondary, start)
                     add(start to startColor)
@@ -1658,7 +1659,7 @@ private fun KaraokeLine(
         Brush.horizontalGradient(colorStops = stops)
     }
 
-    val finalBrush = if (frac >= 0.999f) {
+    val finalBrush: Brush = if (frac >= 0.999f) {
         if (lyricUseCustomColor) {
             Brush.horizontalGradient(listOf(themePrimary, themeSecondary))
         } else {
@@ -1681,7 +1682,6 @@ private fun KaraokeLine(
         )
     )
 }
-
 @Composable
 internal fun SettingsButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
     Box(
