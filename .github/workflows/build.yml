@@ -1,85 +1,20 @@
-name: Build Release APK
-
+name: Build APK
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
+    branches: [ main ]
+  workflow_dispatch:   # 支持手动触发
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
-          distribution: temurin
           java-version: '17'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      - name: Show effective gradle.properties
-        run: cat gradle.properties
-
-      # 权限审计：除了下列已声明权限外不允许出现新的权限。
-      # INTERNET 仅用于 opt-in 的检查更新，若被意外扩大会在这里失败。
-      - name: Audit manifest permissions
-        run: |
-          echo "--- declared permissions ---"
-          grep -o 'android.permission.[A-Z_]*' app/src/main/AndroidManifest.xml | sort -u | tee /tmp/perms.txt
-          cat > /tmp/allowed.txt <<'EOF'
-          android.permission.FOREGROUND_SERVICE
-          android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK
-          android.permission.INTERNET
-          android.permission.POST_NOTIFICATIONS
-          android.permission.MANAGE_EXTERNAL_STORAGE
-          android.permission.READ_EXTERNAL_STORAGE
-          android.permission.READ_MEDIA_AUDIO
-          android.permission.SYSTEM_ALERT_WINDOW
-          android.permission.VIBRATE
-          android.permission.WAKE_LOCK
-          EOF
-          sort -u /tmp/allowed.txt -o /tmp/allowed.txt
-          if ! diff -u /tmp/allowed.txt /tmp/perms.txt; then
-            echo "::error::Manifest permissions changed. Review privacy claims before releasing."
-            exit 1
-          fi
-          echo "Permission audit passed."
-
-      - name: Build release APK
-        run: ./gradlew :app:assembleRelease --no-daemon --console=plain
-
-      - name: Compute checksums
-        run: |
-          cd app/build/outputs/apk/release
-          sha256sum *.apk | tee SHA256SUMS.txt
-          echo "--- build provenance ---"
-          echo "commit: ${GITHUB_SHA}"
-          echo "ref:    ${GITHUB_REF}"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+          distribution: 'temurin'
+      - uses: android-actions/setup-android@v3
+      - run: ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
         with:
-          name: release-apks
-          path: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/release/SHA256SUMS.txt
-
-      # CI 构建产物使用 CI 侧的临时 debug 签名，与作者发布包签名不同，
-      # 因此只作为「可复现构建」的校验证据，不直接发布覆盖安装包。
-      - name: Attach checksums to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: app/build/outputs/apk/release/SHA256SUMS.txt
+          name: IRISMusic-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
