@@ -2,9 +2,8 @@ name: Build Release APK
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    branches: [ main ]  # 修改：只要往 main 分支提交代码就自动触发构建
+  workflow_dispatch:    # 保留：支持在 Actions 页面手动点击运行
 
 permissions:
   contents: write
@@ -37,6 +36,7 @@ jobs:
       - name: Show effective gradle.properties
         run: cat gradle.properties
 
+      # 权限审计：除了下列已声明权限外不允许出现新的权限。
       - name: Audit manifest permissions
         run: |
           echo "--- declared permissions ---"
@@ -79,6 +79,7 @@ jobs:
             app/build/outputs/apk/release/*.apk
             app/build/outputs/apk/release/SHA256SUMS.txt
 
+      # 这个步骤只有在打 tag 发版时才会触发，平时自动构建不影响
       - name: Attach checksums to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
