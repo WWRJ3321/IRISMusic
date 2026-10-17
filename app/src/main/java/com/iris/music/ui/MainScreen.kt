@@ -1483,6 +1483,9 @@ visualizerEnabled = state.visualizerEnabled,
                 lyricFont = state.lyricFont,
                 lyricFontSize = state.lyricFontSize,
                 karaoke = state.karaokeLyric,
+                lyricTheme = state.lyricTheme,
+                lyricCustomPrimary = state.lyricCustomPrimary,
+                lyricCustomSecondary = state.lyricCustomSecondary,
                 onDismiss = { showLyrics = false }
             )
         }
@@ -1512,6 +1515,9 @@ internal fun LyricsOverlay(
     lyricFont: Int = 0,
     lyricFontSize: Float = 20f,
     karaoke: Boolean = true,
+    lyricTheme: IrisTheme = IrisTheme.MONO,
+    lyricCustomPrimary: Long = 0xFF00F0FFL,
+    lyricCustomSecondary: Long = 0xFFFF2E97L,
     onDismiss: () -> Unit
 ) {
     val listState = rememberLazyListState()
@@ -1536,6 +1542,22 @@ internal fun LyricsOverlay(
     } else {
         if (colors.isDark) Color(0xB3121218) else Color(0xCCF4F4F8)
     }
+    
+    // 全屏歌词渐变色计算
+    val (lPrimary, lSecondary) = remember(lyricTheme, colors.isDark, lyricCustomPrimary, lyricCustomSecondary) {
+        when (lyricTheme) {
+            IrisTheme.MONO -> if (colors.isDark) Color.White to Color.Black else Color.Black to Color.White
+            IrisTheme.OCEAN -> IrisPalette.NeonBlue to IrisPalette.NeonCyan
+            IrisTheme.GRASS -> IrisPalette.NeonGreen to IrisPalette.NeonLime
+            IrisTheme.CUSTOM -> Color(lyricCustomPrimary) to Color(lyricCustomSecondary)
+            else -> Color.White to Color.Gray
+        }
+    }
+    val lyricBrush = remember(lPrimary, lSecondary) {
+        Brush.horizontalGradient(listOf(lPrimary, lSecondary))
+    }
+    val unsungColor = if (colors.isDark) Color.White.copy(alpha = 0.4f) else Color.Black.copy(alpha = 0.4f)
+
     val lyricsGlass = if (glass) {
         Modifier.glassSurface(
             spec = GlassLevel.SHEET.currentSpec(colors),
@@ -1790,8 +1812,8 @@ internal fun LyricsOverlay(
                                     positionMs = positionMs,
                                     lineEndMs = lines.getOrNull(index + 1)?.timeMs
                                         ?: (if (durationMs > 0) durationMs else line.timeMs + 4000),
-                                    sungColor = colors.primary,
-                                    unsungColor = onCard.copy(alpha = 0.42f),
+                                    sungBrush = lyricBrush,
+                                    unsungBrush = SolidColor(unsungColor),
                                     textAlign = textAlign,
                                     fontFamily = lyricFamily,
                                     fontSize = lyricFontSize,
@@ -1800,12 +1822,13 @@ internal fun LyricsOverlay(
                             } else {
                                 Text(
                                     line.text,
-                                    // 统一字号，大小差异交给 scale，行高恒定 → 跟踪更稳
-                                    color = lineColor,
-                                    fontSize = lyricFontSize.sp,
-                                    fontFamily = lyricFamily,
-                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                    textAlign = textAlign,
+                                    style = androidx.compose.ui.text.TextStyle(
+                                        brush = if (isCurrent) lyricBrush else SolidColor(onCard),
+                                        fontSize = lyricFontSize.sp,
+                                        fontFamily = lyricFamily,
+                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                        textAlign = textAlign
+                                    ),
                                     modifier = seekModifier
                                 )
                             }
@@ -1838,8 +1861,8 @@ private fun KaraokeLine(
     line: LyricLine,
     positionMs: Long,
     lineEndMs: Long,
-    sungColor: Color,
-    unsungColor: Color,
+    sungBrush: Brush,
+    unsungBrush: Brush,
     textAlign: TextAlign = TextAlign.Center,
     fontFamily: FontFamily = FontFamily.SansSerif,
     fontSize: Float = 20f,
@@ -1886,25 +1909,32 @@ private fun KaraokeLine(
     val center = frac * (1f + soft) - half
     val start = (center - half).coerceIn(0f, 1f)
     val end = (center + half).coerceIn(0f, 1f)
-    val sweep = if (end <= start) {
-        // 柔边已完全滑出边界：右端=整行已唱，左端=整行未唱
-        androidx.compose.ui.graphics.SolidColor(if (frac >= 0.5f) sungColor else unsungColor)
+    
+    // 获取底色的纯色用于流光遮罩
+    val sungCol = if (sungBrush is SolidColor) sungBrush.value else Color.White
+    val unsungCol = if (unsungBrush is SolidColor) unsungBrush.value else Color.Gray
+
+    val finalBrush = if (frac >= 0.999f) {
+        sungBrush
+    } else if (end <= start) {
+        if (frac >= 0.5f) sungBrush else unsungBrush
     } else {
         // colorStops 必须严格递增：start=0 或 end=1 时省略重复端点
         val stops = buildList {
-            add(0f to sungColor)
-            if (start > 0f) add(start to sungColor)
-            add(end to unsungColor)
-            if (end < 1f) add(1f to unsungColor)
+            add(0f to sungCol)
+            if (start > 0f) add(start to sungCol)
+            add(end to unsungCol)
+            if (end < 1f) add(1f to unsungCol)
         }.toTypedArray()
-        androidx.compose.ui.graphics.Brush.horizontalGradient(colorStops = stops)
+        Brush.horizontalGradient(colorStops = stops)
     }
+    
     Text(
         text,
         textAlign = textAlign,
         modifier = modifier,
         style = androidx.compose.ui.text.TextStyle(
-            brush = sweep,
+            brush = finalBrush,
             fontFamily = fontFamily,
             fontSize = fontSize.sp,
             fontWeight = FontWeight.Bold,
@@ -2215,5 +2245,3 @@ internal fun FolderRow(name: String, count: String, active: Boolean, colors: Iri
         Text(count, color = colors.subText, fontSize = 11.sp)
     }
 }
-
-
