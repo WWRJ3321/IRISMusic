@@ -41,6 +41,7 @@ import com.iris.music.data.SortDirection
 import com.iris.music.data.SortOrder
 import com.iris.music.data.StatRange
 import com.iris.music.playback.MusicService
+import com.iris.music.playback.FloatingLyric
 import com.iris.music.playback.SleepTimer
 import com.iris.music.ui.ArtworkLoader
 import com.iris.music.ui.Haptics
