@@ -7,9 +7,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -19,27 +23,24 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
 /**
  * 启动动画：手写体 "Hello" 描边书写。
- *
- * 从 SwiftUI 工程 HelloAnimation/ContentView.swift 的 HelloText Shape 1:1 移植：
- * - 21 段三次贝塞尔曲线坐标原样搬运，仅做 SwiftUI → Compose API 映射
- * - PathMeasure.getSegment 等价于 SwiftUI .trim(from: 0, to: progress)
- * - 4 秒 easeInOut 描边、10dp 圆头圆角线帽、垂直红→蓝→绿渐变，与原版完全一致
- * - 书写完成停 400ms，再 500ms 淡出，淡出结束回调 onFinished
- *
- * 覆盖在 MainActivity 最外层 Box 之上，纯黑背景直接盖住主界面（含所有液态玻璃）。
- * 只在 Activity.onCreate 创建一次，动画结束后由宿主移除。不引用任何现有 UI 组件，
- * 也不触碰 Haze / RenderEffect / 玻璃背板。
+ * 样式：
+ * 0 = 简约（原版居中，红蓝绿渐变）
+ * 1 = 温柔（帽檐式，上方衬线 MUSIC，下方蓝粉渐变 hello）
+ * 2 = 细腻（尾巴式，上方蓝紫渐变 hello，下方斜体 music）
  */
 @Composable
-fun SplashScreen(onFinished: () -> Unit) {
-    // 描边进度 0→1，4 秒 easeInOut
+fun SplashScreen(style: Int, onFinished: () -> Unit) {
     val drawProgress = remember { Animatable(0f) }
-    // 整体淡出透明度
     val alpha = remember { Animatable(1f) }
 
     LaunchedEffect(Unit) {
@@ -47,7 +48,6 @@ fun SplashScreen(onFinished: () -> Unit) {
             targetValue = 1f,
             animationSpec = tween(
                 durationMillis = 4000,
-                // 标准 CSS ease-in-out 的三次贝塞尔
                 easing = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
             )
         )
@@ -63,54 +63,88 @@ fun SplashScreen(onFinished: () -> Unit) {
         Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .graphicsLayer { this.alpha = alpha.value }
+            .graphicsLayer { this.alpha = alpha.value },
+        contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            // 宽度占屏宽 88%，高度按原版 SwiftUI `frame(height: 100) + 撑满宽度`
-            // 得到的约 3.45 宽高比等比缩放，视觉上与原版一致（横向略微拉长的手写体）
-            val pathW = size.width * 0.88f
-            val pathH = pathW / 3.45f
-            val offsetX = (size.width - pathW) / 2f
-            val offsetY = (size.height - pathH) / 2f
+        val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+        // hello 画布尺寸（基于屏幕宽度的 85%）
+        val helloW = screenWidth * 0.85f
+        val helloH = helloW / 3.45f
 
-            val fullPath = buildHelloPath(pathW, pathH, offsetX, offsetY)
-            val measure = PathMeasure().apply { setPath(fullPath, false) }
-            val totalLen = measure.length
-            if (totalLen <= 0f) return@Canvas
+        Box(contentAlignment = Alignment.Center) {
+            // 1. Hello 主画布
+            Canvas(
+                Modifier
+                    .size(helloW, helloH)
+                    .graphicsLayer {
+                        // 根据样式微调 hello 的位置
+                        translationY = when (style) {
+                            1 -> 20.dp.toPx()  // 帽檐式：下移
+                            2 -> -20.dp.toPx() // 尾巴式：上移
+                            else -> 0f
+                        }
+                    }
+            ) {
+                val fullPath = buildHelloPath(size.width, size.height, 0f, 0f)
+                val measure = PathMeasure().apply { setPath(fullPath, false) }
+                val totalLen = measure.length
+                if (totalLen <= 0f) return@Canvas
 
-            val trimmedLen = totalLen * drawProgress.value
-            if (trimmedLen <= 0f) return@Canvas
+                val trimmedLen = totalLen * drawProgress.value
+                if (trimmedLen <= 0f) return@Canvas
 
-            val segPath = Path()
-            measure.getSegment(0f, trimmedLen, segPath, true)
+                val segPath = Path()
+                measure.getSegment(0f, trimmedLen, segPath, true)
 
-            drawPath(
-                path = segPath,
-                brush = Brush.verticalGradient(
-                    0f to Color.Red,
-                    0.5f to Color.Blue,
-                    1f to Color.Green,
-                    startY = offsetY,
-                    endY = offsetY + pathH
-                ),
-                style = Stroke(
-                    width = 10.dp.toPx(),
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round
+                // 根据样式选渐变
+                val colors = when (style) {
+                    1 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFFFF7EB6)) // 温柔：蓝到粉
+                    2 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFF9D4EDD)) // 细腻：蓝到紫
+                    else -> arrayOf(0f to Color.Red, 0.5f to Color.Blue, 1f to Color.Green) // 简约：原版
+                }
+
+                drawPath(
+                    path = segPath,
+                    brush = Brush.verticalGradient(
+                        *colors,
+                        startY = 0f,
+                        endY = size.height
+                    ),
+                    style = Stroke(
+                        width = 10.dp.toPx(),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
                 )
-            )
+            }
+
+            // 2. 帽檐式上方的 M U S I C
+            if (style == 1) {
+                Text(
+                    text = "M U S I C",
+                    color = Color.White.copy(alpha = 0.6f * drawProgress.value),
+                    fontSize = 16.sp,
+                    fontFamily = FontFamily.Serif,
+                    letterSpacing = 8.sp,
+                    modifier = Modifier.offset(y = (-85).dp)
+                )
+            }
+
+            // 3. 尾巴式右下方的 music
+            if (style == 2) {
+                Text(
+                    text = "music",
+                    color = Color(0xFF9D4EDD).copy(alpha = 0.5f * drawProgress.value),
+                    fontSize = 28.sp,
+                    fontFamily = FontFamily.Serif,
+                    fontStyle = FontStyle.Italic,
+                    modifier = Modifier.offset(x = 80.dp, y = 60.dp)
+                )
+            }
         }
     }
 }
 
-/**
- * 从 ContentView.swift 的 HelloText Shape 逐段翻译。
- *
- * SwiftUI: path.addCurve(to:control1:control2:)
- * Compose: path.cubicTo(control1.x, control1.y, control2.x, control2.y, to.x, to.y)
- *
- * 所有坐标归一化后原样搬运，一字未改。
- */
 private fun buildHelloPath(w: Float, h: Float, ox: Float, oy: Float): Path {
     fun x(v: Float) = ox + v * w
     fun y(v: Float) = oy + v * h
