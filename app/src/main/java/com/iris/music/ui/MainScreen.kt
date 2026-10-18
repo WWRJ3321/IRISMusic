@@ -248,11 +248,39 @@ fun MainScreen(
             AnimatedVisibility(visible = state.showSettings, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180)), modifier = Modifier.fillMaxSize()) {
                 val settingsDrag = rememberSheetDragState()
                 IrisSheet(colors = colors, onDismiss = { onToggleSettings(false) }, drag = settingsDrag, panelModifier = Modifier.heightIn(max = 720.dp)) {
-                    // === 核心切换逻辑 ===
-                    if (state.useNewSettingsStyle) {
-                        NewSettingsPanel(state = state, colors = colors, viewModel = viewModel, onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) }, sheetDrag = settingsDrag, onDismiss = { onToggleSettings(false) })
-                    } else {
-                        SettingsPanel(state = state, colors = colors, viewModel = viewModel, onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) }, sheetDrag = settingsDrag, onDismiss = { onToggleSettings(false) })
+                    // === 核心切换逻辑：新旧设置面板之间平滑过渡（高度与内容都缓慢变化）===
+                    AnimatedContent(
+                        targetState = state.useNewSettingsStyle,
+                        transitionSpec = {
+                            (fadeIn(tween(360, delayMillis = 70)) +
+                                slideInVertically(tween(500, easing = EaseOutCubic)) { it / 8 }) togetherWith
+                                (fadeOut(tween(220)) +
+                                    slideOutVertically(tween(240, easing = EaseInCubic)) { -it / 12 })
+                        },
+                        sizeTransform = SizeTransform(clip = false) { _, _ ->
+                            tween(500, easing = FastOutSlowInEasing)
+                        },
+                        label = "settingsStyleSwap"
+                    ) { useNew ->
+                        if (useNew) {
+                            NewSettingsPanel(
+                                state = state,
+                                colors = colors,
+                                viewModel = viewModel,
+                                onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
+                                sheetDrag = settingsDrag,
+                                onDismiss = { onToggleSettings(false) }
+                            )
+                        } else {
+                            SettingsPanel(
+                                state = state,
+                                colors = colors,
+                                viewModel = viewModel,
+                                onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
+                                sheetDrag = settingsDrag,
+                                onDismiss = { onToggleSettings(false) }
+                            )
+                        }
                     }
                 }
             }
