@@ -25,7 +25,6 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
@@ -54,7 +53,6 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
         onFinished()
     }
 
-    // 跟随深浅色模式
     val bgColor = if (isDark) Color.Black else Color.White
     val textColor = if (isDark) Color.White else Color.Black
 
@@ -70,31 +68,36 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            // 1. 将原来的路径按屏幕宽度 80% 建一个基准画布
+            // 初始建立宽高
             val baseW = size.width * 0.85f
-            val baseH = baseW / 3.45f // 原比例
+            val baseH = baseW / 3.45f
             
             val fullPath = buildHelloPath(baseW, baseH, 0f, 0f)
             val bounds = fullPath.getBounds()
             
             if (bounds.width > 0 && bounds.height > 0) {
-                // 2. 按真实边界缩放，并强制留足 80% 边距
+                // 加上 10dp 的线条宽度，算出实际可能占用的最大矩形
+                val strokeWidthPx = 10.dp.toPx()
+                val realW = bounds.width + strokeWidthPx * 2
+                val realH = bounds.height + strokeWidthPx * 2
+                
+                // 留出足够的安全边距，使用 0.65 倍的画布宽高来缩放，保证绝对不截断
                 val scale = min(
-                    (size.width * 0.8f) / bounds.width,
-                    (size.height * 0.8f) / bounds.height
+                    (size.width * 0.65f) / realW,
+                    (size.height * 0.65f) / realH
                 )
                 
-                // 3. 计算绝对居中偏移
-                val dx = (size.width - bounds.width * scale) / 2f - bounds.left * scale
-                val dy = (size.height - bounds.height * scale) / 2f - bounds.top * scale
+                // 计算绝对居中的偏移量
+                val dx = (size.width - realW * scale) / 2f - (bounds.left - strokeWidthPx) * scale
+                val dy = (size.height - realH * scale) / 2f - (bounds.top - strokeWidthPx) * scale
 
                 withTransform({
                     scale(scale, scale, pivot = Offset.Zero)
                     translate(dx / scale, dy / scale)
-                    // 4. 各模式的相对位置微调（全部在内部完成，绝不跑出全屏 Canvas）
+                    // 微调位置
                     when (style) {
-                        1 -> translate(0f, 120f / scale) // 温柔：文字往下走，给上方 MUSIC 留空
-                        2 -> translate(0f, -120f / scale) // 细腻：文字往上走，给右下 music 留空
+                        1 -> translate(0f, 120f / scale)
+                        2 -> translate(0f, -120f / scale)
                     }
                 }) {
                     val measure = PathMeasure().apply { setPath(fullPath, false) }
@@ -115,11 +118,11 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
                             path = segPath,
                             brush = Brush.verticalGradient(
                                 *colors,
-                                startY = bounds.top,
-                                endY = bounds.bottom
+                                startY = bounds.top - strokeWidthPx,
+                                endY = bounds.bottom + strokeWidthPx
                             ),
                             style = Stroke(
-                                width = 10.dp.toPx() / scale, // 抵消缩放造成的线条变细
+                                width = strokeWidthPx / scale, // 抵消缩放
                                 cap = StrokeCap.Round,
                                 join = StrokeJoin.Round
                             )
@@ -129,7 +132,6 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
             }
         }
 
-        // 外部文字，基于屏幕整体居中再偏移
         if (style == 1) {
             Text(
                 text = "M U S I C",
