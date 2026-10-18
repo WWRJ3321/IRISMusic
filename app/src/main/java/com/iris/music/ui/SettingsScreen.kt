@@ -537,9 +537,9 @@ internal fun SettingsPanel(
         
         Spacer(Modifier.height(14.dp))
 
-        // ---- 新增：全屏歌词颜色总开关 ----
+        // 全屏歌词颜色开关
         SettingToggleRow(
-            "启用全屏歌词颜色",
+            "全屏歌词颜色",
             state.lyricUseCustomColor,
             colors,
             subtitle = "关闭后恢复原本的纯白/纯黑样式"
@@ -551,8 +551,7 @@ internal fun SettingsPanel(
             exit = fadeOut() + shrinkVertically()
         ) {
             Column(Modifier.padding(top = 10.dp)) {
-                Text("全屏歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
+                // 删除了重复的 Text("全屏歌词颜色", ...)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
                         ThemeSwatch(theme = theme, selected = state.lyricTheme == theme, colors = colors, onClick = { viewModel.setLyricTheme(theme) }, modifier = Modifier.weight(1f))
@@ -565,7 +564,6 @@ internal fun SettingsPanel(
                 }
             }
         }
-        // ---------------------------
 
         Spacer(Modifier.height(14.dp))
         Column {
@@ -1173,7 +1171,7 @@ private fun UpdateCheckSection(colors: IrisColors) {
                                     ctx.startActivity(
                                         Intent(
                                             Intent.ACTION_VIEW,
-                                            Uri.parse("https://github.com/WWRJ3321/IRISMusic/releases/latest")
+                                            Uri.parse("https://github.com/WWWJ3321/IRISMusic/releases/latest")
                                         )
                                     )
                                 },
@@ -1265,7 +1263,8 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(10.dp))
-            SettingToggleRow("逐字流光", karaoke, colors) {
+            // 【修改】添加解释文案
+            SettingToggleRow("逐字流光", karaoke, colors, subtitle = "当前行按进度扫光点亮（无词级时间时按句长估算）") {
                 karaoke = !karaoke
                 writeBool(FloatingLyric.KEY_KARAOKE, karaoke)
             }
@@ -1293,9 +1292,9 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
 
             Spacer(Modifier.height(14.dp))
             
-            // 悬浮歌词颜色总开关
+            // 【修改】去掉“启用”二字
             SettingToggleRow(
-                "启用悬浮歌词颜色",
+                "悬浮歌词颜色",
                 useCustomColor,
                 colors,
                 subtitle = "关闭后恢复原本的纯白样式"
@@ -1306,8 +1305,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
 
             AnimatedVisibility(visible = useCustomColor) {
                 Column(Modifier.padding(top = 10.dp)) {
-                    Text("悬浮歌词颜色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
+                    // 【修改】删除多余的 Text
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
                             ThemeSwatch(
