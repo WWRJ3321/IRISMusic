@@ -140,12 +140,18 @@ fun MainScreen(
     onCyclePlayMode: () -> Unit,
     onToggleSettings: (Boolean) -> Unit
 ) {
+    // 横屏「天台夜航」场景已暂时下线（NightFlightScene 文件保留，恢复时在此处重新接回）。
+    // 自定义背景图 SAF 选择器
     val bgPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri -> viewModel.setCustomBackground(uri) }
+    // 果冻开关同步到全局动效中心：所有组件读 IrisMotion.jelly
 androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
         IrisMotion.jelly = state.jellyAnim
     }
+    // 主题色过渡：切主题/明暗时整套配色 450ms 渐变，不整屏硬闪。
+    // 快速连续切主题：新动画总是从「当前显示的混色」出发（LaunchedEffect 重启时
+    // holder 里正是上一段动画停下的帧），所以接续而不是跳变。
     val targetColors = state.theme.colors(
         state.mode, state.systemDark,
         customPrimary = Color(state.customPrimaryArgb),
@@ -167,6 +173,9 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
     val pagerState = rememberPagerState(pageCount = { 2 })
     val glass = isLiquidGlass
 
+    // 液态玻璃的取样背板：背景一层、页面内容一层。
+    // 弹层（设置 / 均衡器）浮在页面之上，要同时折射这两层，
+    // 才会出现"透过玻璃看见下面的卡片被压缩变形"这种真玻璃观感。
     val bgBackdrop = rememberIrisBackdrop()
     val pageBackdrop = rememberIrisBackdrop()
     val pageBackdrops = remember(glass, bgBackdrop) {
@@ -176,15 +185,35 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
         if (glass) listOf(bgBackdrop, pageBackdrop) else emptyList()
     }
 
+    // 均衡器弹层
     var showEqualizer by remember { mutableStateOf(false) }
     val eqState by EqualizerController.state.collectAsState()
 
+    // 睡眠定时器弹层：提到根层级，才能和设置/均衡器一样折射「背景 + 页面」两层
     var showSleepTimer by remember { mutableStateOf(false) }
+
+    // 歌单管理弹层
     var showPlaylists by remember { mutableStateOf(false) }
+
+    // 长按歌曲 → 待加入歌单的歌曲
     var pendingAddSong by remember { mutableStateOf<Song?>(null) }
 
+    /**
+     * 播放页（Pager 第 2 页）按返回回到库页，而不是退出应用。
+     * 只在没有任何浮层时生效——有浮层时上面那个 BackHandler 会先接管。
+     */
     val onPlayerPage by remember { derivedStateOf { pagerState.currentPage == 1 } }
 
+    /**
+     * 返回键分级处理。
+     *
+     * 这些二级界面都是状态驱动的浮层而不是独立 Activity/路由，
+     * 系统返回键默认直接落到 Activity 上导致退出应用——用户预期是「退回上一级」。
+     *
+     * 判定顺序 = 视觉堆叠顺序，永远只关最上面那一层：
+     * 加歌单 > 歌单管理 > 均衡器 > 睡眠定时 > 收听报告 > 设置 > 播放页。
+     * 全都关着时不拦截，交还系统（此时返回 = 退出，符合预期）。
+     */
     val hasOverlay = pendingAddSong != null || showPlaylists || showEqualizer ||
         showSleepTimer || state.showReport || state.showSettings
     BackHandler(enabled = hasOverlay) {
@@ -198,308 +227,352 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
         }
     }
 
+    // 库页 ← 播放页。卡片模式（isDeck）没有 Pager 结构，不适用。
     val backScope = rememberCoroutineScope()
     BackHandler(enabled = !hasOverlay && !state.layout.isDeck && onPlayerPage) {
         backScope.launch { pagerState.animateScrollToPage(0) }
     }
 
+    // 库页列表状态：提升到根层级，滚动条挂在根 Box 上（保证钉在屏幕右缘）
     val libraryListState = rememberLazyListState()
+    // 快速滚动条是否正在拖动（拖动期间列表由滑条驱动，上栏需实时跟随）
     val scrollerDragging = remember { mutableStateOf(false) }
 
+    // 上栏计数（几首 / 已选文件夹）：启动时显示 4 秒后自动隐藏，之后不再常驻。
+    // 状态放在根层级而不是 LibraryPage：切到播放页再切回来不会重新计时显示。
     var showCountLabel by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
         delay(4000)
         showCountLabel = false
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(colors.background)
-    ) {
-        AuroraBackground(
-            state.currentSong?.filePath,
-            isDark = colors.isDark,
-            blurRadius = state.bgBlur,
-            customUri = state.customBackgroundUri,
-            modifier = if (glass) Modifier.irisBackdropSource(bgBackdrop) else Modifier
-        )
+    ThemeRevealHost {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(colors.background)
+        ) {
+            // 共享模糊背景（玻璃的最底层背板）
+            AuroraBackground(
+                state.currentSong?.filePath,
+                isDark = colors.isDark,
+                blurRadius = state.bgBlur,
+                customUri = state.customBackgroundUri,
+                modifier = if (glass) Modifier.irisBackdropSource(bgBackdrop) else Modifier
+            )
 
-        CompositionLocalProvider(LocalIrisBackdrops provides pageBackdrops) {
-            Crossfade(
-                targetState = state.layout,
-                animationSpec = if (IrisMotion.jelly) IrisMotion.appear() else tween(420, easing = androidx.compose.animation.core.EaseInOut),
-                label = "layoutSwitch"
-            ) { layout ->
-            if (layout.isDeck) {
-                SongDeck(
-                    state = state,
-                    colors = colors,
-                    modifier = if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier,
-                    onToggle = onToggle,
-                    onPrev = onPrev,
-                    onNext = onNext,
-                    onSeek = onSeek,
-                    onSelect = onSelect,
-                    onToggleLike = onToggleLike,
-                    onCyclePlayMode = onCyclePlayMode,
-                    onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
-                    onOpenEqualizer = { showEqualizer = true },
-                    onOpenSleepTimer = { showSleepTimer = true },
-                    onOpenReport = { viewModel.toggleReport(true) },
-                    onOpenSettings = { onToggleSettings(true) },
-                    onCycleLayout = { viewModel.setLayout(state.layout.next) },
-                    onOpenPlaylists = { showPlaylists = true },
-                    onReload = { viewModel.reloadLibrary() },
-                    eqActive = eqState.active
-                )
-            } else {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier)
-            ) { page ->
-                when (page) {
-                    0 -> LibraryPage(
+            CompositionLocalProvider(LocalIrisBackdrops provides pageBackdrops) {
+                // 卡片模式：整个 App 只剩一叠播放卡片，没有歌单页也没有上栏。
+                // 不是"在 Pager 里加一页"，而是彻底替掉 Pager——两种结构的手势
+                // （横滑翻页 / 横滑翻卡）会互相抢，同时存在必然打架。
+                //
+                // 用 Crossfade 包住切换：if/else 直接换树，两种结构的首帧
+                // （玻璃背板重录、Pager 重建）在同一帧里裸奔，看着就是闪。
+                Crossfade(
+                    targetState = state.layout,
+                    // 慢一点 + EaseInOut：180ms 直切快得像闪屏，420ms 缓入缓出
+                    // 才是"柔和过渡"的节奏。再长会拖泥带水——切布局是低频操作，
+                    // 用户愿意多等半秒看清楚，但不愿意等一秒。
+                    animationSpec = if (IrisMotion.jelly) IrisMotion.appear() else tween(420, easing = androidx.compose.animation.core.EaseInOut),
+                    label = "layoutSwitch"
+                ) { layout ->
+                if (layout.isDeck) {
+                    SongDeck(
                         state = state,
                         colors = colors,
-                        listState = libraryListState,
-                        onSelect = { index ->
-                            onSelect(index)
-                        },
-                        onPlaySong = viewModel::playSong,
-                        onSearch = onSearch,
-                        onSettings = { onToggleSettings(true) },
-                        onReport = { viewModel.toggleReport(true) },
-                        onReload = { viewModel.reloadLibrary() },
-                        onCycleLayout = { viewModel.setLayout(state.layout.next) },
-onOpenPlaylists = { showPlaylists = true },
-                         onSortOrder = viewModel::setSortOrder,
-                         onSortDirection = viewModel::setSortDirection,
-                         onAddToPlaylist = { song -> pendingAddSong = song },
-                        scrollerDragging = scrollerDragging,
-                        showCount = showCountLabel
-                    )
-
-                    1 -> PlayerPage(
-                        state = state,
-                        colors = colors,
-                        viewModel = viewModel,
+                        modifier = if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier,
                         onToggle = onToggle,
                         onPrev = onPrev,
                         onNext = onNext,
                         onSeek = onSeek,
+                        onSelect = onSelect,
                         onToggleLike = onToggleLike,
                         onCyclePlayMode = onCyclePlayMode,
+                        onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
                         onOpenEqualizer = { showEqualizer = true },
                         onOpenSleepTimer = { showSleepTimer = true },
+                        onOpenReport = { viewModel.toggleReport(true) },
+                        onOpenSettings = { onToggleSettings(true) },
+                        onCycleLayout = { viewModel.setLayout(state.layout.next) },
+                        onOpenPlaylists = { showPlaylists = true },
+                        onReload = { viewModel.reloadLibrary() },
                         eqActive = eqState.active
                     )
+                } else {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier)
+                ) { page ->
+                    when (page) {
+                        0 -> LibraryPage(
+                            state = state,
+                            colors = colors,
+                            listState = libraryListState,
+                            onSelect = { index ->
+                                onSelect(index)
+                            },
+                            onPlaySong = viewModel::playSong,
+                            onSearch = onSearch,
+                            onSettings = { onToggleSettings(true) },
+                            onReport = { viewModel.toggleReport(true) },
+                            onReload = { viewModel.reloadLibrary() },
+                            onCycleLayout = { viewModel.setLayout(state.layout.next) },
+    onOpenPlaylists = { showPlaylists = true },
+                             onSortOrder = viewModel::setSortOrder,
+                             onSortDirection = viewModel::setSortDirection,
+                             onAddToPlaylist = { song -> pendingAddSong = song },
+                            scrollerDragging = scrollerDragging,
+                            showCount = showCountLabel
+                        )
+
+                        1 -> PlayerPage(
+                            state = state,
+                            colors = colors,
+                            viewModel = viewModel,
+                            onToggle = onToggle,
+                            onPrev = onPrev,
+                            onNext = onNext,
+                            onSeek = onSeek,
+                            onToggleLike = onToggleLike,
+                            onCyclePlayMode = onCyclePlayMode,
+                            onOpenEqualizer = { showEqualizer = true },
+                            onOpenSleepTimer = { showSleepTimer = true },
+                            eqActive = eqState.active
+                        )
+                    }
                 }
-            }
-            }
-            } // Crossfade
-        }
-
-val scrollerVisible by remember {
-             derivedStateOf { pagerState.currentPage == 0 && !pagerState.isScrollInProgress }
-         }
-         val locateScope = rememberCoroutineScope()
-        if (!state.layout.isDeck) {
-         Column(
-            Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxHeight()
-        ) {
-            Spacer(Modifier.weight(0.335f))
-            Box(Modifier.weight(0.385f)) {
-                val recPoolNotEmpty = if (state.selectedFolders.isEmpty())
-                    state.allSongs.isNotEmpty()
-                else state.allSongs.any { it.folderPath in state.selectedFolders }
-                val headerOffset =
-                    if (recPoolNotEmpty && state.searchQuery.isBlank() && state.showRecommendations) 1 else 0
-                FastScroller(
-                    listState = libraryListState,
-                    colors = colors,
-                    topPadding = 0.dp,
-                    bottomPadding = 0.dp,
-visible = scrollerVisible,
-                     onClick = {
-                         Haptics.tap()
-                         if (state.currentIndex >= 0) {
-                             locateScope.launch { libraryListState.animateScrollToItem(state.currentIndex + headerOffset) }
-                         }
-                     },
-                     labelForIndex = { i ->
-                        state.queue.getOrNull(i - headerOffset)?.title
-                    },
-                    onDraggingChange = { scrollerDragging.value = it }
-                )
-            }
-            Spacer(Modifier.weight(0.28f))
-        }
-        }
-
-        CompositionLocalProvider(LocalIrisBackdrops provides sheetBackdrops) {
-            AnimatedVisibility(
-                visible = state.showSettings,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180)),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                val settingsDrag = rememberSheetDragState()
-                IrisSheet(
-                    colors = colors,
-                    onDismiss = { onToggleSettings(false) },
-                    drag = settingsDrag,
-                    panelModifier = Modifier.heightIn(max = 720.dp)
-                ) {
-                    SettingsPanel(
-                        state = state,
-                        colors = colors,
-                        viewModel = viewModel,
-                        onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
-                        sheetDrag = settingsDrag,
-                        onDismiss = { onToggleSettings(false) }
-                    )
                 }
+                } // Crossfade
             }
 
-            AnimatedVisibility(
-                visible = showPlaylists,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180)),
-                modifier = Modifier.fillMaxSize()
+            // ===== 快速滚动条：挂在根层级、Pager 之上，钉死屏幕右缘且不被页面遮挡 =====
+            // 仅库页显示：翻到播放页或滑动中时隐藏。卡片模式下没有歌单，整条不存在。
+    val scrollerVisible by remember {
+                 derivedStateOf { pagerState.currentPage == 0 && !pagerState.isScrollInProgress }
+             }
+             val locateScope = rememberCoroutineScope()
+             // 行程
+             // 行程：原先居中占屏高 55%（22.5%~77.5%），拇指要伸到很靠上的位置才够。
+            // 顶部再收 20%、底部收 10%（按原行程比例），落到 33.5%~72%，
+            // 行程缩到 38.5% 屏高且整体下移，单手拖动更省力。
+            if (!state.layout.isDeck) {
+             Column(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
             ) {
-                PlaylistSheet(
-                    state = state,
-                    colors = colors,
-                    onDismiss = { showPlaylists = false },
-                    onSelect = { viewModel.selectPlaylist(it) },
-                    onCreate = { name -> viewModel.createPlaylist(name) },
-                    onRename = { id, name -> viewModel.renamePlaylist(id, name) },
-                    onDelete = { viewModel.deletePlaylist(it) }
-                )
-            }
-
-            AnimatedVisibility(
-                visible = pendingAddSong != null,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
-                val song = pendingAddSong
-                if (song != null) {
-                    AddToPlaylistSheet(
-                        song = song,
-                        state = state,
+                Spacer(Modifier.weight(0.335f))
+                Box(Modifier.weight(0.385f)) {
+                    // 推荐区占据 LazyColumn 的 item 0，因此队列索引需要减去该偏移。
+                    // 条件必须与 LibraryPage 里推荐区 item 的渲染条件逐字一致
+                    // （recPool 非空 && 无搜索词 && showRecommendations）——
+                    // 曾因漏掉 showRecommendations：关掉推荐后列表少一个 item 而这里仍按
+                    // 有算，侧边条整体错位一格（气泡显示上一首、定位跳到下一首）。
+                    val recPoolNotEmpty = if (state.selectedFolders.isEmpty())
+                        state.allSongs.isNotEmpty()
+                    else state.allSongs.any { it.folderPath in state.selectedFolders }
+                    val headerOffset =
+                        if (recPoolNotEmpty && state.searchQuery.isBlank() && state.showRecommendations) 1 else 0
+                    FastScroller(
+                        listState = libraryListState,
                         colors = colors,
-                        onDismiss = { pendingAddSong = null },
-                        onCreateAndAdd = { name ->
-                            val id = viewModel.createPlaylist(name)
-                            viewModel.addToPlaylist(id, song.id)
-                            pendingAddSong = null
+                        topPadding = 0.dp,
+                        bottomPadding = 0.dp,
+    visible = scrollerVisible,
+                         onClick = {
+                             Haptics.tap()
+                             if (state.currentIndex >= 0) {
+                                 locateScope.launch { libraryListState.animateScrollToItem(state.currentIndex + headerOffset) }
+                             }
+                         },
+                         labelForIndex = { i ->
+                            state.queue.getOrNull(i - headerOffset)?.title
                         },
-                        onAdd = { pid -> viewModel.addToPlaylist(pid, song.id) },
-                        onRemove = { pid -> viewModel.removeFromPlaylist(pid, song.id) }
+                        onDraggingChange = { scrollerDragging.value = it }
                     )
                 }
+                Spacer(Modifier.weight(0.28f))
+            }
             }
 
-            AnimatedVisibility(
-                visible = showEqualizer,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
-                EqualizerSheet(
-                    state = eqState,
-                    onDismiss = { showEqualizer = false },
-                    onSelectBoost = { EqualizerController.selectBoost(it) },
-                    onToggleLoudness = { EqualizerController.setLoudness(it) },
-                     onLoudnessStrengthChange = { EqualizerController.setLoudnessStrength(it) },
-                    virtualBass = state.virtualBass,
-                    virtualBassStrength = state.virtualBassStrength,
-                    onVirtualBassChange = viewModel::setVirtualBass,
-                    onVirtualBassStrengthChange = viewModel::setVirtualBassStrength,
-                    rangeEnhancer = state.rangeEnhancer,
-                    rangeEnhancerStrength = state.rangeEnhancerStrength,
-                    onRangeEnhancerChange = viewModel::setRangeEnhancer,
-                    onRangeEnhancerStrengthChange = viewModel::setRangeEnhancerStrength,
-                    virtualSurround = state.virtualSurround,
-                    virtualSurroundStrength = state.virtualSurroundStrength,
-                    onVirtualSurroundChange = viewModel::setVirtualSurround,
-                    onVirtualSurroundStrengthChange = viewModel::setVirtualSurroundStrength,
-                    spatialWide = state.spatialWide,
-                    spatialWideStrength = state.spatialWideStrength,
-                    onSpatialWideChange = viewModel::setSpatialWide,
-                    onSpatialWideStrengthChange = viewModel::setSpatialWideStrength,
-                    safeLimiter = state.safeLimiter,
-                    safeLimiterStrength = state.safeLimiterStrength,
-                    onSafeLimiterChange = viewModel::setSafeLimiter,
-                    onSafeLimiterStrengthChange = viewModel::setSafeLimiterStrength,
-                    loudnorm = state.loudnorm,
-                    loudnormStrength = state.loudnormStrength,
-                    onLoudnormChange = viewModel::setLoudnorm,
-                    onLoudnormStrengthChange = viewModel::setLoudnormStrength,
-                    onSetEditMode = { EqualizerController.setEditMode(it) },
-                    onBandLevel = { band, level -> EqualizerController.setBandLevel(band, level) },
-                    onMoveAnchor = { index, freq, gain -> EqualizerController.moveAnchor(index, freq, gain) },
-                    onCommitAnchors = { EqualizerController.commitAnchors() },
-                    onAddAnchor = { freq, gain -> EqualizerController.addAnchor(freq, gain) },
-                    onRemoveAnchor = { EqualizerController.removeAnchor(it) },
-                    onReset = { EqualizerController.reset() },
-                    colors = colors
-                )
-            }
+            // 设置面板 / 均衡器：作为最上层玻璃，折射「背景 + 页面」两层背板
+            CompositionLocalProvider(LocalIrisBackdrops provides sheetBackdrops) {
+                AnimatedVisibility(
+                    visible = state.showSettings,
+                    enter = if (IrisMotion.jelly) {
+                        fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                    } else fadeIn(tween(200)),
+                    exit = fadeOut(tween(180)),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // 拖把手下滑关闭：面板根随手指位移，把手命中在 SettingsPanel 内部
+                    val settingsDrag = rememberSheetDragState()
+                    IrisSheet(
+                        colors = colors,
+                        onDismiss = { onToggleSettings(false) },
+                        drag = settingsDrag,
+                        panelModifier = Modifier.heightIn(max = 720.dp)
+                    ) {
+                        SettingsPanel(
+                            state = state,
+                            colors = colors,
+                            viewModel = viewModel,
+                            onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
+                            sheetDrag = settingsDrag,
+                            onDismiss = { onToggleSettings(false) }
+                        )
+                    }
+                }
 
-            AnimatedVisibility(
-                visible = showSleepTimer,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
-                SleepTimerSheet(
-                    currentMinutes = if (state.sleepTimerMs > 0) (state.sleepTimerMs / 60000).toInt() else 0,
-                    onDismiss = { showSleepTimer = false },
-                    onSetMinutes = { minutes ->
-                        if (minutes > 0) viewModel.setSleepTimer(minutes)
-                        else viewModel.cancelSleepTimer()
-                    },
-                    colors = colors
-                )
-            }
+                // 歌单管理弹层
+                AnimatedVisibility(
+                    visible = showPlaylists,
+                    enter = if (IrisMotion.jelly) {
+                        fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                    } else fadeIn(tween(200)),
+                    exit = fadeOut(tween(180)),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    PlaylistSheet(
+                        state = state,
+                        colors = colors,
+                        onDismiss = { showPlaylists = false },
+                        onSelect = { viewModel.selectPlaylist(it) },
+                        onCreate = { name -> viewModel.createPlaylist(name) },
+                        onRename = { id, name -> viewModel.renamePlaylist(id, name) },
+                        onDelete = { viewModel.deletePlaylist(it) }
+                    )
+                }
 
-            AnimatedVisibility(
-                visible = state.showReport,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
-                ListenReportSheet(
-                    report = state.report,
-                    onDismiss = { viewModel.toggleReport(false) },
-                    onRangeChange = viewModel::setReportRange,
-                    onPlaySong = { id ->
-                        viewModel.playSongById(id)
-                        viewModel.toggleReport(false)
-                    },
-                    colors = colors
-                )
+                // 添加到歌单弹层（长按歌曲触发）
+                AnimatedVisibility(
+                    visible = pendingAddSong != null,
+                    enter = if (IrisMotion.jelly) {
+                        fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                    } else fadeIn(tween(200)),
+                    exit = fadeOut(tween(180))
+                ) {
+                    val song = pendingAddSong
+                    if (song != null) {
+                        AddToPlaylistSheet(
+                            song = song,
+                            state = state,
+                            colors = colors,
+                            onDismiss = { pendingAddSong = null },
+                            onCreateAndAdd = { name ->
+                                val id = viewModel.createPlaylist(name)
+                                viewModel.addToPlaylist(id, song.id)
+                                pendingAddSong = null
+                            },
+                            onAdd = { pid -> viewModel.addToPlaylist(pid, song.id) },
+                            // 移出同样不关弹层：状态实时翻转，可连续操作
+                            onRemove = { pid -> viewModel.removeFromPlaylist(pid, song.id) }
+                        )
+                    }
+                }
+
+                // 均衡器弹层
+                AnimatedVisibility(
+                    visible = showEqualizer,
+                    enter = if (IrisMotion.jelly) {
+                        fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                    } else fadeIn(tween(200)),
+                    exit = fadeOut(tween(180))
+                ) {
+                    EqualizerSheet(
+                        state = eqState,
+                        onDismiss = { showEqualizer = false },
+                        onSelectBoost = { EqualizerController.selectBoost(it) },
+                        onToggleLoudness = { EqualizerController.setLoudness(it) },
+                         onLoudnessStrengthChange = { EqualizerController.setLoudnessStrength(it) },
+                        virtualBass = state.virtualBass,
+                        virtualBassStrength = state.virtualBassStrength,
+                        onVirtualBassChange = viewModel::setVirtualBass,
+                        onVirtualBassStrengthChange = viewModel::setVirtualBassStrength,
+                        rangeEnhancer = state.rangeEnhancer,
+                        rangeEnhancerStrength = state.rangeEnhancerStrength,
+                        onRangeEnhancerChange = viewModel::setRangeEnhancer,
+                        onRangeEnhancerStrengthChange = viewModel::setRangeEnhancerStrength,
+                        virtualSurround = state.virtualSurround,
+                        virtualSurroundStrength = state.virtualSurroundStrength,
+                        onVirtualSurroundChange = viewModel::setVirtualSurround,
+                        onVirtualSurroundStrengthChange = viewModel::setVirtualSurroundStrength,
+                        spatialWide = state.spatialWide,
+                        spatialWideStrength = state.spatialWideStrength,
+                        onSpatialWideChange = viewModel::setSpatialWide,
+                        onSpatialWideStrengthChange = viewModel::setSpatialWideStrength,
+                        safeLimiter = state.safeLimiter,
+                        safeLimiterStrength = state.safeLimiterStrength,
+                        onSafeLimiterChange = viewModel::setSafeLimiter,
+                        onSafeLimiterStrengthChange = viewModel::setSafeLimiterStrength,
+                        loudnorm = state.loudnorm,
+                        loudnormStrength = state.loudnormStrength,
+                        onLoudnormChange = viewModel::setLoudnorm,
+                        onLoudnormStrengthChange = viewModel::setLoudnormStrength,
+                        onSetEditMode = { EqualizerController.setEditMode(it) },
+                        onBandLevel = { band, level -> EqualizerController.setBandLevel(band, level) },
+                        onMoveAnchor = { index, freq, gain -> EqualizerController.moveAnchor(index, freq, gain) },
+                        onCommitAnchors = { EqualizerController.commitAnchors() },
+                        onAddAnchor = { freq, gain -> EqualizerController.addAnchor(freq, gain) },
+                        onRemoveAnchor = { EqualizerController.removeAnchor(it) },
+                        onReset = { EqualizerController.reset() },
+                        colors = colors
+                    )
+                }
+
+                // 睡眠定时器弹层
+                AnimatedVisibility(
+                    visible = showSleepTimer,
+                    enter = if (IrisMotion.jelly) {
+                        fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                    } else fadeIn(tween(200)),
+                    exit = fadeOut(tween(180))
+                ) {
+                    SleepTimerSheet(
+                        currentMinutes = if (state.sleepTimerMs > 0) (state.sleepTimerMs / 60000).toInt() else 0,
+                        onDismiss = { showSleepTimer = false },
+                        onSetMinutes = { minutes ->
+                            if (minutes > 0) viewModel.setSleepTimer(minutes)
+                            else viewModel.cancelSleepTimer()
+                        },
+                        colors = colors
+                    )
+                }
+
+                // 听歌报告弹层：和设置/均衡器同层，折射「背景 + 页面」两层背板
+                AnimatedVisibility(
+                    visible = state.showReport,
+                    enter = if (IrisMotion.jelly) {
+                        fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                    } else fadeIn(tween(200)),
+                    exit = fadeOut(tween(180))
+                ) {
+                    ListenReportSheet(
+                        report = state.report,
+                        onDismiss = { viewModel.toggleReport(false) },
+                        onRangeChange = viewModel::setReportRange,
+                        onPlaySong = { id ->
+                            viewModel.playSongById(id)
+                            viewModel.toggleReport(false)
+                        },
+                        colors = colors
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * 曲库排序栏：上栏卡片的扩展行（与搜索框同级）。
+ *
+ * 交互是"点一下切换"，没有弹出选单——Popup 悬浮层无法折射上栏背板、
+ * 嵌套圆角和主题适配都容易出缝，循环切换从根上没有这些问题：
+ * 左胶囊点击循环 标题→艺术家→时长→修改/添加时间，右胶囊切换 正序/倒序。
+ * 胶囊与搜索框同形：同圆角（IrisShape.item）、同底色、同字号。
+ */
 @Composable
 private fun LibrarySortBar(
     order: SortOrder,
@@ -565,6 +638,7 @@ private fun LibrarySortBar(
     }
 }
 
+// ==================== 列表页 ====================
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LibraryPage(
@@ -585,21 +659,34 @@ private fun LibraryPage(
     onAddToPlaylist: (Song) -> Unit,
     showCount: Boolean = true
 ) {
+    // 上栏高度（px）与当前偏移：上滑跟手滑出屏幕，下滑从任意位置随时拉回
     val density = LocalDensity.current
     val statusBarHeightDp = WindowInsets.statusBars.getTop(density)
-    val barTopGap = 20.dp
-    val barSlotHeight = 84.dp
+    val barTopGap = 20.dp // 上栏距离状态栏底部的间距：贴近顶部，不压到屏幕中间
+    val barSlotHeight = 84.dp // 上栏卡片估算高度（实际由 onSizeChanged 校准），用于给歌单顶部预留空间
+    // 初始估算上栏高度，实际值由 onSizeChanged 更新
     val barHeight = remember { mutableStateOf(with(density) { barSlotHeight.toPx().toInt() }) }
     val barOffset = remember { mutableStateOf(0f) }
 
+    // 歌单列表状态（由外部传入：滚动条挂在根层级共享）
+    // 不再自动滚动到当前播放行：用户在浏览列表时切歌（推荐点歌/自动切歌）不打断浏览位置
+    // 毛玻璃模糊源状态
     val hazeState = remember { HazeState() }
+    // ===== 搜索输入焦点管理 =====
+    // 用户诉求：输入时点任何地方都中断输入（收起键盘、失焦）。
+    // 追踪搜索框是否聚焦 + 它在根坐标下的矩形；页面根层在聚焦期间监听按下，
+    // 落点在搜索框外就 clearFocus()。监听只读不消费，不干扰列表点击/滚动。
     val focusManager = LocalFocusManager.current
     val searchInteraction = remember { MutableInteractionSource() }
     val searchFocused by searchInteraction.collectIsFocusedAsState()
     val searchBounds = remember { mutableStateOf(Rect.Zero) }
+    // ===== 搜索框常驻开关 =====
+    // 关闭常驻后：搜索框收起，点标题「IRIS MUSIC」展开并自动聚焦；
+    // 再点标题收起（有查询词时一并清空回到全库）；聚焦后又闲置且清空了词，几秒后自动收起。
     var searchExpanded by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
     val showSearch = state.searchPersistent || searchExpanded
+    // 展开后自动聚焦（等 TextField 进入组合再请求焦点）
     LaunchedEffect(searchExpanded, state.searchPersistent) {
         if (!state.searchPersistent) {
             if (searchExpanded) {
@@ -608,6 +695,7 @@ private fun LibraryPage(
             }
         }
     }
+    // 闲置自动收起：非展开开关周期内、未聚焦、无查询词 → 4 秒后收起
     LaunchedEffect(searchExpanded, searchFocused, state.searchQuery, state.searchPersistent) {
         if (!state.searchPersistent && searchExpanded && !searchFocused && state.searchQuery.isBlank()) {
             delay(4000)
@@ -618,15 +706,24 @@ private fun LibraryPage(
     val frostedBlur = frostedBlurRadius
     val glass = isLiquidGlass
 
+    // 上栏浮在歌单之上，除了背景还要折射歌单本身——"玻璃下面的歌名被压弯"是最能
+    // 说明这是真玻璃的一处细节。歌单单独录一层背板，上栏取样【外层背板 + 歌单】。
+    // 上栏是歌单的兄弟节点，不在歌单的录制内容里，所以不会互相失效。
     val listBackdrop = rememberIrisBackdrop()
     val outerBackdrops = LocalIrisBackdrops.current
     val barBackdrops = remember(glass, outerBackdrops, listBackdrop) {
         if (glass) outerBackdrops + listBackdrop else emptyList()
     }
 
+    // 上栏隐藏行程：状态栏 + 间距 + 上栏实测高度。
+    // 用 rememberUpdatedState 暴露给下面 remember 出来的连接体：直接让它捕获会锁死首帧值，
+    // 上栏实测高度校准、insets 变化之后行程还是旧的。
     val hideDistancePx = statusBarHeightDp + with(density) { barTopGap.toPx() } + barHeight.value
     val hideDistanceState = rememberUpdatedState(hideDistancePx)
     val barScope = rememberCoroutineScope()
+    // 排序行是上栏的扩展：上栏几乎完整露出（≈90%）才展开，滚走时随上栏收起。
+    // 与搜索框同款"闲置自动收起"：选完排序/方向后短暂停留自动收起，
+    // 上栏完全收起再重新拉出时恢复展开。不占列表条目，滚动条索引不受影响。
     val sortBarExposed by remember {
         derivedStateOf { barOffset.value > -hideDistanceState.value * 0.1f }
     }
@@ -651,6 +748,8 @@ private fun LibraryPage(
         }
     }
 
+    // 滑条拖动（scrollToItem 跳转）不经过嵌套滚动，上栏不会自动跟随。
+    // 拖动中：完全按当前索引实时决定上栏；松手后交由 scrollConnection 的滚动增量驱动
     LaunchedEffect(listState, scrollerDragging.value) {
         if (!scrollerDragging.value) return@LaunchedEffect
         snapshotFlow { listState.firstVisibleItemIndex }
@@ -661,6 +760,9 @@ private fun LibraryPage(
             }
     }
 
+    // 列表真正回到顶部时上栏必须完整露出——这是整套位移逻辑的兜底。
+    // 少了它，任何一次"上栏位移没跟上列表位移"都会把上栏永久留在屏幕外：
+    // 到了顶部，下滑手势归下拉刷新，上栏再没有机会被拉回来。
     LaunchedEffect(listState) {
         snapshotFlow {
             listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
@@ -668,19 +770,30 @@ private fun LibraryPage(
             .distinctUntilChanged()
             .collect { atTop -> if (atTop) settleBarTo(0f) }
     }
+    // 内容不足一屏（搜索只剩几首）时列表根本不能滚，上栏一旦被推走就推不回来
     val listScrollable = listState.canScrollForward || listState.canScrollBackward
     LaunchedEffect(listScrollable) {
         if (!listScrollable && barOffset.value != 0f) settleBarTo(0f)
     }
 
+    // ===== 下拉刷新：橡皮筋位移 + 弹性回弹 =====
+    // 原先位移只喂给指示文字，界面本体不动，所以看着"不跟手"；现在位移直接作用在
+    // 歌单与上栏上（见下方 graphicsLayer），整页跟着手指走。
     val refreshTriggerPx = with(density) { 96.dp.toPx() }
+    // 拉到底的上限：再往下也不动，避免把整页拖出屏幕
     val maxPullPx = refreshTriggerPx * 1.7f
+    // 刷新中内容停在这个位置，露出指示器
     val holdPullPx = refreshTriggerPx * 0.68f
     var refreshOffset by remember { mutableFloatStateOf(0f) }
+    // 刷新序列是否进行中（触发的瞬间置位，回弹归零后复位）。
+    // 圆圈旋转原本只看 state.refreshing：触发后要先弹簧停到指示位（~300ms），
+    // 扫描又快时圆圈"露脸"时 refreshing 已经false——用户看到圆圈整个刷新期间
+    // 一动不动（v4.6.15 修复）。旋转与最短驻留改由这个"held"状态驱动。
     var refreshHeld by remember { mutableStateOf(false) }
     val isRefreshing = state.refreshing
     val pullScope = rememberCoroutineScope()
     var settleJob by remember { mutableStateOf<Job?>(null) }
+    // 回弹用低阻尼 spring：过冲一点再回摆，这才是"Q弹"，直接置 0 是硬切
     suspend fun springOffsetTo(target: Float) {
         Animatable(refreshOffset).animateTo(
             targetValue = target,
@@ -691,9 +804,13 @@ private fun LibraryPage(
         settleJob?.cancel()
         settleJob = pullScope.launch { springOffsetTo(target) }
     }
+    // remember 块里的连接体不能直接读 state.refreshing / onReload：会永远拿到首帧的值
     val refreshingState = rememberUpdatedState(state.refreshing)
     val reloadState = rememberUpdatedState(onReload)
     val heldState = rememberUpdatedState(refreshHeld)
+    // 统一触发：置 held（圆圈立即开始转）、弹簧停在指示位、驻留到扫描结束
+    // 且至少转满一圈，再回弹。慢速松手与甩动两条触发路径都走这里；
+    // reloadLibrary 自带 refreshing 去重，双路径先后调用也只刷一次。
     val runRefresh: () -> Unit = {
         settleJob?.cancel()
         refreshHeld = true
@@ -707,6 +824,8 @@ private fun LibraryPage(
         }
     }
     val runRefreshState = rememberUpdatedState(runRefresh)
+    // 慢速松手兜底：拖过阈值后缓慢释放不产生 fling，onPreFling 根本不会被调——
+    // 位移晾在半空、不触发也不回弹（"圆圈不转"的主根因）。列表停止滚动时统一收尾。
     LaunchedEffect(Unit) {
         snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
@@ -720,6 +839,14 @@ private fun LibraryPage(
             }
     }
 
+    // 下拉位移与上栏位移合并进同一个连接。
+    // 拆成两个 nestedScroll 时，同一段手势会被两边各消化一次：下拉时上栏收到同样的
+    // 增量，于是"下拉过程中往上滑，上栏跟着一起飞上去"。合并后每段手势只有一个归属。
+    //
+    // 上栏位移的驱动源是【列表真正消费掉的位移】(onPostScroll)，不是手势原始增量。
+    // 用原始增量会失衡：列表到底/到顶还硬拖时列表不动、上栏却继续走，一段手势下来
+    // 上栏比内容多走一截；等滑回顶部时上栏还差这一截没露出来，而顶部的下滑手势已经
+    // 归下拉刷新，上栏就永久卡在屏幕外了。按消费量走，隐藏与拉回天然对称。
     val scrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -727,6 +854,9 @@ private fun LibraryPage(
                 if (delta == 0f) return Offset.Zero
                 val byFinger = source == NestedScrollSource.UserInput
 
+                // 1) 已经拉出下拉位移：这段手势先把位移收回，不传给列表也不动上栏。
+                //    held（刷新序列进行中）时不放行：cancel 会杀掉驱动协程，
+                //    位移与 held 状态都会卡在半途。
                 if (byFinger && refreshOffset > 0f && delta < 0f && !heldState.value) {
                     settleJob?.cancel()
                     val consumed = delta.coerceAtLeast(-refreshOffset)
@@ -734,13 +864,17 @@ private fun LibraryPage(
                     return Offset(0f, consumed)
                 }
 
+                // 2) 下滑且列表已在顶部：列表没法再吃这段位移，由上栏和下拉接手
                 if (delta > 0f && !listState.canScrollBackward) {
+                    // 2a) 上栏还没露全：先把它拉回来。这段自己消费掉，
+                    //     否则会同时触发列表的 overscroll 拉伸与下拉刷新
                     if (barOffset.value < 0f) {
                         barSettleJob?.cancel()
                         val used = delta.coerceAtMost(-barOffset.value)
                         barOffset.value += used
                         return Offset(0f, used)
                     }
+                    // 2b) 上栏已归位：橡皮筋下拉，越拉越沉（惯性阶段不触发刷新）
                     if (byFinger && !heldState.value) {
                         settleJob?.cancel()
                         val resistance = (1f - refreshOffset / maxPullPx).coerceIn(0.15f, 1f)
@@ -749,7 +883,7 @@ private fun LibraryPage(
                     }
                 }
 
-                return Offset.Zero
+                return Offset.Zero // 不消费，列表正常滚动，上栏交给 onPostScroll
             }
 
             override fun onPostScroll(
@@ -757,9 +891,20 @@ private fun LibraryPage(
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
+                // 上栏跟随列表实际滚动量：上滑滑出、下滑拉回。
+                // consumed 只含列表自己吃掉的量（不含 onPreScroll 的消费，也不含 overscroll
+                // 拉伸），所以到底/到顶硬拖时上栏不会白走一截。惯性阶段同样计入，
+                // 否则 fling 时列表飞很远而上栏停着，松手后两者位置就对不上了。
                 val delta = consumed.y
                 if (delta == 0f) return Offset.Zero
                 if (delta > 0f) {
+                    // 下滑露出上栏。区分手指与惯性：
+                    // - 手指主动下拉（UserInput）：任何位置都一次性动画完整滑出。
+                    //   之前按列表消费量逐帧累加，列表在中间能一直回滚吃掉位移，
+                    //   上栏每帧只涨一点，单次手势拉不满——得连拉几次才全露。改成
+                    //   检测到手指下拉就 settle 到 0，一拉到底。
+                    // - fling 惯性：仅在接近顶部（前两条内）才跟手，否则一次长距离甩动会把
+                    //   上栏在列表还远没到顶时就整块拉出来提前遮挡内容。
                     val byFinger = source == NestedScrollSource.UserInput
                     if (byFinger) {
                         if (barOffset.value < 0f && barSettleJob?.isActive != true) settleBarTo(0f)
@@ -768,6 +913,7 @@ private fun LibraryPage(
                         barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
                     }
                 } else {
+                    // 上滑隐藏：任何位置都 1:1 收起，保证滚动时不挡内容
                     barSettleJob?.cancel()
                     barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
                 }
@@ -781,14 +927,21 @@ private fun LibraryPage(
                 } else if (!refreshingState.value && !heldState.value) {
                     settleTo(0f)
                 }
+                // 吃掉这段惯性：位移已经消化了手势，再让列表 fling 会突然一跳
                 return Velocity(0f, available.y)
             }
         }
     }
+    // 回弹全部由 onPreFling 里那个协程负责（先停在指示位、等刷新结束再弹回）。
+    // 这里不再放 LaunchedEffect(refreshing)：两个 Animatable 同时驱动同一个位移会互相打架。
+
 
     Box(
         Modifier
             .fillMaxSize()
+            // 聚焦监听：仅搜索框聚焦时重启生效。按下落在搜索框外就 clearFocus() 收键盘。
+            // 不消费事件——点列表项照常选中/播放，同时收起键盘（输入完点歌的直觉行为）；
+            // 点空白处则单纯收键盘。落点在框内不动作，保持编辑。
             .pointerInput(searchFocused) {
                 if (!searchFocused) return@pointerInput
                 awaitEachGesture {
@@ -797,11 +950,16 @@ private fun LibraryPage(
                 }
             }
     ) {
+        // 推荐候选池：跟随选中文件夹。解释卡用的池必须与打分的池同一个，
+        // 否则"排名靠前"的口径会和实际排序对不上。
+        // 算在 LazyColumn 之外——LazyListScope 的 content 不是 Composable 上下文，
+        // 里面不能用 remember。
         val recPool = remember(state.allSongs, state.selectedFolders) {
             val sel = state.selectedFolders
             if (sel.isEmpty()) state.allSongs
             else state.allSongs.filter { it.folderPath in sel }
         }
+        // ===== 歌单：毛玻璃模糊源，同时作为上栏的折射背板 =====
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -811,17 +969,25 @@ private fun LibraryPage(
                     else if (frosted) Modifier.haze(state = hazeState, style = HazeStyle(blurRadius = frostedBlur))
                     else Modifier
                 )
+                // 下拉位移作用在歌单本体上，整列跟着手指走。
+                // 放在背板/haze 之后（内层）：录进背板层的是已位移的内容，
+                // 玻璃取样时才不会和屏幕上看到的错位。
                 .graphicsLayer { translationY = refreshOffset }
                 .nestedScroll(scrollConnection),
             verticalArrangement = Arrangement.spacedBy(6.dp),
             contentPadding = PaddingValues(
                 start = 22.dp, end = 22.dp,
+                // 预留上栏空间（状态栏 + barTopGap + 上栏实际高度），第一条歌单不被遮挡
+                // barHeight 由 onSizeChanged 实时校准，预留空间自动跟随
                 top = with(density) { statusBarHeightDp.toDp() + barTopGap + barHeight.value.toDp() + 8.dp },
                 bottom = 50.dp
             )
         ) {
+            // 推荐区：候选池非空即显示（池跟随选中文件夹），可在设置里关掉
             if (recPool.isNotEmpty() && state.searchQuery.isBlank() && state.showRecommendations) {
                 item {
+                    // Crossfade 必须让 targetState 携带数据本身，否则淡出的旧内容
+                    // 会读到已更新的 state.recommendations，看不出过渡效果。
                     Crossfade(
                         targetState = state.recommendationsVersion to state.recommendations,
                         animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut),
@@ -835,6 +1001,7 @@ private fun LibraryPage(
                                 onSelect = onPlaySong
                             )
                         } else {
+                            // 后台计算中，显示占位
                             Box(
                                 Modifier.fillMaxWidth().height(60.dp),
                                 contentAlignment = Alignment.Center
@@ -864,6 +1031,11 @@ private fun LibraryPage(
             }
         }
 
+        // ===== 快速滚动条：已移到 MainScreen 根层级（见下方），此处移除 =====
+
+        // ===== 下拉刷新指示器 =====
+        // 落在「状态栏底部 ↔ 上栏顶边」这段随下拉张开的空隙正中，
+        // 所以它不会被跟着下移的上栏压住。
         val refreshProgress = (refreshOffset / refreshTriggerPx).coerceIn(0f, 1f)
         if (refreshOffset > 0.5f) {
             val spin by rememberInfiniteTransition(label = "pullSpin").animateFloat(
@@ -881,15 +1053,19 @@ private fun LibraryPage(
                     }
                     .graphicsLayer {
                         alpha = refreshProgress
+                        // 到阈值前随进度长大，过阈值轻微过冲，给一点"胀开"的手感
                         val s = 0.6f + 0.5f * refreshProgress
                         scaleX = s; scaleY = s
                     },
                 contentAlignment = Alignment.Center
             ) {
                 Canvas(Modifier.size(26.dp)) {
+                    // 不能写 2.6f * density：外层 LibraryPage 里有个同名的 Density 局部变量，
+                    // 会盖住 DrawScope 自己的 density（Float），乘法解析不出来。
                     val stroke = 2.6.dp.toPx()
                     val inset = stroke / 2f
                     val arcSize = Size(size.width - stroke, size.height - stroke)
+                    // 底环
                     drawArc(
                         color = colors.primary.copy(alpha = 0.18f),
                         startAngle = 0f, sweepAngle = 360f, useCenter = false,
@@ -900,6 +1076,8 @@ private fun LibraryPage(
                             cap = androidx.compose.ui.graphics.StrokeCap.Round
                         )
                     )
+                    // 进度弧：刷新序列中（held，含扫描已完成但仍在最短驻留期）改成定长弧持续旋转。
+                    // 只看 state.refreshing 会因"扫描快于动画"整场不转（v4.6.15 修复）。
                     val spinning = isRefreshing || refreshHeld
                     drawArc(
                         color = colors.primary,
@@ -917,7 +1095,12 @@ private fun LibraryPage(
             }
         }
 
+        // ===== 上栏：覆盖层 =====
+        // 整体下移：状态栏下方 barTopGap 处开始，不贴顶部、不盖摄像头
+        // tint 压暗/提亮：深色主题压暗、浅色主题提亮，保证与歌单的边界可读性
+        // 玻璃模式下上栏走真折射（取样背景 + 歌单），不再叠 haze 与额外 tint
         val barTint = if (colors.isDark) Color.Black.copy(alpha = 0.38f) else Color.White.copy(alpha = 0.5f)
+        // 折射背板要在 Modifier 链外先算好：glassSurface 是 @Composable，不能写在 .then{} 里
         val barGlass = if (glass) {
             Modifier.glassSurface(
                 spec = GlassLevel.CARD.currentSpec(colors),
@@ -927,6 +1110,12 @@ private fun LibraryPage(
         } else Modifier
         Column(
             Modifier
+                // 横屏窄化：上栏玻璃与横屏播放卡片同宽（LANDSCAPE_BAR_MAX_WIDTH
+                // 已含玻璃外 22dp padding 的补偿）；竖屏 fillMaxWidth 原样。
+                // ⚠ 封顶必须在 fillMaxWidth 之外（先 widthIn 再 fillMaxWidth）：
+                // 反过来写 fillMaxWidth 会先把外层尺寸定成整屏、minWidth 抵消封顶
+                // （同款教训见本页播放卡片注释），上栏变成整屏宽、玻璃靠左，
+                // 与居中的 680 播放卡片完全对不齐。
                 .then(
                     if (LocalConfiguration.current.orientation ==
                         android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -936,12 +1125,16 @@ private fun LibraryPage(
                 .align(Alignment.TopCenter)
                 .offset(y = with(density) { statusBarHeightDp.toDp() + barTopGap })
                 .onSizeChanged { barHeight.value = it.height }
+                // 上栏跟着下拉一起走，界面整体是一块在动；
+                // 系数 0.55 让它比歌单慢一点，两层之间张开一点视差空隙给指示器
                 .graphicsLayer { translationY = barOffset.value + refreshOffset * 0.55f }
         ) {
+            // 卡片：毛玻璃背景贴合内容（22dp 水平 padding 内），不超出内容区域
             Box(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 22.dp)
+                    // 搜索框需要接收完整点击/拖动，不能由上栏外层统一消费触摸。
                      .then(
                         if (glass) {
                             barGlass
@@ -962,12 +1155,14 @@ private fun LibraryPage(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
+                // 标题行
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically,
+                        // 搜索框收起时点标题展开；已展开时再点收起（有词则清空回全库）
                         modifier = Modifier
                             .clip(IrisShape.item)
                             .clickable(
@@ -985,6 +1180,12 @@ private fun LibraryPage(
                                 }
                             }
                     ) {
+                        // 没人保证它在上栏底上可读。黑白主题的辅色两边都翻车——浅色模式是
+                        // 纯白落在白上栏、深色模式是纯黑落在近黑上栏，对比度都在 1.1 以下。
+                        // 基准取 colors.surface：实色模式就是上栏底色；玻璃/毛玻璃下底是半透明的，
+                        // 实际会更偏背景色，按不透明底算属于偏保守，宁可修多一点。
+                        // 用默认 4.5（正文级）而不是大字号的 3.0：黑白主题修到刚过 3.0 只能得到
+                        // 一个发灰的 #8D8D8D，标题该有的力度撑不住。
                         val wordPrimary = colors.primary.readableOn(colors.surface)
                         val wordSecondary = colors.secondary.readableOn(colors.surface)
                         Text("IRIS", color = wordPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
@@ -1002,6 +1203,7 @@ private fun LibraryPage(
                     }
                 }
 
+                // 排序行：上栏的扩展，上栏基本露出后才展开，随上栏收起
                 AnimatedVisibility(
                     visible = sortBarVisible,
                     enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
@@ -1026,6 +1228,8 @@ private fun LibraryPage(
                     }
                 }
 
+                // 搜索框：灰底 + 放大镜图标，简约统一
+                // 液态玻璃下改半透明底，否则实色方块会把整条玻璃切成两半
                 val searchBg = if (glass) {
                     if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
                 } else {
@@ -1044,6 +1248,7 @@ private fun LibraryPage(
                     onValueChange = onSearch,
                     singleLine = true,
                     interactionSource = searchInteraction,
+                    // 记录搜索框在根坐标下的矩形，供聚焦期"点框外收键盘"判定
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(searchFocusRequester)
@@ -1053,6 +1258,7 @@ private fun LibraryPage(
                     leadingIcon = {
                         Canvas(Modifier.size(15.dp)) {
                             val r = size.minDimension * 0.32f
+                            // 圆心略微偏左上，让手柄指向右下，视觉居中
                             val cx = size.width * 0.38f
                             val cy = size.height * 0.38f
                             drawCircle(
@@ -1086,6 +1292,7 @@ private fun LibraryPage(
                     }
                 }
 
+                // 计数：启动后显示 4 秒自动隐藏（showCount 由根层级控制），淡出后收回高度
                 AnimatedVisibility(
                     visible = showCount,
                     enter = fadeIn(tween(300)) + expandVertically(tween(300)),
@@ -1118,6 +1325,8 @@ private fun LibraryPage(
     }
 }
 
+// ==================== 播放器页 ====================
+
 @Composable
 private fun PlayerPage(
     state: PlayerUiState,
@@ -1131,15 +1340,23 @@ private fun PlayerPage(
     onCyclePlayMode: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onOpenSleepTimer: () -> Unit,
+    /** 均衡器曲线是否非全平，决定副控制行里那枚推子图标点不点亮 */
     eqActive: Boolean
 ) {
+    // 歌词弹层状态
     var showLyrics by remember { mutableStateOf(false) }
     var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricLoading by remember { mutableStateOf(false) }
 
+    // 歌词层比根层级的那些弹层更靠内：它开着时先关它，不要退出应用。
+    // 这个 BackHandler 注册得比 MainScreen 根部那个晚，因此优先级更高，
+    // 正好匹配它在视觉上更靠上的层级。
     BackHandler(enabled = showLyrics) { showLyrics = false }
     val scope = rememberCoroutineScope()
+    // 歌词层当前显示的歌词属于哪个文件：用于"开着歌词层切歌"时判断需要重新加载。
     var lyricPath by remember { mutableStateOf<String?>(null) }
+    // 歌词层开着时自动切歌：旧词必须跟着走，否则整屏还停在上一首。
+    // 路径一变先清空再按新歌重解析（LyricParser 自带缓存，重复加载只走内存）。
     LaunchedEffect(showLyrics, state.currentSong?.filePath, state.durationMs) {
         val path = state.currentSong?.filePath
         if (showLyrics && !path.isNullOrBlank() && path != lyricPath) {
@@ -1156,17 +1373,22 @@ private fun PlayerPage(
             }
         }
     }
+    // 歌词弹层毛玻璃：PlayerPage 作为模糊源，弹层作为模糊子层
     val lyricsHazeState = remember { HazeState() }
     val glass = isLiquidGlass
     val frosted = isFrostedGlass
     val frostedBlur = frostedBlurRadius
 
+    // 歌词层浮在播放卡片之上，要折射「背景 + 卡片」两层。卡片单独录一层背板，
+    // 歌词层是它的兄弟节点，取样方向单向，不会互相触发重绘。
     val cardBackdrop = rememberIrisBackdrop()
     val outerBackdrops = LocalIrisBackdrops.current
     val lyricsBackdrops = remember(glass, outerBackdrops, cardBackdrop) {
         if (glass) outerBackdrops + cardBackdrop else emptyList()
     }
 
+    // 点击封面：读取歌词（内嵌优先，其次同名 .lrc）并弹出
+    // try-catch 防止文件IO异常崩溃；filePath 非空检查避免无效路径
     val onClickArtwork: () -> Unit = {
         val song = state.currentSong
         if (song != null && song.filePath.isNotBlank()) {
@@ -1180,6 +1402,7 @@ private fun PlayerPage(
                     lyricPath = song.filePath
                     showLyrics = true
                 } catch (_: Exception) {
+                    // 文件读取异常（路径不存在、权限问题等）静默忽略
                 } finally {
                     lyricLoading = false
                 }
@@ -1188,6 +1411,10 @@ private fun PlayerPage(
     }
 
     Box(Modifier.fillMaxSize()) {
+        // 播放卡片：毛玻璃模糊源 / 歌词层的折射背板
+        // 横屏窄化只在 PlayerCard 内部单层封顶（LANDSCAPE_PLAYER_MAX_WIDTH），
+        // 外层不再封顶——双层套娃会把卡片压得比封顶值还窄一圈，
+        // 和 CAROUSEL/STACK 横屏的宽度对不齐。列本身水平居中即可。
         Column(
             Modifier
                 .fillMaxSize()
@@ -1223,6 +1450,9 @@ private fun PlayerPage(
                 liked = state.currentSong?.id in state.likedSongIds,
                 onClickArtwork = onClickArtwork,
                 colors = colors,
+                // 宽度完全交给 PlayerCard 内部决定（横屏封顶居中 / 竖屏铺满）。
+                // 这里绝不能传 fillMaxWidth——它在 widthIn(max) 之前设置
+                // minWidth=屏宽，封顶会被抵消，横屏卡片又变回整屏宽。
                 modifier = Modifier,
                 sleepTimerMs = state.sleepTimerMs,
                 sleepTimerEndMs = state.sleepTimerEndMs,
@@ -1238,6 +1468,7 @@ visualizerEnabled = state.visualizerEnabled,
               )
         }
 
+        // 歌词弹层：毛玻璃背景 + 滚动歌词
         if (showLyrics) {
             LyricsOverlay(
                 lines = lyricLines,
@@ -1264,6 +1495,10 @@ visualizerEnabled = state.visualizerEnabled,
     }
 }
 
+/** 全屏歌词覆盖层：毛玻璃背景，当前行高亮，随播放进度滚动 */
+// 歌词专用缓动：起步利落、尾部长长地缓缓收住（easeOutQuint 风格贝塞尔）。
+// 比对称的 EaseInOutCubic 更"丝滑"——换行不是机械地加速又减速，
+// 而是干脆起步后优雅滑停，这是苹果那类歌词页顺滑感的关键。
 private val LyricEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 private const val LYRIC_ANIM_MS = 620
 
@@ -1298,6 +1533,8 @@ internal fun LyricsOverlay(
         1 -> FontFamily.Serif
         else -> FontFamily.SansSerif
     }
+    // 横屏：高度矮，且刘海/挖孔多在左侧——靠左时给更大的左边距避开，
+    // 同时压缩列表上下留白、隐藏底部提示，把纵向空间尽量还给歌词。
     val isLand = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val onCard = if (colors.isDark) Color.White else Color.Black
@@ -1580,11 +1817,6 @@ internal fun LyricsOverlay(
     }
 }
 
-/**
- * 逐字点亮的当前行：支持渐变色流光的完美版。
- * 已唱部分如果是渐变色，利用 Compose 的 lerp 算好当前扫光前沿的插值色，
- * 这样不仅进度跟手，颜色过渡也自然，绝不用纯色替代。
- */
 @Composable
 private fun KaraokeLine(
     line: LyricLine,
@@ -1631,7 +1863,6 @@ private fun KaraokeLine(
     val start = (center - half).coerceIn(0f, 1f)
     val end = (center + half).coerceIn(0f, 1f)
     
-    // 关键修复：确保所有分支返回的都是 Brush 类型，而不是混用 Color
     val sweep: Brush = if (end <= start) {
         if (frac >= 0.5f) {
             if (lyricUseCustomColor) SolidColor(themePrimary) else SolidColor(originalColor)
@@ -1642,7 +1873,6 @@ private fun KaraokeLine(
         val stops = buildList {
             if (lyricUseCustomColor) {
                 add(0f to themePrimary)
-                // 光带前沿的颜色是主色和次色的过渡色
                 if (start > 0f) {
                     val startColor = lerp(themePrimary, themeSecondary, start)
                     add(start to startColor)
@@ -1682,6 +1912,7 @@ private fun KaraokeLine(
         )
     )
 }
+
 @Composable
 internal fun SettingsButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
     Box(
