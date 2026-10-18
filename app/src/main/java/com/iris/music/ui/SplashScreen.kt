@@ -9,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -70,103 +69,88 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
             },
         contentAlignment = Alignment.Center
     ) {
-        val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-        // 用一个比较大的初始容器，实际绘制时在里面等比缩放
-        val helloW = screenWidth * 0.9f
-        val helloH = helloW / 2.5f 
-
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.graphicsLayer {
-                alpha = 1f - (exitProgress.value * 1.5f).coerceIn(0f, 1f)
-                val textScale = 1f + (exitProgress.value * 0.15f)
-                scaleX = textScale
-                scaleY = textScale
-            }
-        ) {
-            Canvas(
-                Modifier
-                    .size(helloW, helloH)
-                    .graphicsLayer {
-                        translationY = when (style) {
-                            1 -> 20.dp.toPx()
-                            2 -> -20.dp.toPx()
-                            else -> 0f
-                        }
-                    }
-            ) {
-                val fullPath = buildHelloPath(size.width, size.height, 0f, 0f)
-                val bounds = fullPath.getBounds()
+        Canvas(Modifier.fillMaxSize()) {
+            // 1. 将原来的路径按屏幕宽度 80% 建一个基准画布
+            val baseW = size.width * 0.85f
+            val baseH = baseW / 3.45f // 原比例
+            
+            val fullPath = buildHelloPath(baseW, baseH, 0f, 0f)
+            val bounds = fullPath.getBounds()
+            
+            if (bounds.width > 0 && bounds.height > 0) {
+                // 2. 按真实边界缩放，并强制留足 80% 边距
+                val scale = min(
+                    (size.width * 0.8f) / bounds.width,
+                    (size.height * 0.8f) / bounds.height
+                )
                 
-                if (bounds.width > 0 && bounds.height > 0) {
-                    // 核心修复：获取路径真实边界，按比例缩放到画布 80% 并居中
-                    // 彻底解决控制点超出 0~1 范围导致的截断
-                    val paddingFactor = 0.8f
-                    val scale = min(
-                        (size.width * paddingFactor) / bounds.width,
-                        (size.height * paddingFactor) / bounds.height
-                    )
-                    val dx = (size.width - bounds.width * scale) / 2f - bounds.left * scale
-                    val dy = (size.height - bounds.height * scale) / 2f - bounds.top * scale
+                // 3. 计算绝对居中偏移
+                val dx = (size.width - bounds.width * scale) / 2f - bounds.left * scale
+                val dy = (size.height - bounds.height * scale) / 2f - bounds.top * scale
 
-                    withTransform({
-                        scale(scale, scale, pivot = Offset.Zero)
-                        translate(dx / scale, dy / scale)
-                    }) {
-                        val measure = PathMeasure().apply { setPath(fullPath, false) }
-                        val totalLen = measure.length
-                        val trimmedLen = totalLen * drawProgress.value
+                withTransform({
+                    scale(scale, scale, pivot = Offset.Zero)
+                    translate(dx / scale, dy / scale)
+                    // 4. 各模式的相对位置微调（全部在内部完成，绝不跑出全屏 Canvas）
+                    when (style) {
+                        1 -> translate(0f, 120f / scale) // 温柔：文字往下走，给上方 MUSIC 留空
+                        2 -> translate(0f, -120f / scale) // 细腻：文字往上走，给右下 music 留空
+                    }
+                }) {
+                    val measure = PathMeasure().apply { setPath(fullPath, false) }
+                    val totalLen = measure.length
+                    val trimmedLen = totalLen * drawProgress.value
 
-                        if (trimmedLen > 0f) {
-                            val segPath = Path()
-                            measure.getSegment(0f, trimmedLen, segPath, true)
+                    if (trimmedLen > 0f) {
+                        val segPath = Path()
+                        measure.getSegment(0f, trimmedLen, segPath, true)
 
-                            val colors = when (style) {
-                                1 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFFFF7EB6))
-                                2 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFF9D4EDD))
-                                else -> arrayOf(0f to Color.Red, 0.5f to Color.Blue, 1f to Color.Green)
-                            }
-
-                            drawPath(
-                                path = segPath,
-                                brush = Brush.verticalGradient(
-                                    *colors,
-                                    startY = bounds.top,
-                                    endY = bounds.bottom
-                                ),
-                                style = Stroke(
-                                    width = 10.dp.toPx(),
-                                    cap = StrokeCap.Round,
-                                    join = StrokeJoin.Round
-                                )
-                            )
+                        val colors = when (style) {
+                            1 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFFFF7EB6))
+                            2 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFF9D4EDD))
+                            else -> arrayOf(0f to Color.Red, 0.5f to Color.Blue, 1f to Color.Green)
                         }
+
+                        drawPath(
+                            path = segPath,
+                            brush = Brush.verticalGradient(
+                                *colors,
+                                startY = bounds.top,
+                                endY = bounds.bottom
+                            ),
+                            style = Stroke(
+                                width = 10.dp.toPx() / scale, // 抵消缩放造成的线条变细
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round
+                            )
+                        )
                     }
                 }
             }
+        }
 
-            if (style == 1) {
-                Text(
-                    text = "M U S I C",
-                    color = textColor.copy(alpha = 0.6f * drawProgress.value),
-                    fontSize = 16.sp,
-                    fontFamily = FontFamily.Serif,
-                    letterSpacing = 8.sp,
-                    modifier = Modifier.offset(y = (-85).dp)
-                )
-            }
+        // 外部文字，基于屏幕整体居中再偏移
+        if (style == 1) {
+            Text(
+                text = "M U S I C",
+                color = textColor.copy(alpha = 0.6f * drawProgress.value),
+                fontSize = 16.sp,
+                fontFamily = FontFamily.Serif,
+                letterSpacing = 8.sp,
+                modifier = Modifier.offset(y = (-110).dp)
+            )
+        }
 
-            if (style == 2) {
-                Text(
-                    text = "music",
-                    color = if (isDark) Color(0xFF9D4EDD).copy(alpha = 0.7f * drawProgress.value) 
-                            else Color(0xFF7B2CBF).copy(alpha = 0.7f * drawProgress.value),
-                    fontSize = 28.sp,
-                    fontFamily = FontFamily.Serif,
-                    fontStyle = FontStyle.Italic,
-                    modifier = Modifier.offset(x = 80.dp, y = 60.dp)
-                )
-            }
+        if (style == 2) {
+            Text(
+                text = "music",
+                color = if (isDark) Color(0xFF9D4EDD).copy(alpha = 0.7f * drawProgress.value) 
+                        else Color(0xFF7B2CBF).copy(alpha = 0.7f * drawProgress.value),
+                fontSize = 28.sp,
+                fontFamily = FontFamily.Serif,
+                fontStyle = FontStyle.Italic,
+                modifier = Modifier.offset(x = 80.dp, y = 100.dp)
+            )
         }
     }
 }
