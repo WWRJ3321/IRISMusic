@@ -238,7 +238,10 @@ data class PlayerUiState(
     /** 悬浮歌词自定义主色 */
     val floatLyricCustomPrimary: Long = 0xFF00F0FFL,
     /** 悬浮歌词自定义次色 */
-    val floatLyricCustomSecondary: Long = 0xFFFF2E97L
+    val floatLyricCustomSecondary: Long = 0xFFFF2E97L,
+
+    /** 启动动画：每次冷启动都播放 Hello 书写动画（关则不播） */
+    val splashEnabled: Boolean = true
 ) {
     val currentSong: Song? get() = queue.getOrNull(currentIndex)
 
@@ -332,7 +335,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             floatLyricFixMode = prefs.getInt(FloatingLyric.KEY_FIX_MODE, 0),
             floatLyricTheme = runCatching { IrisTheme.valueOf(prefs.getString(FloatingLyric.KEY_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO),
             floatLyricCustomPrimary = prefs.getLong(FloatingLyric.KEY_CUSTOM_PRIMARY, 0xFF00F0FFL),
-            floatLyricCustomSecondary = prefs.getLong(FloatingLyric.KEY_CUSTOM_SECONDARY, 0xFFFF2E97L)
+            floatLyricCustomSecondary = prefs.getLong(FloatingLyric.KEY_CUSTOM_SECONDARY, 0xFFFF2E97L),
+
+            splashEnabled = prefs.getBoolean(KEY_SPLASH_ENABLED, true)
         )
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -901,6 +906,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setJellyAnim(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_JELLY_ANIM, enabled).apply()
         _state.value = _state.value.copy(jellyAnim = enabled)
+    }
+
+    fun setSplashEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SPLASH_ENABLED, enabled).apply()
+        _state.value = _state.value.copy(splashEnabled = enabled)
     }
 
     fun setSilenceSkip(enabled: Boolean) {
@@ -1564,5 +1574,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_LYRIC_THEME = "lyric_theme"
         const val KEY_LYRIC_CUSTOM_PRIMARY = "lyric_custom_primary"
         const val KEY_LYRIC_CUSTOM_SECONDARY = "lyric_custom_secondary"
+        const val KEY_SPLASH_ENABLED = "splash_enabled"
     }
 }
