@@ -1,9 +1,11 @@
 package com.iris.music.ui
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,8 +15,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -23,7 +25,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import com.iris.music.data.DataTransfer
 import com.iris.music.playback.FloatingLyric
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
@@ -39,252 +40,243 @@ internal fun NewSettingsPanel(
     onDismiss: () -> Unit
 ) {
     val scrollState = rememberScrollState()
-    val panelContext = LocalContext.current
     val headerColor = colors.primary.readableOn(colors.surface, 3.5f)
     val groupBg = if (colors.isDark) Color(0xFF1A1A1E) else Color(0xFFF2F2F6)
 
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .weight(1f, fill = false)
-            .verticalScroll(scrollState)
-            .padding(horizontal = 16.dp)
-    ) {
-        SheetDragHandle(sheetDrag, onDismiss, colors.card)
-        Spacer(Modifier.height(14.dp))
-        Text("设置", color = colors.text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(16.dp))
+    Column(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp)
+        ) {
+            SheetDragHandle(sheetDrag, onDismiss, colors.card)
+            Spacer(Modifier.height(14.dp))
+            Text("设置", color = colors.text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
 
-        // ==================== 外观 ====================
-        Text("外观", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-        Column(Modifier.clip(RoundedCornerShape(16.dp)).background(groupBg)) {
-            
-            // 明暗模式
-            NewSettingRowArrow(
-                title = "明暗模式",
-                value = when (state.mode) {
-                    IrisMode.DARK -> "深色模式"
-                    IrisMode.LIGHT -> "亮色模式"
-                    IrisMode.AUTO -> "跟随系统"
-                },
-                colors = colors
-            ) { showDialog ->
-                SelectionDialog(
-                    title = "明暗模式",
-                    options = listOf("深色模式", "亮色模式", "跟随系统"),
-                    selectedIndex = state.mode.ordinal,
-                    onDismiss = { showDialog.value = false },
-                    onSelect = { index ->
-                        viewModel.setMode(IrisMode.entries[index])
-                        showDialog.value = false
-                    }
-                )
-            }
-            
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            // 主题
-            NewSettingRowArrow(
-                title = "主题",
-                value = state.theme.label,
-                colors = colors
-            ) { showDialog ->
-                SelectionDialog(
-                    title = "主题",
-                    options = listOf("黑白", "深海蓝", "青草绿", "自定义"),
-                    selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
-                    onDismiss = { showDialog.value = false },
-                    onSelect = { index ->
-                        viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
-                        showDialog.value = false
-                    }
-                )
-            }
-
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            // 材质分级
-            NewSettingRowArrow(
-                title = "材质分级",
-                value = when (state.surfaceStyle) {
-                    IrisSurfaceStyle.SOLID -> "实色"
-                    IrisSurfaceStyle.FROSTED -> "毛玻璃"
-                    IrisSurfaceStyle.LIQUID -> "液态玻璃"
-                },
-                subtitle = "提供完整的液态玻璃和光感视效",
-                colors = colors
-            ) { showDialog ->
-                SelectionDialog(
-                    title = "材质分级",
-                    options = listOf("实色", "毛玻璃", "液态玻璃"),
-                    selectedIndex = IrisSurfaceStyle.entries.indexOf(state.surfaceStyle),
-                    onDismiss = { showDialog.value = false },
-                    onSelect = { index ->
-                        viewModel.setSurfaceStyle(IrisSurfaceStyle.entries[index])
-                        showDialog.value = false
-                    }
-                )
-            }
-
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            // 背景模糊 (用弹窗Slider)
-            var showBgBlur by remember { mutableStateOf(false) }
-            NewSettingRowArrow(
-                title = "背景模糊",
-                value = "${state.bgBlur.toInt()}dp",
-                colors = colors
-            ) { showBgBlur.value = true }
-            if (showBgBlur.value) {
-                SliderDialog(
-                    title = "背景模糊",
-                    value = state.bgBlur,
-                    valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
-                    colors = colors,
-                    onDismiss = { showBgBlur.value = false },
-                    onValueChange = { viewModel.setBgBlur(it) }
-                )
-            }
-
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            // 界面圆角 (用弹窗Slider)
-            var showCorner by remember { mutableStateOf(false) }
-            NewSettingRowArrow(
-                title = "界面圆角",
-                value = "${state.cornerBase.toInt()}dp",
-                colors = colors
-            ) { showCorner.value = true }
-            if (showCorner.value) {
-                SliderDialog(
-                    title = "界面圆角",
-                    value = state.cornerBase,
-                    valueRange = 0f..44f,
-                    colors = colors,
-                    onDismiss = { showCorner.value = false },
-                    onValueChange = { viewModel.setCornerBase(it) }
-                )
-            }
-
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            // 界面排布
-            NewSettingRowArrow(
-                title = "界面排布",
-                value = state.layout.label,
-                colors = colors
-            ) { showDialog ->
-                SelectionDialog(
-                    title = "界面排布",
-                    options = IrisLayout.entries.map { it.label },
-                    selectedIndex = IrisLayout.entries.indexOf(state.layout),
-                    onDismiss = { showDialog.value = false },
-                    onSelect = { index ->
-                        viewModel.setLayout(IrisLayout.entries[index])
-                        showDialog.value = false
-                    }
-                )
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-
-        // ==================== 播放与歌词 ====================
-        Text("播放与歌词", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-        Column(Modifier.clip(RoundedCornerShape(16.dp)).background(groupBg)) {
-            NewSettingRowSwitch(
-                title = "逐字流光",
-                checked = state.karaokeLyric,
-                colors = colors
-            ) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
-
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            NewSettingRowSwitch(
-                title = "封面歌词",
-                checked = state.coverLyric,
-                colors = colors
-            ) { viewModel.setCoverLyric(!state.coverLyric) }
-
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            NewSettingRowSwitch(
-                title = "淡入淡出",
-                checked = state.fadeEnabled,
-                colors = colors
-            ) { viewModel.setFadeEnabled(!state.fadeEnabled) }
-
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
-
-            NewSettingRowSwitch(
-                title = "桌面悬浮歌词",
-                checked = state.floatLyricFixed || state.floatLyricKaraoke, // 简化的占位判断
-                colors = colors
-            ) { 
-                // 这里因为新 UI 空间有限，直接跳转旧版逻辑或者提示用户
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-
-        // ==================== 动画 ====================
-        Text("动画", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
-        Column(Modifier.clip(RoundedCornerShape(16.dp)).background(groupBg)) {
-            NewSettingRowSwitch(
-                title = "启动动画",
-                checked = state.splashEnabled,
-                colors = colors
-            ) { viewModel.setSplashEnabled(!state.splashEnabled) }
-
-            if (state.splashEnabled) {
-                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+            // ==================== 外观 ====================
+            Text("外观", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+            Column(Modifier.clip(RoundedCornerShape(16.dp)).background(groupBg)) {
+                
+                // 明暗模式
                 NewSettingRowArrow(
-                    title = "动画风格",
-                    value = when (state.splashStyle) {
-                        0 -> "简约"
-                        1 -> "温柔"
-                        else -> "细腻"
+                    title = "明暗模式",
+                    value = when (state.mode) {
+                        IrisMode.DARK -> "深色模式"
+                        IrisMode.LIGHT -> "亮色模式"
+                        IrisMode.AUTO -> "跟随系统"
                     },
                     colors = colors
                 ) { showDialog ->
                     SelectionDialog(
-                        title = "动画风格",
-                        options = listOf("简约", "温柔", "细腻"),
-                        selectedIndex = state.splashStyle,
+                        title = "明暗模式",
+                        options = listOf("深色模式", "亮色模式", "跟随系统"),
+                        selectedIndex = state.mode.ordinal,
                         onDismiss = { showDialog.value = false },
                         onSelect = { index ->
-                            viewModel.setSplashStyle(index)
+                            viewModel.setMode(IrisMode.entries[index])
+                            showDialog.value = false
+                        }
+                    )
+                }
+                
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                // 主题
+                NewSettingRowArrow(
+                    title = "主题",
+                    value = state.theme.label,
+                    colors = colors
+                ) { showDialog ->
+                    SelectionDialog(
+                        title = "主题",
+                        options = listOf("黑白", "深海蓝", "青草绿", "自定义"),
+                        selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
+                        onDismiss = { showDialog.value = false },
+                        onSelect = { index ->
+                            viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
+                            showDialog.value = false
+                        }
+                    )
+                }
+
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                // 材质分级
+                NewSettingRowArrow(
+                    title = "材质分级",
+                    value = when (state.surfaceStyle) {
+                        IrisSurfaceStyle.SOLID -> "实色"
+                        IrisSurfaceStyle.FROSTED -> "毛玻璃"
+                        IrisSurfaceStyle.LIQUID -> "液态玻璃"
+                    },
+                    subtitle = "提供完整的液态玻璃和光感视效",
+                    colors = colors
+                ) { showDialog ->
+                    SelectionDialog(
+                        title = "材质分级",
+                        options = listOf("实色", "毛玻璃", "液态玻璃"),
+                        selectedIndex = IrisSurfaceStyle.entries.indexOf(state.surfaceStyle),
+                        onDismiss = { showDialog.value = false },
+                        onSelect = { index ->
+                            viewModel.setSurfaceStyle(IrisSurfaceStyle.entries[index])
+                            showDialog.value = false
+                        }
+                    )
+                }
+
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                // 背景模糊 (用弹窗Slider)
+                var showBgBlur by remember { mutableStateOf(false) }
+                NewSettingRowArrow(
+                    title = "背景模糊",
+                    value = "${state.bgBlur.toInt()}dp",
+                    colors = colors
+                ) { showBgBlur.value = true }
+                if (showBgBlur.value) {
+                    SliderDialog(
+                        title = "背景模糊",
+                        value = state.bgBlur,
+                        valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
+                        colors = colors,
+                        onDismiss = { showBgBlur.value = false },
+                        onValueChange = { viewModel.setBgBlur(it) }
+                    )
+                }
+
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                // 界面圆角 (用弹窗Slider)
+                var showCorner by remember { mutableStateOf(false) }
+                NewSettingRowArrow(
+                    title = "界面圆角",
+                    value = "${state.cornerBase.toInt()}dp",
+                    colors = colors
+                ) { showCorner.value = true }
+                if (showCorner.value) {
+                    SliderDialog(
+                        title = "界面圆角",
+                        value = state.cornerBase,
+                        valueRange = 0f..44f,
+                        colors = colors,
+                        onDismiss = { showCorner.value = false },
+                        onValueChange = { viewModel.setCornerBase(it) }
+                    )
+                }
+
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                // 界面排布
+                NewSettingRowArrow(
+                    title = "界面排布",
+                    value = state.layout.label,
+                    colors = colors
+                ) { showDialog ->
+                    SelectionDialog(
+                        title = "界面排布",
+                        options = IrisLayout.entries.map { it.label },
+                        selectedIndex = IrisLayout.entries.indexOf(state.layout),
+                        onDismiss = { showDialog.value = false },
+                        onSelect = { index ->
+                            viewModel.setLayout(IrisLayout.entries[index])
                             showDialog.value = false
                         }
                     )
                 }
             }
+            Spacer(Modifier.height(24.dp))
 
-            Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+            // ==================== 播放与歌词 ====================
+            Text("播放与歌词", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+            Column(Modifier.clip(RoundedCornerShape(16.dp)).background(groupBg)) {
+                NewSettingRowSwitch(
+                    title = "逐字流光",
+                    checked = state.karaokeLyric,
+                    colors = colors
+                ) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
 
-            // ==================== 切换回旧版 ====================
-            NewSettingRowSwitch(
-                title = "切换回经典设置面板",
-                checked = !state.useNewSettingsStyle,
-                colors = colors
-            ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                NewSettingRowSwitch(
+                    title = "封面歌词",
+                    checked = state.coverLyric,
+                    colors = colors
+                ) { viewModel.setCoverLyric(!state.coverLyric) }
+
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                NewSettingRowSwitch(
+                    title = "淡入淡出",
+                    checked = state.fadeEnabled,
+                    colors = colors
+                ) { viewModel.setFadeEnabled(!state.fadeEnabled) }
+            }
+            Spacer(Modifier.height(24.dp))
+
+            // ==================== 动画 ====================
+            Text("动画", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
+            Column(Modifier.clip(RoundedCornerShape(16.dp)).background(groupBg)) {
+                NewSettingRowSwitch(
+                    title = "启动动画",
+                    checked = state.splashEnabled,
+                    colors = colors
+                ) { viewModel.setSplashEnabled(!state.splashEnabled) }
+
+                if (state.splashEnabled) {
+                    Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+                    NewSettingRowArrow(
+                        title = "动画风格",
+                        value = when (state.splashStyle) {
+                            0 -> "简约"
+                            1 -> "温柔"
+                            else -> "细腻"
+                        },
+                        colors = colors
+                    ) { showDialog ->
+                        SelectionDialog(
+                            title = "动画风格",
+                            options = listOf("简约", "温柔", "细腻"),
+                            selectedIndex = state.splashStyle,
+                            onDismiss = { showDialog.value = false },
+                            onSelect = { index ->
+                                viewModel.setSplashStyle(index)
+                                showDialog.value = false
+                            }
+                        )
+                    }
+                }
+
+                Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
+
+                // ==================== 切换回旧版 ====================
+                NewSettingRowSwitch(
+                    title = "切换回经典设置面板",
+                    checked = !state.useNewSettingsStyle,
+                    colors = colors
+                ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
+            }
+            
+            Spacer(Modifier.height(30.dp))
         }
-        
-        Spacer(Modifier.height(30.dp))
-    }
 
-    Spacer(Modifier.height(10.dp))
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp)
-            .clip(IrisShape.item)
-            .background(colors.primary)
-            .clickable { onDismiss() }
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text("完成", color = colors.primary.readableTextOn(), fontSize = 15.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(10.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .clip(IrisShape.item)
+                .background(colors.primary)
+                .clickable { onDismiss() }
+                .padding(vertical = 14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("完成", color = colors.primary.readableTextOn(), fontSize = 15.sp, fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.height(18.dp))
     }
-    Spacer(Modifier.height(18.dp))
 }
 
 // ==================== 封装的新版 UI 组件 ====================
