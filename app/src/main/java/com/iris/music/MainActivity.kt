@@ -63,7 +63,6 @@ class MainActivity : ComponentActivity() {
                 uiFont = state.uiFont
             ) {
                 var showSplash by remember { mutableStateOf(state.splashEnabled) }
-                var startOnboarding by remember { mutableStateOf(!state.splashEnabled) }
                 
                 val colors = state.theme.colors(
                     state.mode, state.systemDark,
@@ -75,7 +74,6 @@ class MainActivity : ComponentActivity() {
                     MainScreen(
                         state = state,
                         viewModel = viewModel,
-                        startOnboarding = startOnboarding,
                         onToggle = viewModel::togglePlay,
                         onPrev = viewModel::previous,
                         onNext = viewModel::next,
@@ -92,10 +90,6 @@ class MainActivity : ComponentActivity() {
                             isDark = colors.isDark,
                             onFinished = { showSplash = false }
                         )
-                        androidx.compose.runtime.LaunchedEffect(Unit) {
-                            kotlinx.coroutines.delay(4100)
-                            startOnboarding = true
-                        }
                     }
                 }
             }
