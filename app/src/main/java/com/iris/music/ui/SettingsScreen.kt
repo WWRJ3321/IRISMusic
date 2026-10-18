@@ -56,6 +56,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
@@ -120,6 +121,7 @@ internal fun SettingsPanel(
 ) {
     val scrollState = rememberScrollState()
     val panelContext = LocalContext.current
+    val rootView = LocalView.current // 用于波纹动画截屏
     var scanRootStatus by remember { mutableStateOf("") }
     val folderPickerLauncher = rememberLauncherForActivityResult(
     ActivityResultContracts.OpenDocumentTree()
@@ -176,11 +178,20 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ModeSwatch("深色", state.mode == IrisMode.DARK, colors,
-                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.DARK) }
+                modifier = Modifier.weight(1f)) { 
+                    val pos = Offset(rootView.width / 2f, rootView.height / 2f)
+                    triggerThemeReveal(rootView, pos) { viewModel.setMode(IrisMode.DARK) } 
+                }
             ModeSwatch("浅色", state.mode == IrisMode.LIGHT, colors,
-                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.LIGHT) }
+                modifier = Modifier.weight(1f)) { 
+                    val pos = Offset(rootView.width / 2f, rootView.height / 2f)
+                    triggerThemeReveal(rootView, pos) { viewModel.setMode(IrisMode.LIGHT) } 
+                }
             ModeSwatch("自动", state.mode == IrisMode.AUTO, colors,
-                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.AUTO) }
+                modifier = Modifier.weight(1f)) { 
+                    val pos = Offset(rootView.width / 2f, rootView.height / 2f)
+                    triggerThemeReveal(rootView, pos) { viewModel.setMode(IrisMode.AUTO) } 
+                }
         }
 
         Spacer(Modifier.height(14.dp))
@@ -537,7 +548,7 @@ internal fun SettingsPanel(
         
         Spacer(Modifier.height(14.dp))
 
-        // 全屏歌词颜色开关
+        // 全屏歌词颜色开关（去掉了“启用”二字）
         SettingToggleRow(
             "全屏歌词颜色",
             state.lyricUseCustomColor,
@@ -551,7 +562,7 @@ internal fun SettingsPanel(
             exit = fadeOut() + shrinkVertically()
         ) {
             Column(Modifier.padding(top = 10.dp)) {
-                // 删除了重复的 Text("全屏歌词颜色", ...)
+                // 删除了重复的 Text 标题
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
                         ThemeSwatch(theme = theme, selected = state.lyricTheme == theme, colors = colors, onClick = { viewModel.setLyricTheme(theme) }, modifier = Modifier.weight(1f))
@@ -1171,7 +1182,7 @@ private fun UpdateCheckSection(colors: IrisColors) {
                                     ctx.startActivity(
                                         Intent(
                                             Intent.ACTION_VIEW,
-                                            Uri.parse("https://github.com/WWWJ3321/IRISMusic/releases/latest")
+                                            Uri.parse("https://github.com/WWRJ3321/IRISMusic/releases/latest")
                                         )
                                     )
                                 },
@@ -1263,7 +1274,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(10.dp))
-            // 【修改】添加解释文案
+            // 添加了解释文案
             SettingToggleRow("逐字流光", karaoke, colors, subtitle = "当前行按进度扫光点亮（无词级时间时按句长估算）") {
                 karaoke = !karaoke
                 writeBool(FloatingLyric.KEY_KARAOKE, karaoke)
@@ -1292,7 +1303,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
 
             Spacer(Modifier.height(14.dp))
             
-            // 【修改】去掉“启用”二字
+            // 去掉了“启用”二字
             SettingToggleRow(
                 "悬浮歌词颜色",
                 useCustomColor,
@@ -1305,7 +1316,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
 
             AnimatedVisibility(visible = useCustomColor) {
                 Column(Modifier.padding(top = 10.dp)) {
-                    // 【修改】删除多余的 Text
+                    // 删除了多余的 Text
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).forEach { theme ->
                             ThemeSwatch(
