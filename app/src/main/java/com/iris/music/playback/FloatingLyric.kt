@@ -25,7 +25,7 @@ import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
-import androidx.appcompat.widget.AppCompatTextView
+import android.widget.TextView
 import androidx.media3.common.Player
 import com.iris.music.data.LyricLine
 import com.iris.music.data.LyricParser
@@ -347,17 +347,18 @@ object FloatingLyric {
             tv.text = text
         }
         
-        val textW = tv.paint.measureText(text)
-        val viewW = box.width.toFloat()
+        // 强制指定 Float 类型，杜绝 Overload resolution ambiguity 报错
+        val textW: Float = tv.paint.measureText(text)
+        val viewW: Float = box.width.toFloat()
         
-        // 1. 处理跑马灯平移逻辑（复刻原生效果：文字比屏幕长才滚）
+        // 1. 处理跑马灯平移逻辑
         if (textW > viewW) {
-            // 让当前唱到的字固定在左侧 35% 的位置（提词器效果，字会向左滑出）
-            val anchorX = viewW * 0.35f
-            val currentFocusX = textW * frac
-            var transX = anchorX - currentFocusX
+            // 复刻原生平滑效果：当前唱到的字固定在左侧 35% 位置
+            val anchorX: Float = viewW * 0.35f
+            val currentFocusX: Float = textW * frac
+            var transX: Float = anchorX - currentFocusX
             
-            // 边界限制，不能露出首尾的空白
+            // 边界限制
             if (transX > 0f) transX = 0f
             if (transX < viewW - textW) transX = viewW - textW
             
@@ -381,9 +382,9 @@ object FloatingLyric {
 }
 
 /**
- * 基于你的原生逻辑，完全重写的完美流光 TextView
+ * 核心自定义 View：修复了 AppCompat 依赖问题，回归原生 TextView
  */
-class LyricTextView(context: Context) : AppCompatTextView(context) {
+class LyricTextView(context: Context) : TextView(context) {
     var frac = 1f
         set(value) {
             if (field != value) {
@@ -399,17 +400,16 @@ class LyricTextView(context: Context) : AppCompatTextView(context) {
 
     init {
         maxLines = 1
-        ellipsize = TextUtils.TruncateAt.END // 保持单行，不自己乱换行
-        gravity = Gravity.CENTER // 垂直居中
+        ellipsize = TextUtils.TruncateAt.END
+        gravity = Gravity.CENTER
         setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
     }
 
     override fun onDraw(canvas: Canvas) {
-        // 如果不是逐字流光，或者进度已经满了，直接按渐变全亮画
         if (!isKaraoke || frac >= 0.999f) {
             paint.shader = null
             if (c1 != c2) {
-                val textW = paint.measureText(text.toString())
+                val textW: Float = paint.measureText(text.toString())
                 paint.shader = LinearGradient(0f, 0f, textW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
             } else {
                 setTextColor(c1)
@@ -418,7 +418,6 @@ class LyricTextView(context: Context) : AppCompatTextView(context) {
             return
         }
         
-        // 如果还没开始唱，全暗
         if (frac <= 0.001f) {
             paint.shader = null
             setTextColor(unsungColor)
@@ -426,20 +425,16 @@ class LyricTextView(context: Context) : AppCompatTextView(context) {
             return
         }
 
-        // 1. 画底层的暗色字（未唱部分）
         paint.shader = null
         setTextColor(unsungColor)
         super.onDraw(canvas)
 
-        // 2. 画顶层的亮色字（已唱部分）
-        val textW = paint.measureText(text.toString())
-        val progressW = textW * frac
+        val textW: Float = paint.measureText(text.toString())
+        val progressW: Float = textW * frac
         
         if (progressW > 0) {
             canvas.save()
-            
-            // 【绝对安全】用整个 View 的高度裁切，宽度为已唱宽度。
-            // 因为 super.onDraw 是 TextView 原生处理垂直居中的，所以这个裁切框能完美截到字！
+            // 使用整个 View 高度进行裁剪，绝对完美覆盖
             canvas.clipRect(0f, 0f, progressW, height.toFloat())
             
             if (c1 != c2) {
@@ -449,16 +444,12 @@ class LyricTextView(context: Context) : AppCompatTextView(context) {
                 setTextColor(c1)
             }
             
-            // 第二次调用父类绘制，被裁切框拦住，只画出已唱部分
             super.onDraw(canvas)
             canvas.restore()
         }
     }
 }
 
-/**
- * 边缘虚化
- */
 class FadeEdgeLayout(context: Context) : FrameLayout(context) {
     private val paint = Paint().apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
