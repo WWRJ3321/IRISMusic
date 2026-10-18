@@ -281,9 +281,9 @@ object FloatingLyric {
 
     private fun updateLine() {
         val p = player ?: return
-        val item = p.currentMediaItem ?: run { lyricView?.updateContent("", "", "", 0f, 0f, 0f, 0f, false); return }
+        val item = p.currentMediaItem ?: run { lyricView?.updateContent("", "", "", 0f, 0, 0, 0, false); return }
         val path = item.mediaMetadata.extras?.getString("file_path") ?: item.localConfiguration?.uri?.let { if (it.scheme == "file") it.path else null }
-        if (path.isNullOrBlank()) { lyricView?.updateContent("", "", "", 0f, 0f, 0f, 0f, false); return }
+        if (path.isNullOrBlank()) { lyricView?.updateContent("", "", "", 0f, 0, 0, 0, false); return }
 
         if (path != lyricPath && path != loadingPath) {
             loadingPath = path; lyricPath = path; lyricLines = emptyList()
@@ -297,7 +297,7 @@ object FloatingLyric {
         val lines = lyricLines
         if (lines.isEmpty()) { 
             val title = item.mediaMetadata.title?.toString() ?: ""
-            lyricView?.updateContent("", title, "", 0f, 0f, 0f, 0f, false) 
+            lyricView?.updateContent("", title, "", 0f, 0, 0, 0, false) 
             return 
         }
         
@@ -319,7 +319,7 @@ object FloatingLyric {
                 }
             }
             updateRenderView(lines, idx, frac)
-        } else { lyricView?.updateContent("", "", "", 0f, 0f, 0f, 0f, false) }
+        } else { lyricView?.updateContent("", "", "", 0f, 0, 0, 0, false) }
     }
 
     private fun getColors(): Pair<Int, Int> {
@@ -364,8 +364,6 @@ class LyricRenderView(context: Context) : View(context) {
         typeface = Typeface.DEFAULT_BOLD
         setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
     }
-    
-    private val shaderPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private var prevText = ""
     private var currText = ""
@@ -405,7 +403,8 @@ class LyricRenderView(context: Context) : View(context) {
         super.onDraw(canvas)
         if (currText.isEmpty()) return
 
-        val viewW = width.toFloat() - paddingLeft.toFloat() - paddingRight.toFloat()
+        // 把所有尺寸强制转为 Float，杜绝类型推导报错
+        val viewW = (width - paddingLeft - paddingRight).toFloat()
         if (viewW <= 0f) return
 
         val fullText = buildString {
@@ -420,24 +419,31 @@ class LyricRenderView(context: Context) : View(context) {
 
         val focusX = prevW + currW * frac
 
-        // 【修复 431 行】：将所有坐标强制转换为 Float
         val translateX = (viewW / 2f) - focusX
+        
         canvas.save()
-        canvas.translate(paddingLeft.toFloat() + translateX, paddingTop.toFloat())
+        // 全部显式转化为 Float
+        val finalX = paddingLeft.toFloat() + translateX
+        val finalY = paddingTop.toFloat()
+        canvas.translate(finalX, finalY)
 
-        // 基础文字颜色
         paint.shader = null
-        paint.color = if (useGradient()) c1 else (if (isKaraoke && frac < 0.999f) unsungColor else c1)
+        paint.color = if (c1 != c2) c1 else (if (isKaraoke && frac < 0.999f) unsungColor else c1)
         
         if (isKaraoke && frac > 0f) {
             paint.color = unsungColor
             canvas.drawText(fullText, 0f, -paint.fontMetrics.top, paint)
             
             canvas.save()
-            // 【修复 284 行】：确保 clipRect 里的所有参数都是 Float
-            canvas.clipRect(0f, -paint.fontMetrics.ascent, focusX, -paint.fontMetrics.top)
             
-            if (useGradient()) {
+            // 显式转化为 Float，彻底解决参数推断问题
+            val cLeft = 0f
+            val cTop = -paint.fontMetrics.ascent
+            val cRight = focusX
+            val cBottom = -paint.fontMetrics.top
+            canvas.clipRect(cLeft, cTop, cRight, cBottom)
+            
+            if (c1 != c2) {
                 paint.shader = LinearGradient(0f, 0f, totalW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
             } else {
                 paint.shader = null
@@ -447,7 +453,7 @@ class LyricRenderView(context: Context) : View(context) {
             canvas.restore()
             
         } else {
-            if (useGradient()) {
+            if (c1 != c2) {
                 paint.shader = LinearGradient(0f, 0f, totalW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
             } else {
                 paint.shader = null
@@ -457,10 +463,6 @@ class LyricRenderView(context: Context) : View(context) {
         }
         
         canvas.restore()
-    }
-
-    private fun useGradient(): Boolean {
-        return c1 != c2
     }
 }
 
@@ -473,6 +475,7 @@ class FadeEdgeLayout(context: Context) : FrameLayout(context) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
             val fadeRatio = 0.15f
+            // 强制 Float
             paint.shader = LinearGradient(
                 0f, 0f, w.toFloat(), 0f,
                 intArrayOf(Color.TRANSPARENT, Color.BLACK, Color.BLACK, Color.TRANSPARENT),
@@ -483,6 +486,7 @@ class FadeEdgeLayout(context: Context) : FrameLayout(context) {
     }
 
     override fun dispatchDraw(canvas: Canvas) {
+        // canvas.saveLayer 参数全部转为 Float
         val sc = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
         super.dispatchDraw(canvas)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
