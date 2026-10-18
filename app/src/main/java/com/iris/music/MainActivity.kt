@@ -24,6 +24,7 @@ import com.iris.music.player.PlayerViewModel
 import com.iris.music.ui.MainScreen
 import com.iris.music.ui.SplashScreen
 import com.iris.music.ui.theme.IRISMusicTheme
+import com.iris.music.ui.theme.colors // 补上这一行
 
 class MainActivity : ComponentActivity() {
 
