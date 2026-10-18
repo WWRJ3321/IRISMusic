@@ -246,7 +246,7 @@ object FloatingLyric {
         }
     }
 
-    /** 核心修复点：拖拽与点击穿透逻辑 */
+    /** 核心修复：精准像素级触摸判断 */
     private fun attachDrag(box: FrameLayout, lp: WindowManager.LayoutParams, sp: SharedPreferences) {
         var lastX = 0f
         var lastY = 0f
@@ -256,14 +256,27 @@ object FloatingLyric {
 
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    // 判断当前点击位置是否在文字的实际绘制范围内
                     val text = tvCurrent?.text?.toString() ?: ""
                     val paint = tvCurrent?.paint ?: return@setOnTouchListener false
-                    val textWidth = paint.measureText(text)
-                    val paddingX = (box.width - textWidth) / 2f
                     
-                    // 如果在文字左右两边的透明/背景区域点击，返回 false，让事件穿透到底层 App
-                    if (e.x < paddingX || e.x > paddingX + textWidth) {
+                    // 测量文字实际尺寸
+                    val textWidth = paint.measureText(text)
+                    val fm = paint.fontMetrics
+                    val textHeight = fm.bottom - fm.top
+                    
+                    // 计算文字在 View 内的精确矩形范围（居中）
+                    val textLeft = (box.width - textWidth) / 2f
+                    val textRight = textLeft + textWidth
+                    val textTop = (box.height - textHeight) / 2f
+                    val textBottom = textTop + textHeight
+                    
+                    // 加一点点容错（10像素），防止边缘点不到
+                    val hitPadding = 10f
+                    val isInsideText = e.x >= textLeft - hitPadding && e.x <= textRight + hitPadding &&
+                                        e.y >= textTop - hitPadding && e.y <= textBottom + hitPadding
+                                        
+                    // 只要没有点在文字像素范围内，一律返回 false 触发穿透
+                    if (!isInsideText) {
                         return@setOnTouchListener false
                     }
 
