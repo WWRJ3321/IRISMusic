@@ -11,11 +11,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.iris.music.player.PlayerViewModel
 import com.iris.music.ui.MainScreen
+import com.iris.music.ui.SplashScreen
 import com.iris.music.ui.theme.IRISMusicTheme
 
 class MainActivity : ComponentActivity() {
@@ -55,19 +62,32 @@ class MainActivity : ComponentActivity() {
                 glassBlur = state.glassBlur,
                 uiFont = state.uiFont
             ) {
-                MainScreen(
-                    state = state,
-                    viewModel = viewModel,
-                    onToggle = viewModel::togglePlay,
-                    onPrev = viewModel::previous,
-                    onNext = viewModel::next,
-                    onSeek = viewModel::seekTo,
-                    onSelect = viewModel::playAt,
-                    onSearch = viewModel::updateSearch,
-                    onToggleLike = viewModel::toggleLike,
-                    onCyclePlayMode = viewModel::cyclePlayMode,
-                    onToggleSettings = viewModel::toggleSettings
-                )
+                // 启动动画覆盖层：
+                // - splashEnabled 开启时，Activity 每次 onCreate 展示一次；播完本地置 false；
+                // - 因为 MainActivity 的 configChanges 接管了屏幕旋转/键盘变化，正常使用
+                //   不会触发 onCreate 重建，只有真正冷启动（进程从零、Activity 被系统回收）
+                //   才会再看到；
+                // - 关闭开关时直接不初始化，不占任何帧；
+                // - 全屏纯黑 + 一次性描边动画，不依赖 Haze / RenderEffect / 玻璃背板。
+                var showSplash by remember { mutableStateOf(state.splashEnabled) }
+                Box(Modifier.fillMaxSize()) {
+                    MainScreen(
+                        state = state,
+                        viewModel = viewModel,
+                        onToggle = viewModel::togglePlay,
+                        onPrev = viewModel::previous,
+                        onNext = viewModel::next,
+                        onSeek = viewModel::seekTo,
+                        onSelect = viewModel::playAt,
+                        onSearch = viewModel::updateSearch,
+                        onToggleLike = viewModel::toggleLike,
+                        onCyclePlayMode = viewModel::cyclePlayMode,
+                        onToggleSettings = viewModel::toggleSettings
+                    )
+                    if (showSplash) {
+                        SplashScreen(onFinished = { showSplash = false })
+                    }
+                }
             }
             }
         }
