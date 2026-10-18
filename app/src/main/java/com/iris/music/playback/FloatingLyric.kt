@@ -18,16 +18,14 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.text.SpannableString
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.TextView
+import androidx.appcompat.widget.AppCompatTextView
 import androidx.media3.common.Player
 import com.iris.music.data.LyricLine
 import com.iris.music.data.LyricParser
@@ -62,15 +60,15 @@ object FloatingLyric {
     const val WIDTH_DEFAULT = 0.86f
     const val BG_DEFAULT = 0.3f
 
-    /** 50ms 刷新率，配合原生 TextView 极度流畅 */
-    private const val POLL_MS = 50L
+    /** 60 帧刷新 */
+    private const val POLL_MS = 16L
 
     private var appContext: Context? = null
     private var player: Player? = null
     private var windowManager: WindowManager? = null
     
     private var container: FadeEdgeLayout? = null
-    private var textView: TextView? = null
+    private var textView: LyricTextView? = null
     private var params: WindowManager.LayoutParams? = null
     private var bgDrawable: GradientDrawable? = null
 
@@ -95,9 +93,6 @@ object FloatingLyric {
 
     private var shown = false
     private var lastWidth = 0
-    
-    private var lastFrac = -1f
-    private var lastLineIdx = -1
 
     private val poll = object : Runnable {
         override fun run() {
@@ -126,7 +121,6 @@ object FloatingLyric {
                 KEY_KARAOKE, KEY_FIXED, KEY_FIX_MODE, KEY_THEME, KEY_CUSTOM_PRIMARY, KEY_CUSTOM_SECONDARY, KEY_USE_CUSTOM -> {
                     loadPrefs(sp)
                     if (key == KEY_FIXED || key == KEY_FIX_MODE) recalcCenter()
-                    lastLineIdx = -1 
                 }
             }
         }
@@ -172,14 +166,7 @@ object FloatingLyric {
         val wm = windowManager ?: return
         val sp = prefs ?: return
 
-        val tv = TextView(ctx).apply {
-            maxLines = 1
-            ellipsize = null // 不使用系统省略号，我们要自己滚动
-            gravity = Gravity.CENTER
-            val padH = (16 * resources.displayMetrics.density).toInt()
-            val padV = (8 * resources.displayMetrics.density).toInt()
-            setPadding(padH, padV, padH, padV)
-            setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
+        val tv = LyricTextView(ctx).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -210,6 +197,12 @@ object FloatingLyric {
         }
 
         attachDrag(box, lp, sp)
+        
+        val density = ctx.resources.displayMetrics.density
+        val padH = (16 * density).toInt()
+        val padV = (8 * density).toInt()
+        box.setPadding(padH, padV, padH, padV)
+        
         box.addView(tv)
         
         runCatching { wm.addView(box, lp) }.onFailure { return }
@@ -280,7 +273,6 @@ object FloatingLyric {
         lp.width = lastWidth
         if (isFixed && fixMode == 0) lp.x = (screenW() - lastWidth) / 2
         runCatching { windowManager?.updateViewLayout(container, lp) }
-        lastLineIdx = -1 
     }
 
     private fun updateLine() {
@@ -294,7 +286,7 @@ object FloatingLyric {
             val duration = if (p.duration > 0) p.duration else 0L
             scope.launch {
                 val lines = withContext(Dispatchers.IO) { runCatching { LyricParser.loadLyrics(path, duration) }.getOrDefault(emptyList()) }
-                if (loadingPath == path) { lyricLines = lines; loadingPath = null; lastLineIdx = -1 }
+                if (loadingPath == path) { lyricLines = lines; loadingPath = null }
             }
         }
 
@@ -322,7 +314,7 @@ object FloatingLyric {
                     ((p.currentPosition - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
                 }
             }
-            setRichText(line.text, frac)
+            updateRenderView(line.text, frac)
         } else { setText("") }
     }
 
@@ -339,94 +331,134 @@ object FloatingLyric {
 
     private fun setText(s: String) {
         val tv = textView ?: return
-        lastLineIdx = -1
-        lastFrac = -1f
-        tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
-        tv.paint.shader = null
-        tv.setTextColor(Color.WHITE)
+        tv.frac = 1f
+        tv.isKaraoke = false
         if (tv.text?.toString() != s) {
             tv.text = s
         }
         tv.translationX = 0f
     }
 
-    /**
-     * 完全回归你最初的原生逻辑。
-     * 1. 用 paint.shader 铺满全段文字渐变。
-     * 2. 用 SpannableString 把未唱的字涂成半透明黑。
-     * 3. 根据进度修改 translationX 实现丝滑滚动。
-     */
-    private fun setRichText(text: String, frac: Float) {
+    private fun updateRenderView(text: String, frac: Float) {
         val tv = textView ?: return
         val box = container ?: return
         
-        if (lastLineIdx != -2 && text == tv.text?.toString() && abs(frac - lastFrac) < 0.001f) return
-        lastLineIdx = -2 // 使用 -2 标记当前句已经初始化，区别于换歌的 -1
-        lastFrac = frac
-
         if (tv.text?.toString() != text) {
             tv.text = text
         }
-
+        
         val textW = tv.paint.measureText(text)
         val viewW = box.width.toFloat()
-
-        // 1. 滚动逻辑
+        
+        // 1. 处理跑马灯平移逻辑（复刻原生效果：文字比屏幕长才滚）
         if (textW > viewW) {
-            // 文字超出屏幕，当前唱的字锁定在中间
-            val focusX = textW * frac
-            var transX = (viewW / 2f) - focusX
-            // 边界处理：首字靠左，尾字靠右
+            // 让当前唱到的字固定在左侧 35% 的位置（提词器效果，字会向左滑出）
+            val anchorX = viewW * 0.35f
+            val currentFocusX = textW * frac
+            var transX = anchorX - currentFocusX
+            
+            // 边界限制，不能露出首尾的空白
             if (transX > 0f) transX = 0f
             if (transX < viewW - textW) transX = viewW - textW
+            
             tv.translationX = transX
         } else {
-            // 文字没超出，居中
+            // 文字没超出，居中不动
             tv.translationX = 0f
         }
-
-        // 2. 颜色渲染
-        if (isKaraoke && frac < 0.999f) {
-            val (c1, c2) = getColors()
-            
-            // 底层铺满渐变色
-            if (useCustom) {
-                tv.paint.shader = LinearGradient(0f, 0f, textW.coerceAtLeast(1f), 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
-            } else {
-                tv.paint.shader = null
-                tv.setTextColor(c1)
-            }
-
-            // 顶层用 SpannableString 涂暗未唱的字
-            val unsungColor = Color.parseColor("#80000000") // 半透明暗色
-            val ss = SpannableString(text)
-            val split = (text.length * frac).toInt().coerceIn(0, text.length)
-            
-            if (split < text.length) {
-                ss.setSpan(ForegroundColorSpan(unsungColor), split, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-            tv.setText(ss, TextView.BufferType.SPANNABLE)
-            
-        } else {
-            // 已经唱完
-            val (c1, c2) = getColors()
-            if (useCustom) {
-                tv.paint.shader = LinearGradient(0f, 0f, textW.coerceAtLeast(1f), 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
-            } else {
-                tv.paint.shader = null
-                tv.setTextColor(c1)
-            }
-            // 必须是纯文本，不能带 Span
-            if (tv.text is Spanned) {
-                tv.text = text
-            }
-        }
+        
+        // 2. 更新颜色
+        val (c1, c2) = getColors()
+        tv.c1 = c1
+        tv.c2 = c2
+        tv.unsungColor = Color.parseColor("#66FFFFFF")
+        tv.isKaraoke = isKaraoke
+        tv.frac = frac // 触发重绘
     }
 
     fun requestPermission(ctx: Context) = runCatching { ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     fun hasPermission(ctx: Context): Boolean = Settings.canDrawOverlays(ctx)
 }
 
+/**
+ * 基于你的原生逻辑，完全重写的完美流光 TextView
+ */
+class LyricTextView(context: Context) : AppCompatTextView(context) {
+    var frac = 1f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
+        
+    var c1 = Color.WHITE
+    var c2 = Color.WHITE
+    var unsungColor = Color.GRAY
+    var isKaraoke = false
+
+    init {
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END // 保持单行，不自己乱换行
+        gravity = Gravity.CENTER // 垂直居中
+        setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        // 如果不是逐字流光，或者进度已经满了，直接按渐变全亮画
+        if (!isKaraoke || frac >= 0.999f) {
+            paint.shader = null
+            if (c1 != c2) {
+                val textW = paint.measureText(text.toString())
+                paint.shader = LinearGradient(0f, 0f, textW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
+            } else {
+                setTextColor(c1)
+            }
+            super.onDraw(canvas)
+            return
+        }
+        
+        // 如果还没开始唱，全暗
+        if (frac <= 0.001f) {
+            paint.shader = null
+            setTextColor(unsungColor)
+            super.onDraw(canvas)
+            return
+        }
+
+        // 1. 画底层的暗色字（未唱部分）
+        paint.shader = null
+        setTextColor(unsungColor)
+        super.onDraw(canvas)
+
+        // 2. 画顶层的亮色字（已唱部分）
+        val textW = paint.measureText(text.toString())
+        val progressW = textW * frac
+        
+        if (progressW > 0) {
+            canvas.save()
+            
+            // 【绝对安全】用整个 View 的高度裁切，宽度为已唱宽度。
+            // 因为 super.onDraw 是 TextView 原生处理垂直居中的，所以这个裁切框能完美截到字！
+            canvas.clipRect(0f, 0f, progressW, height.toFloat())
+            
+            if (c1 != c2) {
+                paint.shader = LinearGradient(0f, 0f, textW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
+            } else {
+                paint.shader = null
+                setTextColor(c1)
+            }
+            
+            // 第二次调用父类绘制，被裁切框拦住，只画出已唱部分
+            super.onDraw(canvas)
+            canvas.restore()
+        }
+    }
+}
+
+/**
+ * 边缘虚化
+ */
 class FadeEdgeLayout(context: Context) : FrameLayout(context) {
     private val paint = Paint().apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
