@@ -56,7 +56,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
@@ -121,7 +120,6 @@ internal fun SettingsPanel(
 ) {
     val scrollState = rememberScrollState()
     val panelContext = LocalContext.current
-    val rootView = LocalView.current // 用于波纹动画截屏
     var scanRootStatus by remember { mutableStateOf("") }
     val folderPickerLauncher = rememberLauncherForActivityResult(
     ActivityResultContracts.OpenDocumentTree()
@@ -178,20 +176,11 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ModeSwatch("深色", state.mode == IrisMode.DARK, colors,
-                modifier = Modifier.weight(1f)) { 
-                    val pos = Offset(rootView.width / 2f, rootView.height / 2f)
-                    triggerThemeReveal(rootView, pos) { viewModel.setMode(IrisMode.DARK) } 
-                }
+                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.DARK) }
             ModeSwatch("浅色", state.mode == IrisMode.LIGHT, colors,
-                modifier = Modifier.weight(1f)) { 
-                    val pos = Offset(rootView.width / 2f, rootView.height / 2f)
-                    triggerThemeReveal(rootView, pos) { viewModel.setMode(IrisMode.LIGHT) } 
-                }
+                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.LIGHT) }
             ModeSwatch("自动", state.mode == IrisMode.AUTO, colors,
-                modifier = Modifier.weight(1f)) { 
-                    val pos = Offset(rootView.width / 2f, rootView.height / 2f)
-                    triggerThemeReveal(rootView, pos) { viewModel.setMode(IrisMode.AUTO) } 
-                }
+                modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.AUTO) }
         }
 
         Spacer(Modifier.height(14.dp))
