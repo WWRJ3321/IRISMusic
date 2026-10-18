@@ -246,16 +246,27 @@ object FloatingLyric {
         }
     }
 
-    /** 核心修复点：拖拽逻辑 */
+    /** 核心修复点：拖拽与点击穿透逻辑 */
     private fun attachDrag(box: FrameLayout, lp: WindowManager.LayoutParams, sp: SharedPreferences) {
         var lastX = 0f
         var lastY = 0f
         box.setOnTouchListener { v, e ->
-            // 完全固定：不响应任何滑动
-            if (isFixed && fixMode == 1) return@setOnTouchListener false
+            // 完全固定：吃掉所有点击，不穿透
+            if (isFixed && fixMode == 1) return@setOnTouchListener true
 
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    // 判断当前点击位置是否在文字的实际绘制范围内
+                    val text = tvCurrent?.text?.toString() ?: ""
+                    val paint = tvCurrent?.paint ?: return@setOnTouchListener false
+                    val textWidth = paint.measureText(text)
+                    val paddingX = (box.width - textWidth) / 2f
+                    
+                    // 如果在文字左右两边的透明/背景区域点击，返回 false，让事件穿透到底层 App
+                    if (e.x < paddingX || e.x > paddingX + textWidth) {
+                        return@setOnTouchListener false
+                    }
+
                     lastX = e.rawX
                     lastY = e.rawY
                     true
@@ -265,11 +276,9 @@ object FloatingLyric {
                     val dy = (e.rawY - lastY).roundToInt()
 
                     if (!isFixed) {
-                        // 没开启固定：上下左右随便滑
                         lp.x += dx
                         lp.y += dy
                     } else if (fixMode == 0) {
-                        // 开启固定且选居中：锁死 X 轴，只能上下滑
                         lp.x = (screenW() - lp.width) / 2
                         lp.y += dy
                     }
@@ -280,7 +289,6 @@ object FloatingLyric {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    // 自由拖动时保存 X 坐标，居中模式下不用存 X
                     if (!isFixed) {
                         sp.edit().putInt(KEY_POS_X, lp.x).apply()
                     }
