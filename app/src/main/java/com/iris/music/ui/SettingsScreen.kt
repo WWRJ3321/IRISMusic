@@ -875,22 +875,33 @@ internal fun SettingsPanel(
         // ==================== 关于 ====================
         CollapsibleSection("关于", colors) {
 
-        Text(
-            "IRIS Music v${BuildConfig.VERSION_NAME}\n纯本地音乐播放器 · 不联网不上传\nKotlin + Jetpack Compose 构建",
-            color = colors.subText,
-            fontSize = 12.sp,
-            lineHeight = 18.sp
-        )
-
-        Spacer(Modifier.height(14.dp))
-
-        // 启动动画开关（原「检查更新」已彻底移除）
+        // 启动动画开关（原「检查更新」已彻底移除，原版本介绍文字也已移除）
         SettingToggleRow(
             "启动动画",
             state.splashEnabled,
             colors,
             subtitle = "开启后每次打开 App 播放 Hello 书写动画"
         ) { viewModel.setSplashEnabled(!state.splashEnabled) }
+
+        AnimatedVisibility(
+            visible = state.splashEnabled,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(Modifier.padding(top = 10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModeSwatch("简约", state.splashStyle == 0, colors, modifier = Modifier.weight(1f)) {
+                        viewModel.setSplashStyle(0)
+                    }
+                    ModeSwatch("温柔", state.splashStyle == 1, colors, modifier = Modifier.weight(1f)) {
+                        viewModel.setSplashStyle(1)
+                    }
+                    ModeSwatch("细腻", state.splashStyle == 2, colors, modifier = Modifier.weight(1f)) {
+                        viewModel.setSplashStyle(2)
+                    }
+                }
+            }
+        }
 
         Spacer(Modifier.height(18.dp))
 
