@@ -121,7 +121,6 @@ object FloatingLyric {
                 KEY_FONT -> {
                     tvCurrent?.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
                     tvNext?.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
-                    // 字体变化会导致高度变化，需要重新计算 Window 尺寸
                     hide()
                     if (enabled() && Settings.canDrawOverlays(context)) show(context)
                 }
@@ -188,7 +187,6 @@ object FloatingLyric {
         val fontSp = sp.getFloat(KEY_FONT, FONT_DEFAULT)
         val density = ctx.resources.displayMetrics.density
         
-        // 计算固定高度，避免动画时窗口抖动
         val measurePaint = Paint().apply {
             textSize = fontSp * ctx.resources.displayMetrics.scaledDensity
         }
@@ -248,23 +246,44 @@ object FloatingLyric {
         }
     }
 
+    /** 核心修复点：拖拽逻辑 */
     private fun attachDrag(box: FrameLayout, lp: WindowManager.LayoutParams, sp: SharedPreferences) {
-        var lastX = 0f; var lastY = 0f
+        var lastX = 0f
+        var lastY = 0f
         box.setOnTouchListener { v, e ->
+            // 完全固定：不响应任何滑动
             if (isFixed && fixMode == 1) return@setOnTouchListener false
+
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> { lastX = e.rawX; lastY = e.rawY; true }
+                MotionEvent.ACTION_DOWN -> {
+                    lastX = e.rawX
+                    lastY = e.rawY
+                    true
+                }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (e.rawX - lastX).roundToInt()
                     val dy = (e.rawY - lastY).roundToInt()
-                    if (!(isFixed && fixMode == 0)) lp.x += dx
-                    lp.y += dy
-                    lastX = e.rawX; lastY = e.rawY
+
+                    if (!isFixed) {
+                        // 没开启固定：上下左右随便滑
+                        lp.x += dx
+                        lp.y += dy
+                    } else if (fixMode == 0) {
+                        // 开启固定且选居中：锁死 X 轴，只能上下滑
+                        lp.x = (screenW() - lp.width) / 2
+                        lp.y += dy
+                    }
+
+                    lastX = e.rawX
+                    lastY = e.rawY
                     runCatching { windowManager?.updateViewLayout(v, lp) }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!(isFixed && fixMode == 0)) sp.edit().putInt(KEY_POS_X, lp.x).apply()
+                    // 自由拖动时保存 X 坐标，居中模式下不用存 X
+                    if (!isFixed) {
+                        sp.edit().putInt(KEY_POS_X, lp.x).apply()
+                    }
                     sp.edit().putInt(KEY_POS_Y, lp.y).apply()
                     true
                 }
@@ -347,17 +366,14 @@ object FloatingLyric {
             val unsungColor = Color.parseColor("#66FFFFFF")
 
             if (lastLineIdx == -1) {
-                // 初始化第一句
                 lastLineIdx = idx
                 tvCurrent?.text = line.text
                 tvCurrent?.updateState(frac, c1, c2, unsungColor, isKaraoke)
             } else if (idx != lastLineIdx) {
-                // 切句触发上下滚动动画
                 lastLineIdx = idx
                 if (!isAnimating) {
                     startScrollAnim(line.text, frac, c1, c2, unsungColor)
                 } else {
-                    // 极端情况（例如快速拖动进度条），强制重置状态
                     isAnimating = false
                     tvCurrent?.text = line.text
                     tvCurrent?.translationY = 0f
@@ -366,7 +382,6 @@ object FloatingLyric {
                     tvCurrent?.updateState(frac, c1, c2, unsungColor, isKaraoke)
                 }
             } else {
-                // 同一句，只更新进度
                 if (isAnimating) {
                     tvNext?.updateState(frac, c1, c2, unsungColor, isKaraoke)
                 } else {
@@ -382,14 +397,12 @@ object FloatingLyric {
         val box = container ?: return
         isAnimating = true
 
-        // 下方准备新的一句
         nxt.text = nextText
         nxt.updateState(nextFrac, c1, c2, unsungColor, isKaraoke)
         nxt.translationY = box.height.toFloat()
         nxt.alpha = 1f
         
-        // 旧的一句准备滚走
-        cur.isKaraoke = false // 停止旧句的光标更新
+        cur.isKaraoke = false
 
         val curAnimY = ObjectAnimator.ofFloat(cur, "translationY", 0f, -box.height.toFloat())
         val curAnimAlpha = ObjectAnimator.ofFloat(cur, "alpha", 1f, 0f)
@@ -402,12 +415,10 @@ object FloatingLyric {
         
         set.addListener(object : AnimatorListenerAdapter() {
             override fun onAnimationEnd(animation: Animator) {
-                // 动画结束后，交换两个 View 的身份
                 val temp = tvCurrent
                 tvCurrent = tvNext
                 tvNext = temp
                 
-                // 隐藏被替换下来的旧句
                 tvNext?.translationY = box.height.toFloat()
                 tvNext?.alpha = 0f
                 
@@ -449,9 +460,6 @@ object FloatingLyric {
     fun hasPermission(ctx: Context): Boolean = Settings.canDrawOverlays(ctx)
 }
 
-/**
- * 核心自定义 View：用于精准渲染逐字流光
- */
 class LyricTextView(context: Context) : TextView(context) {
     var frac = 1f
         set(value) {
@@ -468,8 +476,8 @@ class LyricTextView(context: Context) : TextView(context) {
 
     init {
         maxLines = 1
-        ellipsize = null // 不显示省略号
-        gravity = Gravity.CENTER // 居中显示
+        ellipsize = null 
+        gravity = Gravity.CENTER 
         setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
     }
     
@@ -510,12 +518,9 @@ class LyricTextView(context: Context) : TextView(context) {
         
         if (progressW > 0) {
             canvas.save()
-            
-            // 计算居中时的左侧留白
             val paddingX = (width - textW) / 2f
             val clipLeft = if (paddingX > 0) paddingX else 0f
             val clipRight = clipLeft + progressW
-            
             canvas.clipRect(clipLeft, 0f, clipRight, height.toFloat())
             
             if (c1 != c2) {
@@ -524,7 +529,6 @@ class LyricTextView(context: Context) : TextView(context) {
                 paint.shader = null
                 setTextColor(c1)
             }
-            
             super.onDraw(canvas)
             canvas.restore()
         }
