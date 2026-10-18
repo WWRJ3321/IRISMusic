@@ -79,8 +79,6 @@ import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
 import com.iris.music.playback.FloatingLyric
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -92,7 +90,6 @@ import com.iris.music.data.RepeatMode
 import com.iris.music.data.Playlist
 import com.iris.music.data.Playlists
 import com.iris.music.data.Song
-import com.iris.music.data.UpdateChecker
 import com.iris.music.data.formatLabel
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
@@ -887,7 +884,13 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
 
-        UpdateCheckSection(colors)
+        // 启动动画开关（原「检查更新」已彻底移除）
+        SettingToggleRow(
+            "启动动画",
+            state.splashEnabled,
+            colors,
+            subtitle = "开启后每次打开 App 播放 Hello 书写动画"
+        ) { viewModel.setSplashEnabled(!state.splashEnabled) }
 
         Spacer(Modifier.height(18.dp))
 
@@ -1083,105 +1086,6 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
         if (status.isNotBlank()) {
             Spacer(Modifier.height(10.dp))
             Text(status, color = colors.subText, fontSize = 12.sp, lineHeight = 18.sp)
-        }
-    }
-}
-
-@Composable
-private fun UpdateCheckSection(colors: IrisColors) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val prefs = ctx.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
-
-    var enabled by remember { mutableStateOf(prefs.getBoolean(UpdateChecker.KEY_ENABLED, false)) }
-    var checking by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf("") }
-    var newTag by remember { mutableStateOf<String?>(null) }
-
-    Column {
-        SettingToggleRow(
-            "检查更新",
-            enabled,
-            colors,
-            subtitle = "开启后可手动检查 GitHub 上的新版本，仅此访问网络"
-        ) {
-            enabled = !enabled
-            prefs.edit().putBoolean(UpdateChecker.KEY_ENABLED, enabled).apply()
-            if (!enabled) {
-                statusText = ""
-                newTag = null
-            }
-        }
-
-        AnimatedVisibility(
-            visible = enabled,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Column(Modifier.padding(top = 10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(
-                        Modifier
-                            .weight(1f).height(40.dp)
-                            .clip(IrisShape.item)
-                            .background(if (checking) colors.primary.copy(alpha = 0.18f) else colors.primary)
-                            .clickable(enabled = !checking) {
-                                Haptics.tap()
-                                checking = true
-                                statusText = "正在检查…"
-                                newTag = null
-                                scope.launch {
-                                    when (val r = UpdateChecker.check()) {
-                                        is UpdateChecker.Result.NewVersion -> {
-                                            newTag = r.tag
-                                            statusText = "发现新版本 ${r.tag}"
-                                        }
-                                        UpdateChecker.Result.UpToDate -> statusText = "已是最新版本"
-                                        UpdateChecker.Result.Failed -> statusText = "检查失败：网络不可用或稍后再试"
-                                    }
-                                    checking = false
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (checking) "检查中…" else "检查更新",
-                            fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            color = if (checking) colors.primary else colors.primary.readableTextOn()
-                        )
-                    }
-                }
-
-                if (statusText.isNotBlank()) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        statusText,
-                        color = colors.subText, fontSize = 12.sp,
-                        fontWeight = if (newTag != null) FontWeight.Bold else FontWeight.Normal
-                    )
-                    if (newTag != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Box(
-                            Modifier
-                                .fillMaxWidth().height(40.dp)
-                                .clip(IrisShape.item)
-                                .background(colors.primary.copy(alpha = 0.18f))
-                                .clickable {
-                                    Haptics.tap()
-                                    ctx.startActivity(
-                                        Intent(
-                                            Intent.ACTION_VIEW,
-                                            Uri.parse("https://github.com/WWRJ3321/IRISMusic/releases/latest")
-                                        )
-                                    )
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("前往下载", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
-                        }
-                    }
-                }
-            }
         }
     }
 }
