@@ -18,7 +18,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -35,7 +34,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 object FloatingLyric {
@@ -60,7 +58,6 @@ object FloatingLyric {
     const val WIDTH_DEFAULT = 0.86f
     const val BG_DEFAULT = 0.3f
 
-    /** 60 帧刷新 */
     private const val POLL_MS = 16L
 
     private var appContext: Context? = null
@@ -168,6 +165,7 @@ object FloatingLyric {
 
         val tv = LyricTextView(ctx).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
+            // 让 TextView 不要挤压，按真实宽度排布
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -176,6 +174,8 @@ object FloatingLyric {
         }
 
         val box = FadeEdgeLayout(ctx)
+        // 确保超出悬浮窗的部分被裁剪，这样才能实现滑出效果
+        box.clipChildren = true 
 
         val widthPx = (screenW() * sp.getFloat(KEY_WIDTH, WIDTH_DEFAULT)).roundToInt()
         lastWidth = widthPx
@@ -347,18 +347,21 @@ object FloatingLyric {
             tv.text = text
         }
         
-        // 强制指定 Float 类型，杜绝 Overload resolution ambiguity 报错
-        val textW: Float = tv.paint.measureText(text)
+        // 获取真实的 View 宽度（包含 padding）
+        val textW: Float = tv.width.toFloat()
         val viewW: Float = box.width.toFloat()
         
-        // 1. 处理跑马灯平移逻辑
+        // 1. 处理跑马灯平移逻辑（复刻原生平滑效果）
         if (textW > viewW) {
-            // 复刻原生平滑效果：当前唱到的字固定在左侧 35% 位置
-            val anchorX: Float = viewW * 0.35f
-            val currentFocusX: Float = textW * frac
+            // 计算当前唱到的字符中心点 X 坐标（包含左侧 padding）
+            val contentW = textW - tv.paddingLeft - tv.paddingRight
+            val currentFocusX = tv.paddingLeft + contentW * frac
+            
+            // 让当前唱到的字固定在悬浮窗的 40% 位置（偏左，方便看后面的词）
+            val anchorX = viewW * 0.4f
             var transX: Float = anchorX - currentFocusX
             
-            // 边界限制
+            // 边界限制（防止滑出第一字和最后一字）
             if (transX > 0f) transX = 0f
             if (transX < viewW - textW) transX = viewW - textW
             
@@ -382,7 +385,7 @@ object FloatingLyric {
 }
 
 /**
- * 核心自定义 View：修复了 AppCompat 依赖问题，回归原生 TextView
+ * 核心自定义 View：完美复刻原生跑马灯，支持像素级逐字流光
  */
 class LyricTextView(context: Context) : TextView(context) {
     var frac = 1f
@@ -400,9 +403,18 @@ class LyricTextView(context: Context) : TextView(context) {
 
     init {
         maxLines = 1
-        ellipsize = TextUtils.TruncateAt.END
-        gravity = Gravity.CENTER
+        // 【核心修复】：移除 ellipsize，绝对不让系统显示 "..."
+        ellipsize = null
+        gravity = Gravity.CENTER_VERTICAL
         setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        // 【核心修复】：完全无视父容器宽度限制，用 UNSPECIFIED 让 TextView 根据文字真实长度撑开宽度
+        super.onMeasure(
+            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
+            heightMeasureSpec
+        )
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -434,8 +446,8 @@ class LyricTextView(context: Context) : TextView(context) {
         
         if (progressW > 0) {
             canvas.save()
-            // 使用整个 View 高度进行裁剪，绝对完美覆盖
-            canvas.clipRect(0f, 0f, progressW, height.toFloat())
+            // 从左侧 0 开始截取到已唱进度宽度，覆盖整个 View 高度
+            canvas.clipRect(0f, 0f, paddingLeft + progressW, height.toFloat())
             
             if (c1 != c2) {
                 paint.shader = LinearGradient(0f, 0f, textW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
