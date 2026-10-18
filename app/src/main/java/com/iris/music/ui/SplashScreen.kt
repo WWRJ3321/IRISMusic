@@ -2,6 +2,7 @@ package com.iris.music.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -41,9 +42,11 @@ import kotlinx.coroutines.delay
 @Composable
 fun SplashScreen(style: Int, onFinished: () -> Unit) {
     val drawProgress = remember { Animatable(0f) }
-    val alpha = remember { Animatable(1f) }
+    // 退场进度：0 = 完全显示，1 = 完全退场
+    val exitProgress = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
+        // 1. 4秒书写
         drawProgress.animateTo(
             targetValue = 1f,
             animationSpec = tween(
@@ -51,10 +54,13 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
                 easing = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
             )
         )
+        // 2. 停留 400ms
         delay(400)
-        alpha.animateTo(
-            targetValue = 0f,
-            animationSpec = tween(durationMillis = 500)
+        
+        // 3. 一镜到底转场：文字放大推进 + 黑底溶解
+        exitProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
         )
         onFinished()
     }
@@ -62,25 +68,39 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .graphicsLayer { this.alpha = alpha.value },
+            // 背景不是生硬地消失，而是把透明度降为 0，透出底部的 MainScreen
+            .background(Color.Black.copy(alpha = 1f - exitProgress.value))
+            .graphicsLayer {
+                // 整个画面稍微放大一点点（1.0 -> 1.08），视觉上像穿过屏幕
+                val scale = 1f + (exitProgress.value * 0.08f)
+                scaleX = scale
+                scaleY = scale
+            },
         contentAlignment = Alignment.Center
     ) {
         val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-        // hello 画布尺寸（基于屏幕宽度的 85%）
         val helloW = screenWidth * 0.85f
         val helloH = helloW / 3.45f
 
-        Box(contentAlignment = Alignment.Center) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.graphicsLayer {
+                // 文字淡出得比黑底稍微快一点
+                alpha = 1f - (exitProgress.value * 1.5f).coerceIn(0f, 1f)
+                // 文字额外向前推进（放大）
+                val textScale = 1f + (exitProgress.value * 0.15f)
+                scaleX = textScale
+                scaleY = textScale
+            }
+        ) {
             // 1. Hello 主画布
             Canvas(
                 Modifier
                     .size(helloW, helloH)
                     .graphicsLayer {
-                        // 根据样式微调 hello 的位置
                         translationY = when (style) {
-                            1 -> 20.dp.toPx()  // 帽檐式：下移
-                            2 -> -20.dp.toPx() // 尾巴式：上移
+                            1 -> 20.dp.toPx()
+                            2 -> -20.dp.toPx()
                             else -> 0f
                         }
                     }
@@ -96,25 +116,16 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
                 val segPath = Path()
                 measure.getSegment(0f, trimmedLen, segPath, true)
 
-                // 根据样式选渐变
                 val colors = when (style) {
-                    1 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFFFF7EB6)) // 温柔：蓝到粉
-                    2 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFF9D4EDD)) // 细腻：蓝到紫
-                    else -> arrayOf(0f to Color.Red, 0.5f to Color.Blue, 1f to Color.Green) // 简约：原版
+                    1 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFFFF7EB6))
+                    2 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFF9D4EDD))
+                    else -> arrayOf(0f to Color.Red, 0.5f to Color.Blue, 1f to Color.Green)
                 }
 
                 drawPath(
                     path = segPath,
-                    brush = Brush.verticalGradient(
-                        *colors,
-                        startY = 0f,
-                        endY = size.height
-                    ),
-                    style = Stroke(
-                        width = 10.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
+                    brush = Brush.verticalGradient(*colors, startY = 0f, endY = size.height),
+                    style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                 )
             }
 
