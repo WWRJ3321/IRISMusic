@@ -34,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 object FloatingLyric {
@@ -58,8 +59,8 @@ object FloatingLyric {
     const val WIDTH_DEFAULT = 0.86f
     const val BG_DEFAULT = 0.3f
 
-    /** 进度轮询周期：50ms 保证逐字流光和跑马灯丝滑跟手 */
-    private const val POLL_MS = 50L
+    /** 进度轮询周期：16ms 约等于 60帧，保证跑马灯和流光极致丝滑 */
+    private const val POLL_MS = 16L
 
     private var appContext: Context? = null
     private var player: Player? = null
@@ -124,7 +125,7 @@ object FloatingLyric {
                 KEY_KARAOKE, KEY_FIXED, KEY_FIX_MODE, KEY_THEME, KEY_CUSTOM_PRIMARY, KEY_CUSTOM_SECONDARY, KEY_USE_CUSTOM -> {
                     loadPrefs(sp)
                     if (key == KEY_FIXED || key == KEY_FIX_MODE) recalcCenter()
-                    lastLineText = "" // 强制刷新
+                    lastLineText = "" 
                 }
             }
         }
@@ -170,7 +171,6 @@ object FloatingLyric {
         val wm = windowManager ?: return
         val sp = prefs ?: return
 
-        // 内层文字：不限制宽度（WRAP_CONTENT），去掉省略号，用于跑马灯滚动
         val tv = TextView(ctx).apply {
             maxLines = 1
             ellipsize = null
@@ -187,7 +187,6 @@ object FloatingLyric {
             )
         }
 
-        // 外层容器：限制宽度、处理边缘虚化
         val box = FadeEdgeLayout(ctx)
 
         val widthPx = (screenW() * sp.getFloat(KEY_WIDTH, WIDTH_DEFAULT)).roundToInt()
@@ -209,9 +208,7 @@ object FloatingLyric {
             lp.x = (screenW() - widthPx) / 2
         }
 
-        // 把拖拽手势挂在外层容器上
         attachDrag(box, lp, sp)
-        
         box.addView(tv)
         
         runCatching { wm.addView(box, lp) }.onFailure { return }
@@ -282,7 +279,7 @@ object FloatingLyric {
         lp.width = lastWidth
         if (isFixed && fixMode == 0) lp.x = (screenW() - lastWidth) / 2
         runCatching { windowManager?.updateViewLayout(container, lp) }
-        lastLineText = "" // 宽度变化，重新计算
+        lastLineText = "" 
     }
 
     private fun updateLine() {
@@ -313,7 +310,6 @@ object FloatingLyric {
             val nextLine = lines.getOrNull(idx + 1)?.timeMs ?: (if (p.duration > 0) p.duration else line.timeMs + 4000)
             
             if (isKaraoke) {
-                // 加入伪逐字计算，保证任何歌词都有平滑进度
                 val progressF = LyricParser.wordProgressCharsF(line, p.currentPosition, nextLine)
                 val frac = if (progressF >= 0f) {
                     progressF / line.text.length.coerceAtLeast(1)
@@ -351,75 +347,71 @@ object FloatingLyric {
         if (tv.text?.toString() != s) {
             tv.text = s
         }
-        // 滚动位置归零
         tv.translationX = 0f
     }
 
     /**
-     * 核心黑科技：利用 LinearGradient 的 positions 实现像素级平滑流光 + 跑马灯滚动。
+     * 【终极优化】：提词器式焦点锁定跑马灯。
+     * 无论唱多快，正在唱的字始终锁定在屏幕左侧 35% 的位置。
      */
     private fun setRichText(text: String, frac: Float) {
         val tv = textView ?: return
         val box = container ?: return
         
-        // 防抖：如果文本未变且进度没变，跳过
-        if (text == lastLineText && Math.abs(frac - lastFrac) < 0.001f) return
+        if (text == lastLineText && abs(frac - lastFrac) < 0.001f) return
         lastLineText = text
         lastFrac = frac
         
         val (c1, c2) = getColors()
-        val unsungColor = Color.parseColor("#66FFFFFF") // 未唱部分的半透明暗色
+        val unsungColor = Color.parseColor("#66FFFFFF")
         
-        // 先设置文字，以获取准确的文字宽度
         if (tv.text?.toString() != text) {
             tv.text = text
         }
         
-        tv.post {
-            val textW = tv.paint.measureText(text)
-            val viewW = box.width.toFloat()
-            if (textW <= 0f || viewW <= 0f) return@post
-            
-            // 1. 跑马灯滚动逻辑
+        val textW = tv.paint.measureText(text)
+        val viewW = box.width.toFloat()
+        
+        if (textW > 0f && viewW > 0f) {
+            // 1. 跑马灯滚动（提词器逻辑）
             if (textW > viewW) {
-                // 如果文字超长，根据进度 frac 向左平移
-                val maxScroll = textW - viewW
-                // 向外扩展一点可视区域，避免正在唱的字刚好贴着屏幕边缘
-                val scrollX = -maxScroll * frac
-                tv.translationX = scrollX
+                // 设定焦点：屏幕左侧 35% 的位置
+                val anchorX = viewW * 0.35f
+                // 当前进度对应的文字绝对坐标
+                val currentPx = textW * frac
+                
+                // 计算需要的偏移量，让当前字对准 anchorX
+                var targetTransX = anchorX - currentPx
+                
+                // 边界限制
+                if (targetTransX > 0f) targetTransX = 0f
+                if (targetTransX < viewW - textW) targetTransX = viewW - textW
+                
+                // 直接赋值（16ms一帧，视觉上已经极度平滑）
+                tv.translationX = targetTransX
             } else {
-                // 文字没超长，居中不动
                 tv.translationX = 0f
             }
 
             // 2. 渲染流光渐变色
             tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
-            
             val positions: FloatArray
             val colors: IntArray
             
             if (frac >= 0.999f) {
-                // 已唱完：纯渐变
                 positions = floatArrayOf(0f, 1f)
                 colors = intArrayOf(c1, c2)
             } else if (frac <= 0.001f) {
-                // 未开始：全暗
                 positions = floatArrayOf(0f, 1f)
                 colors = intArrayOf(unsungColor, unsungColor)
             } else {
-                // 扫光中
-                val soft = 0.08f // 光带柔和度
+                val soft = 0.08f
                 val s1 = (frac - soft).coerceAtLeast(0f)
                 val s2 = frac
-                
-                // 算出当前扫光位置的过渡色
                 val edgeColor = lerpColor(c1, c2, frac)
-                
                 positions = floatArrayOf(0f, s1, s2, 1f)
                 colors = intArrayOf(c1, edgeColor, unsungColor, unsungColor)
             }
-            
-            // 注意：这里的着色器宽度必须是文字的实际总宽 textW，而不是 viewW
             tv.paint.shader = LinearGradient(0f, 0f, textW, 0f, colors, positions, Shader.TileMode.CLAMP)
             tv.invalidate()
         }
@@ -438,10 +430,6 @@ object FloatingLyric {
     fun hasPermission(ctx: Context): Boolean = Settings.canDrawOverlays(ctx)
 }
 
-/**
- * 边缘虚化布局容器。
- * 利用 PorterDuff.Mode.DST_IN 在左右两侧叠加横向透明渐变，实现内容滑出屏幕时的虚化效果。
- */
 class FadeEdgeLayout(context: Context) : FrameLayout(context) {
     private val paint = Paint().apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
@@ -450,7 +438,6 @@ class FadeEdgeLayout(context: Context) : FrameLayout(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
-            // 左右各留出 12% 的宽度作为渐变虚化区
             val fadeRatio = 0.12f
             paint.shader = LinearGradient(
                 0f, 0f, w.toFloat(), 0f,
@@ -462,10 +449,8 @@ class FadeEdgeLayout(context: Context) : FrameLayout(context) {
     }
 
     override fun dispatchDraw(canvas: Canvas) {
-        // 保存图层，以便应用遮罩
         val sc = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
         super.dispatchDraw(canvas)
-        // 叠加左右虚化遮罩
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         canvas.restoreToCount(sc)
     }
