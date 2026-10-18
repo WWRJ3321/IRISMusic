@@ -62,9 +62,8 @@ object FloatingLyric {
     const val WIDTH_DEFAULT = 0.86f
     const val BG_DEFAULT = 0.3f
 
-    /** 50ms 刷新率，原生 TextView 下这个频率足够丝滑且不卡顿 */
+    /** 50ms 刷新率，配合原生 TextView 极度流畅 */
     private const val POLL_MS = 50L
-    private const val GAP = "    "
 
     private var appContext: Context? = null
     private var player: Player? = null
@@ -99,7 +98,6 @@ object FloatingLyric {
     
     private var lastFrac = -1f
     private var lastLineIdx = -1
-    private var currentBaseText = ""
 
     private val poll = object : Runnable {
         override fun run() {
@@ -176,7 +174,7 @@ object FloatingLyric {
 
         val tv = TextView(ctx).apply {
             maxLines = 1
-            ellipsize = null
+            ellipsize = null // 不使用系统省略号，我们要自己滚动
             gravity = Gravity.CENTER
             val padH = (16 * resources.displayMetrics.density).toInt()
             val padV = (8 * resources.displayMetrics.density).toInt()
@@ -303,7 +301,7 @@ object FloatingLyric {
         val lines = lyricLines
         if (lines.isEmpty()) { 
             val title = item.mediaMetadata.title?.toString() ?: ""
-            if (currentBaseText != title) setText(title)
+            if (textView?.text?.toString() != title) setText(title) 
             return 
         }
         
@@ -324,7 +322,7 @@ object FloatingLyric {
                     ((p.currentPosition - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
                 }
             }
-            setRichText(lines, idx, frac)
+            setRichText(line.text, frac)
         } else { setText("") }
     }
 
@@ -341,10 +339,11 @@ object FloatingLyric {
 
     private fun setText(s: String) {
         val tv = textView ?: return
-        currentBaseText = s
         lastLineIdx = -1
         lastFrac = -1f
         tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
+        tv.paint.shader = null
+        tv.setTextColor(Color.WHITE)
         if (tv.text?.toString() != s) {
             tv.text = s
         }
@@ -352,94 +351,76 @@ object FloatingLyric {
     }
 
     /**
-     * 完全采用原生 TextView + SpannableString 的流光计算。
-     * 已唱：通过计算字符所在位置，赋渐变色；未唱：淡黑色。
-     * 跑马灯：直接修改 translationX。
+     * 完全回归你最初的原生逻辑。
+     * 1. 用 paint.shader 铺满全段文字渐变。
+     * 2. 用 SpannableString 把未唱的字涂成半透明黑。
+     * 3. 根据进度修改 translationX 实现丝滑滚动。
      */
-    private fun setRichText(lines: List<LyricLine>, idx: Int, frac: Float) {
+    private fun setRichText(text: String, frac: Float) {
         val tv = textView ?: return
         val box = container ?: return
         
-        if (idx == lastLineIdx && abs(frac - lastFrac) < 0.001f) return
-        lastLineIdx = idx
+        if (lastLineIdx != -2 && text == tv.text?.toString() && abs(frac - lastFrac) < 0.001f) return
+        lastLineIdx = -2 // 使用 -2 标记当前句已经初始化，区别于换歌的 -1
         lastFrac = frac
-        
-        val currLine = lines[idx]
-        val prevText = lines.getOrNull(idx - 1)?.text ?: ""
-        val nextText = lines.getOrNull(idx + 1)?.text ?: ""
-        
-        val fullText = buildString {
-            if (prevText.isNotEmpty()) { append(prevText); append(GAP) }
-            append(currLine.text)
-            if (nextText.isNotEmpty()) { append(GAP); append(nextText) }
+
+        if (tv.text?.toString() != text) {
+            tv.text = text
         }
 
-        currentBaseText = fullText
-        if (tv.text?.toString() != fullText) {
-            tv.text = fullText
+        val textW = tv.paint.measureText(text)
+        val viewW = box.width.toFloat()
+
+        // 1. 滚动逻辑
+        if (textW > viewW) {
+            // 文字超出屏幕，当前唱的字锁定在中间
+            val focusX = textW * frac
+            var transX = (viewW / 2f) - focusX
+            // 边界处理：首字靠左，尾字靠右
+            if (transX > 0f) transX = 0f
+            if (transX < viewW - textW) transX = viewW - textW
+            tv.translationX = transX
+        } else {
+            // 文字没超出，居中
+            tv.translationX = 0f
         }
 
-        val (c1, c2) = getColors()
-        val unsungColor = Color.parseColor("#66FFFFFF")
-        
-        tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
-
-        if (isKaraoke && frac > 0f) {
-            val ss = SpannableString(fullText)
-            val prevW = if (prevText.isNotEmpty()) tv.paint.measureText(prevText + GAP) else 0f
-            val currW = tv.paint.measureText(currLine.text)
+        // 2. 颜色渲染
+        if (isKaraoke && frac < 0.999f) {
+            val (c1, c2) = getColors()
             
-            // 计算已唱部分的绝对字符位置
-            val splitIndexInCurr = (currLine.text.length * frac).toInt().coerceIn(0, currLine.text.length)
-            val absoluteSplitIndex = fullText.indexOf(currLine.text) + splitIndexInCurr
+            // 底层铺满渐变色
+            if (useCustom) {
+                tv.paint.shader = LinearGradient(0f, 0f, textW.coerceAtLeast(1f), 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
+            } else {
+                tv.paint.shader = null
+                tv.setTextColor(c1)
+            }
 
-            // 1. 遍历所有字符，给它们上色
-            for (i in fullText.indices) {
-                if (i < absoluteSplitIndex) {
-                    // 已唱：根据它在当前句中的位置算渐变
-                    val charPosInCurr = i - fullText.indexOf(currLine.text)
-                    val progressInLine = if (currW > 0) (charPosInCurr.toFloat() / currLine.text.length) else 0f
-                    val color = lerpColor(c1, c2, progressInLine.coerceIn(0f, 1f))
-                    ss.setSpan(ForegroundColorSpan(color), i, i + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                } else {
-                    // 未唱：淡黑色
-                    ss.setSpan(ForegroundColorSpan(unsungColor), i, i + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
+            // 顶层用 SpannableString 涂暗未唱的字
+            val unsungColor = Color.parseColor("#80000000") // 半透明暗色
+            val ss = SpannableString(text)
+            val split = (text.length * frac).toInt().coerceIn(0, text.length)
+            
+            if (split < text.length) {
+                ss.setSpan(ForegroundColorSpan(unsungColor), split, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             tv.setText(ss, TextView.BufferType.SPANNABLE)
             
-            // 2. 计算跑马灯平滑滚动
-            if (currW > box.width) {
-                // 如果当前句子超出了屏幕宽度，才启用滚动
-                // 焦点设在屏幕正中间
-                val centerX = box.width / 2f
-                // 当前唱到的字的绝对 X 坐标
-                val currentFocusX = prevW + currW * frac
-                var targetTransX = centerX - currentFocusX
-                
-                // 限制边界，不要把第一句滑出左边太多，也不要让最后一句滑出右边
-                if (targetTransX > 0f) targetTransX = 0f
-                
-                tv.translationX = targetTransX
-            } else {
-                // 如果句子够短，不需要滚动，直接居中
-                tv.translationX = 0f
-            }
         } else {
-            tv.paint.shader = null
-            tv.setTextColor(c1)
-            tv.text = fullText
-            tv.translationX = 0f
+            // 已经唱完
+            val (c1, c2) = getColors()
+            if (useCustom) {
+                tv.paint.shader = LinearGradient(0f, 0f, textW.coerceAtLeast(1f), 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
+            } else {
+                tv.paint.shader = null
+                tv.setTextColor(c1)
+            }
+            // 必须是纯文本，不能带 Span
+            if (tv.text is Spanned) {
+                tv.text = text
+            }
         }
-    }
-
-    private fun lerpColor(c1: Int, c2: Int, t: Float): Int {
-        return Color.argb(
-            (Color.alpha(c1) + (Color.alpha(c2) - Color.alpha(c1)) * t).toInt(),
-            (Color.red(c1) + (Color.red(c2) - Color.red(c1)) * t).toInt(),
-            (Color.green(c1) + (Color.green(c2) - Color.green(c1)) * t).toInt(),
-            (Color.blue(c1) + (Color.blue(c2) - Color.blue(c1)) * t).toInt()
-        )
     }
 
     fun requestPermission(ctx: Context) = runCatching { ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
