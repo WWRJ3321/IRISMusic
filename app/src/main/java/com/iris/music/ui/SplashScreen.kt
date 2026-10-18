@@ -16,6 +16,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -23,6 +24,7 @@ import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
@@ -30,9 +32,10 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlin.math.min
 
 @Composable
-fun SplashScreen(style: Int, onFinished: () -> Unit) {
+fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
     val drawProgress = remember { Animatable(0f) }
     val exitProgress = remember { Animatable(0f) }
 
@@ -52,10 +55,14 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
         onFinished()
     }
 
+    // 跟随深浅色模式
+    val bgColor = if (isDark) Color.Black else Color.White
+    val textColor = if (isDark) Color.White else Color.Black
+
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 1f - exitProgress.value))
+            .background(bgColor.copy(alpha = 1f - exitProgress.value))
             .graphicsLayer {
                 val scale = 1f + (exitProgress.value * 0.05f)
                 scaleX = scale
@@ -64,9 +71,9 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-        // 稍微缩小一点实际图形比例，留出边界
-        val helloW = screenWidth * 0.75f
-        val helloH = helloW / 3.45f
+        // 用一个比较大的初始容器，实际绘制时在里面等比缩放
+        val helloW = screenWidth * 0.9f
+        val helloH = helloW / 2.5f 
 
         Box(
             contentAlignment = Alignment.Center,
@@ -88,40 +95,60 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
                         }
                     }
             ) {
-                // 因为原曲线有超出 0~1 范围的控制点，我们在这里对画布做一点安全内缩
-                val safeW = size.width * 0.9f
-                val safeH = size.height * 0.9f
-                val offsetX = (size.width - safeW) / 2f
-                val offsetY = (size.height - safeH) / 2f
+                val fullPath = buildHelloPath(size.width, size.height, 0f, 0f)
+                val bounds = fullPath.getBounds()
                 
-                val fullPath = buildHelloPath(safeW, safeH, offsetX, offsetY)
-                val measure = PathMeasure().apply { setPath(fullPath, false) }
-                val totalLen = measure.length
-                if (totalLen <= 0f) return@Canvas
+                if (bounds.width > 0 && bounds.height > 0) {
+                    // 核心修复：获取路径真实边界，按比例缩放到画布 80% 并居中
+                    // 彻底解决控制点超出 0~1 范围导致的截断
+                    val paddingFactor = 0.8f
+                    val scale = min(
+                        (size.width * paddingFactor) / bounds.width,
+                        (size.height * paddingFactor) / bounds.height
+                    )
+                    val dx = (size.width - bounds.width * scale) / 2f - bounds.left * scale
+                    val dy = (size.height - bounds.height * scale) / 2f - bounds.top * scale
 
-                val trimmedLen = totalLen * drawProgress.value
-                if (trimmedLen <= 0f) return@Canvas
+                    withTransform({
+                        scale(scale, scale, pivot = Offset.Zero)
+                        translate(dx / scale, dy / scale)
+                    }) {
+                        val measure = PathMeasure().apply { setPath(fullPath, false) }
+                        val totalLen = measure.length
+                        val trimmedLen = totalLen * drawProgress.value
 
-                val segPath = Path()
-                measure.getSegment(0f, trimmedLen, segPath, true)
+                        if (trimmedLen > 0f) {
+                            val segPath = Path()
+                            measure.getSegment(0f, trimmedLen, segPath, true)
 
-                val colors = when (style) {
-                    1 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFFFF7EB6))
-                    2 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFF9D4EDD))
-                    else -> arrayOf(0f to Color.Red, 0.5f to Color.Blue, 1f to Color.Green)
+                            val colors = when (style) {
+                                1 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFFFF7EB6))
+                                2 -> arrayOf(0f to Color(0xFF3D7BFF), 1f to Color(0xFF9D4EDD))
+                                else -> arrayOf(0f to Color.Red, 0.5f to Color.Blue, 1f to Color.Green)
+                            }
+
+                            drawPath(
+                                path = segPath,
+                                brush = Brush.verticalGradient(
+                                    *colors,
+                                    startY = bounds.top,
+                                    endY = bounds.bottom
+                                ),
+                                style = Stroke(
+                                    width = 10.dp.toPx(),
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
+                    }
                 }
-
-                drawPath(
-                    path = segPath,
-                    brush = Brush.verticalGradient(*colors, startY = 0f, endY = size.height),
-                    style = Stroke(width = 10.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
             }
 
             if (style == 1) {
                 Text(
                     text = "M U S I C",
-                    color = Color.White.copy(alpha = 0.6f * drawProgress.value),
+                    color = textColor.copy(alpha = 0.6f * drawProgress.value),
                     fontSize = 16.sp,
                     fontFamily = FontFamily.Serif,
                     letterSpacing = 8.sp,
@@ -132,7 +159,8 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
             if (style == 2) {
                 Text(
                     text = "music",
-                    color = Color(0xFF9D4EDD).copy(alpha = 0.5f * drawProgress.value),
+                    color = if (isDark) Color(0xFF9D4EDD).copy(alpha = 0.7f * drawProgress.value) 
+                            else Color(0xFF7B2CBF).copy(alpha = 0.7f * drawProgress.value),
                     fontSize = 28.sp,
                     fontFamily = FontFamily.Serif,
                     fontStyle = FontStyle.Italic,
