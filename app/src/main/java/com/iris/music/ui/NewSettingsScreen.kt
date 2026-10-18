@@ -1,8 +1,5 @@
 package com.iris.music.ui
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,15 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import com.iris.music.playback.FloatingLyric
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
 import com.iris.music.ui.theme.*
@@ -42,6 +35,15 @@ internal fun NewSettingsPanel(
     val scrollState = rememberScrollState()
     val headerColor = colors.primary.readableOn(colors.surface, 3.5f)
     val groupBg = if (colors.isDark) Color(0xFF1A1A1E) else Color(0xFFF2F2F6)
+
+    // 统一定义所有弹窗的状态
+    var showModeDialog by remember { mutableStateOf(false) }
+    var showThemeDialog by remember { mutableStateOf(false) }
+    var showMaterialDialog by remember { mutableStateOf(false) }
+    var showBgBlurDialog by remember { mutableStateOf(false) }
+    var showCornerDialog by remember { mutableStateOf(false) }
+    var showLayoutDialog by remember { mutableStateOf(false) }
+    var showSplashStyleDialog by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxWidth()) {
         Column(
@@ -60,132 +62,60 @@ internal fun NewSettingsPanel(
             Text("外观", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp, bottom = 8.dp))
             Column(Modifier.clip(RoundedCornerShape(16.dp)).background(groupBg)) {
                 
-                // 明暗模式
                 NewSettingRowArrow(
                     title = "明暗模式",
-                    value = when (state.mode) {
+                    trailingText = when (state.mode) {
                         IrisMode.DARK -> "深色模式"
                         IrisMode.LIGHT -> "亮色模式"
                         IrisMode.AUTO -> "跟随系统"
                     },
                     colors = colors
-                ) { showDialog ->
-                    SelectionDialog(
-                        title = "明暗模式",
-                        options = listOf("深色模式", "亮色模式", "跟随系统"),
-                        selectedIndex = state.mode.ordinal,
-                        onDismiss = { showDialog.value = false },
-                        onSelect = { index ->
-                            viewModel.setMode(IrisMode.entries[index])
-                            showDialog.value = false
-                        }
-                    )
-                }
+                ) { showModeDialog = true }
                 
                 Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
 
-                // 主题
                 NewSettingRowArrow(
                     title = "主题",
-                    value = state.theme.label,
+                    trailingText = state.theme.label,
                     colors = colors
-                ) { showDialog ->
-                    SelectionDialog(
-                        title = "主题",
-                        options = listOf("黑白", "深海蓝", "青草绿", "自定义"),
-                        selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
-                        onDismiss = { showDialog.value = false },
-                        onSelect = { index ->
-                            viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
-                            showDialog.value = false
-                        }
-                    )
-                }
+                ) { showThemeDialog = true }
 
                 Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
 
-                // 材质分级
                 NewSettingRowArrow(
                     title = "材质分级",
-                    value = when (state.surfaceStyle) {
+                    trailingText = when (state.surfaceStyle) {
                         IrisSurfaceStyle.SOLID -> "实色"
                         IrisSurfaceStyle.FROSTED -> "毛玻璃"
                         IrisSurfaceStyle.LIQUID -> "液态玻璃"
                     },
                     subtitle = "提供完整的液态玻璃和光感视效",
                     colors = colors
-                ) { showDialog ->
-                    SelectionDialog(
-                        title = "材质分级",
-                        options = listOf("实色", "毛玻璃", "液态玻璃"),
-                        selectedIndex = IrisSurfaceStyle.entries.indexOf(state.surfaceStyle),
-                        onDismiss = { showDialog.value = false },
-                        onSelect = { index ->
-                            viewModel.setSurfaceStyle(IrisSurfaceStyle.entries[index])
-                            showDialog.value = false
-                        }
-                    )
-                }
+                ) { showMaterialDialog = true }
 
                 Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
 
-                // 背景模糊 (用弹窗Slider)
-                var showBgBlur by remember { mutableStateOf(false) }
                 NewSettingRowArrow(
                     title = "背景模糊",
-                    value = "${state.bgBlur.toInt()}dp",
+                    trailingText = "${state.bgBlur.toInt()}dp",
                     colors = colors
-                ) { showBgBlur.value = true }
-                if (showBgBlur.value) {
-                    SliderDialog(
-                        title = "背景模糊",
-                        value = state.bgBlur,
-                        valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
-                        colors = colors,
-                        onDismiss = { showBgBlur.value = false },
-                        onValueChange = { viewModel.setBgBlur(it) }
-                    )
-                }
+                ) { showBgBlurDialog = true }
 
                 Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
 
-                // 界面圆角 (用弹窗Slider)
-                var showCorner by remember { mutableStateOf(false) }
                 NewSettingRowArrow(
                     title = "界面圆角",
-                    value = "${state.cornerBase.toInt()}dp",
+                    trailingText = "${state.cornerBase.toInt()}dp",
                     colors = colors
-                ) { showCorner.value = true }
-                if (showCorner.value) {
-                    SliderDialog(
-                        title = "界面圆角",
-                        value = state.cornerBase,
-                        valueRange = 0f..44f,
-                        colors = colors,
-                        onDismiss = { showCorner.value = false },
-                        onValueChange = { viewModel.setCornerBase(it) }
-                    )
-                }
+                ) { showCornerDialog = true }
 
                 Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
 
-                // 界面排布
                 NewSettingRowArrow(
                     title = "界面排布",
-                    value = state.layout.label,
+                    trailingText = state.layout.label,
                     colors = colors
-                ) { showDialog ->
-                    SelectionDialog(
-                        title = "界面排布",
-                        options = IrisLayout.entries.map { it.label },
-                        selectedIndex = IrisLayout.entries.indexOf(state.layout),
-                        onDismiss = { showDialog.value = false },
-                        onSelect = { index ->
-                            viewModel.setLayout(IrisLayout.entries[index])
-                            showDialog.value = false
-                        }
-                    )
-                }
+                ) { showLayoutDialog = true }
             }
             Spacer(Modifier.height(24.dp))
 
@@ -229,36 +159,23 @@ internal fun NewSettingsPanel(
                     Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
                     NewSettingRowArrow(
                         title = "动画风格",
-                        value = when (state.splashStyle) {
+                        trailingText = when (state.splashStyle) {
                             0 -> "简约"
                             1 -> "温柔"
                             else -> "细腻"
                         },
                         colors = colors
-                    ) { showDialog ->
-                        SelectionDialog(
-                            title = "动画风格",
-                            options = listOf("简约", "温柔", "细腻"),
-                            selectedIndex = state.splashStyle,
-                            onDismiss = { showDialog.value = false },
-                            onSelect = { index ->
-                                viewModel.setSplashStyle(index)
-                                showDialog.value = false
-                            }
-                        )
-                    }
+                    ) { showSplashStyleDialog = true }
                 }
 
                 Divider(color = colors.subText.copy(alpha = 0.1f), thickness = 1.dp, modifier = Modifier.padding(horizontal = 16.dp))
 
-                // ==================== 切换回旧版 ====================
                 NewSettingRowSwitch(
                     title = "切换回经典设置面板",
                     checked = !state.useNewSettingsStyle,
                     colors = colors
                 ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
             }
-            
             Spacer(Modifier.height(30.dp))
         }
 
@@ -277,6 +194,99 @@ internal fun NewSettingsPanel(
         }
         Spacer(Modifier.height(18.dp))
     }
+
+    // ==================== 弹窗渲染 ====================
+    if (showModeDialog) {
+        SelectionDialog(
+            title = "明暗模式",
+            options = listOf("深色模式", "亮色模式", "跟随系统"),
+            selectedIndex = state.mode.ordinal,
+            colors = colors,
+            onDismiss = { showModeDialog = false },
+            onSelect = { index ->
+                viewModel.setMode(IrisMode.entries[index])
+                showModeDialog = false
+            }
+        )
+    }
+
+    if (showThemeDialog) {
+        SelectionDialog(
+            title = "主题",
+            options = listOf("黑白", "深海蓝", "青草绿", "自定义"),
+            selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
+            colors = colors,
+            onDismiss = { showThemeDialog = false },
+            onSelect = { index ->
+                viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
+                showThemeDialog = false
+            }
+        )
+    }
+
+    if (showMaterialDialog) {
+        SelectionDialog(
+            title = "材质分级",
+            options = listOf("实色", "毛玻璃", "液态玻璃"),
+            selectedIndex = IrisSurfaceStyle.entries.indexOf(state.surfaceStyle),
+            colors = colors,
+            onDismiss = { showMaterialDialog = false },
+            onSelect = { index ->
+                viewModel.setSurfaceStyle(IrisSurfaceStyle.entries[index])
+                showMaterialDialog = false
+            }
+        )
+    }
+
+    if (showBgBlurDialog) {
+        SliderDialog(
+            title = "背景模糊",
+            value = state.bgBlur,
+            valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
+            colors = colors,
+            onDismiss = { showBgBlurDialog = false },
+            onValueChange = { viewModel.setBgBlur(it) }
+        )
+    }
+
+    if (showCornerDialog) {
+        SliderDialog(
+            title = "界面圆角",
+            value = state.cornerBase,
+            valueRange = 0f..44f,
+            colors = colors,
+            onDismiss = { showCornerDialog = false },
+            onValueChange = { viewModel.setCornerBase(it) }
+        )
+    }
+
+    if (showLayoutDialog) {
+        SelectionDialog(
+            title = "界面排布",
+            options = IrisLayout.entries.map { it.label },
+            selectedIndex = IrisLayout.entries.indexOf(state.layout),
+            colors = colors,
+            onDismiss = { showLayoutDialog = false },
+            onSelect = { index ->
+                viewModel.setLayout(IrisLayout.entries[index])
+                showLayoutDialog = false
+            }
+        )
+    }
+
+    if (showSplashStyleDialog) {
+        SelectionDialog(
+            title = "动画风格",
+            options = listOf("简约", "温柔", "细腻"),
+            selectedIndex = state.splashStyle,
+            colors = colors,
+            onDismiss = { showSplashStyleDialog = false },
+            onSelect = { index ->
+                viewModel.setSplashStyle(index)
+                showSplashStyleDialog = false
+            }
+        )
+    }
 }
 
 // ==================== 封装的新版 UI 组件 ====================
@@ -284,16 +294,15 @@ internal fun NewSettingsPanel(
 @Composable
 fun NewSettingRowArrow(
     title: String,
-    value: String,
+    trailingText: String,
     subtitle: String? = null,
     colors: IrisColors,
-    onClick: (MutableState<Boolean>) -> Unit
+    onClick: () -> Unit
 ) {
-    val showDialog = remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable { onClick(showDialog) }
+            .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -303,7 +312,7 @@ fun NewSettingRowArrow(
                 Text(subtitle, color = colors.subText, fontSize = 12.sp)
             }
         }
-        Text(value, color = colors.subText, fontSize = 14.sp)
+        Text(trailingText, color = colors.subText, fontSize = 14.sp)
         Spacer(Modifier.width(4.dp))
         // 画一个向右的小箭头 >
         Canvas(Modifier.size(12.dp)) {
@@ -347,7 +356,6 @@ fun NewSettingRowSwitch(
                 Text(subtitle, color = colors.subText, fontSize = 12.sp)
             }
         }
-        // 系统的 Switch 组件
         Switch(
             checked = checked,
             onCheckedChange = { onToggle() },
