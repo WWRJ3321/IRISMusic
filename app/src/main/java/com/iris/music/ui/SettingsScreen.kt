@@ -1,6 +1,9 @@
 package com.iris.music.ui
 
 import com.iris.music.BuildConfig
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
@@ -319,7 +322,7 @@ internal fun SettingsPanel(
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                // === 新增：切换到新版设置界面的开关 ===
+                // === 切换设置样式开关 ===
                 SettingToggleRow("切换设置样式", state.useNewSettingsStyle, colors) { 
                     viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) 
                 }
