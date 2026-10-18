@@ -658,4 +658,51 @@ internal fun RefreshButton(onClick: () -> Unit, colors: IrisColors, isRefreshing
     val spin = remember { Animatable(0f) }
     LaunchedEffect(isRefreshing) { if (isRefreshing) { spin.animateTo(targetValue = spin.value + 3600f, animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing))) } else if (spin.value != 0f) { val nextWhole = kotlin.math.ceil(spin.value / 360f) * 360f; spin.animateTo(nextWhole, tween(320, easing = FastOutSlowInEasing)); spin.snapTo(0f) } }
     val rotation = spin.value
-    Box(Modifier.size(
+    Box(Modifier.size(34.dp).irisSurface(GlassLevel.CHIP, colors, IrisShape.chip).irisPressable(enabled = !isRefreshing, onClick = onClick), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(18.dp).graphicsLayer { this.rotationZ = rotation }) {
+            val c = colors.primary; val strokeW = size.minDimension * 0.11f; val r = size.minDimension / 2f - strokeW / 2f - size.minDimension * 0.04f; val inset = size.minDimension / 2f - r - strokeW / 2f
+            drawArc(color = c, startAngle = -30f, sweepAngle = 300f, useCenter = false, topLeft = Offset(inset, inset), size = Size(size.width - inset * 2, size.height - inset * 2), style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeW, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+            val cx = size.width / 2f; val cy = size.height / 2f; val endRad = Math.toRadians(270.0); val ex = cx + (r * Math.cos(endRad)).toFloat(); val ey = cy + (r * Math.sin(endRad)).toFloat(); val s = size.minDimension * 0.14f; val tangent = endRad + Math.PI / 2; val half = Math.toRadians(30.0)
+            val p1 = Offset((ex + s * Math.cos(tangent - half)).toFloat(), (ey + s * Math.sin(tangent - half)).toFloat()); val p2 = Offset((ex + s * Math.cos(tangent + half)).toFloat(), (ey + s * Math.sin(tangent + half)).toFloat())
+            drawLine(c, Offset(ex, ey), p1, strokeWidth = strokeW * 0.9f, cap = androidx.compose.ui.graphics.StrokeCap.Round); drawLine(c, Offset(ex, ey), p2, strokeWidth = strokeW * 0.9f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SongRow(song: Song, active: Boolean, colors: IrisColors, rowSize: Int, showCover: Boolean = false, showArtist: Boolean = true, showPlaylist: Boolean = true, showLikedBadge: Boolean = false, liked: Boolean = false, playlistNames: List<String> = emptyList(), onClick: () -> Unit, onLongPress: () -> Unit) {
+    val barH by animateDpAsState(if (active) 22.dp else 0.dp, IrisMotion.moveDp(), label = "cursorBar")
+    val activeT by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = IrisMotion.move(), label = "rowActive")
+    val activeBg = lerp(colors.row, colors.secondary.copy(alpha = 0.12f), activeT)
+    val vPad = if (rowSize == 0) 5.dp else if (rowSize == 1) 10.dp else 15.dp
+    val titleSize = if (rowSize == 0) 12.sp else if (rowSize == 1) 13.sp else 14.sp
+    val subSize = if (rowSize == 0) 10.sp else if (rowSize == 1) 11.sp else 12.sp
+    val coverSize = if (rowSize == 0) 34.dp else if (rowSize == 1) 44.dp else 50.dp
+    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = activeBg, accent = if (activeT > 0.5f) colors.secondary else null).combinedClickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = { Haptics.tap(); onClick() }, onLongClick = { Haptics.click(); onLongPress() }).padding(start = 14.dp, end = 14.dp, top = vPad, bottom = vPad), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(4.dp).height(barH).clip(RoundedCornerShape(2.dp)).background(colors.primary))
+        Spacer(Modifier.width(10.dp))
+        if (showCover) { SongArtwork(filePath = song.filePath, seedId = song.id, artworkSize = coverSize, isDark = colors.isDark); Spacer(Modifier.width(12.dp)) }
+        Column(Modifier.weight(1f)) {
+            Text(song.title, color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), activeT), fontSize = titleSize, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (showArtist) { Text(song.artist, color = colors.subText, fontSize = subSize, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(formatDuration(song.durationMs), color = colors.subText, fontSize = subSize, fontWeight = FontWeight.Medium)
+            if (showPlaylist && playlistNames.isNotEmpty()) { Spacer(Modifier.height(2.dp)); Text(playlistNames.joinToString(" / "), color = colors.primary.readableOn(colors.row, 3.0f), fontSize = if (rowSize == 0) 9.sp else 10.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            val badgeT by animateFloatAsState(targetValue = if (liked) 1f else 0f, animationSpec = if (IrisMotion.jelly) IrisMotion.pressScale() else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), label = "likedBadge")
+            if (showLikedBadge && badgeT > 0.01f) { Spacer(Modifier.height(2.dp)); Text("♥", color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.graphicsLayer { alpha = badgeT; scaleX = badgeT; scaleY = badgeT }) }
+        }
+    }
+}
+
+@Composable
+internal fun FolderRow(name: String, count: String, active: Boolean, colors: IrisColors, onClick: () -> Unit) {
+    val t by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = tween(240), label = "folderActive")
+    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = lerp(colors.row, colors.primary.copy(alpha = 0.12f), t), accent = if (t > 0.5f) colors.primary else null).clickable { Haptics.tap(); onClick() }.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(18.dp).clip(IrisShape.chip).background(lerp(colors.card, colors.primary, t)))
+        Spacer(Modifier.width(12.dp))
+        Text(name, Modifier.weight(1f), color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), t), fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(count, color = colors.subText, fontSize = 11.sp)
+    }
+}
