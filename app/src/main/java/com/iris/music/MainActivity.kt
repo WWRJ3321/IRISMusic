@@ -11,8 +11,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
@@ -20,7 +18,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.iris.music.player.PlayerViewModel
@@ -64,64 +61,37 @@ class MainActivity : ComponentActivity() {
                 glassBlur = state.glassBlur,
                 uiFont = state.uiFont
             ) {
-                // 控制 Splash 是否还盖在最上面
                 var showSplash by remember { mutableStateOf(state.splashEnabled) }
-                // 控制主界面的“呼吸感”状态：Splash 结束前不显示，结束后浮现
-                var isMainVisible by remember { mutableStateOf(!state.splashEnabled) }
-
-                // 主界面浮现动画：放大 + 透明度恢复
-                val mainAlpha by animateFloatAsState(
-                    targetValue = if (isMainVisible) 1f else 0f,
-                    animationSpec = tween(durationMillis = 1000),
-                    label = "mainAlpha"
-                )
-                val mainScale by animateFloatAsState(
-                    targetValue = if (isMainVisible) 1f else 0.94f,
-                    animationSpec = tween(durationMillis = 1000),
-                    label = "mainScale"
-                )
+                // 当 Splash 快到结尾时触发主界面元素的依次入场
+                var startOnboarding by remember { mutableStateOf(!state.splashEnabled) }
 
                 Box(Modifier.fillMaxSize()) {
-                    // 底层主界面
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                alpha = mainAlpha
-                                scaleX = mainScale
-                                scaleY = mainScale
-                            }
-                    ) {
-                        MainScreen(
-                            state = state,
-                            viewModel = viewModel,
-                            onToggle = viewModel::togglePlay,
-                            onPrev = viewModel::previous,
-                            onNext = viewModel::next,
-                            onSeek = viewModel::seekTo,
-                            onSelect = viewModel::playAt,
-                            onSearch = viewModel::updateSearch,
-                            onToggleLike = viewModel::toggleLike,
-                            onCyclePlayMode = viewModel::cyclePlayMode,
-                            onToggleSettings = viewModel::toggleSettings
-                        )
-                    }
-
-                    // 顶层启动页
+                    MainScreen(
+                        state = state,
+                        viewModel = viewModel,
+                        startOnboarding = startOnboarding,
+                        onToggle = viewModel::togglePlay,
+                        onPrev = viewModel::previous,
+                        onNext = viewModel::next,
+                        onSeek = viewModel::seekTo,
+                        onSelect = viewModel::playAt,
+                        onSearch = viewModel::updateSearch,
+                        onToggleLike = viewModel::toggleLike,
+                        onCyclePlayMode = viewModel::cyclePlayMode,
+                        onToggleSettings = viewModel::toggleSettings
+                    )
                     if (showSplash) {
                         SplashScreen(
                             style = state.splashStyle,
                             onFinished = {
-                                // 动画完全播完（背景已透明），才移除 Splash 层
                                 showSplash = false
                             }
                         )
-                        // 当动画开始进入退出阶段时，让底下的 MainScreen 提前开始浮现
-                        // 使用 LaunchedEffect 监听 Splash 的进度，或者简单点，在 splash 准备结束时提前触发
-                        // 我们利用 state.splashEnabled 已经保证进来的逻辑，在这里直接用一个延迟触发主界面的淡入
+                        // 在第 4.1 秒（4秒书写 + 0.1秒）时，主界面元素开始依次滑入
+                        // 这样当第 4.4 秒黑底融化时，主界面已经像瀑布一样出来了
                         androidx.compose.runtime.LaunchedEffect(Unit) {
-                            kotlinx.coroutines.delay(4400) // 4秒书写 + 400ms 停留
-                            isMainVisible = true
+                            kotlinx.coroutines.delay(4100)
+                            startOnboarding = true
                         }
                     }
                 }
