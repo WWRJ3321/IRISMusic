@@ -1186,7 +1186,7 @@ private fun LibraryPage(
                         // 一个发灰的 #8D8D8D，标题该有的力度撑不住。
                         val wordPrimary = colors.primary.readableOn(colors.surface)
                         val wordSecondary = colors.secondary.readableOn(colors.surface)
-                        Text("IRIS", color = wordPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                        Text("Vv", color = wordPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                         Spacer(Modifier.width(4.dp))
                         Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                     }
