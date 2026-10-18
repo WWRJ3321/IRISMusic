@@ -24,7 +24,7 @@ import com.iris.music.player.PlayerViewModel
 import com.iris.music.ui.MainScreen
 import com.iris.music.ui.SplashScreen
 import com.iris.music.ui.theme.IRISMusicTheme
-import com.iris.music.ui.theme.colors // 补上这一行
+import com.iris.music.ui.theme.colors
 
 class MainActivity : ComponentActivity() {
 
@@ -65,7 +65,6 @@ class MainActivity : ComponentActivity() {
                 var showSplash by remember { mutableStateOf(state.splashEnabled) }
                 var startOnboarding by remember { mutableStateOf(!state.splashEnabled) }
                 
-                // 获取当前状态是否为深色模式
                 val colors = state.theme.colors(
                     state.mode, state.systemDark,
                     customPrimary = androidx.compose.ui.graphics.Color(state.customPrimaryArgb),
@@ -90,10 +89,8 @@ class MainActivity : ComponentActivity() {
                     if (showSplash) {
                         SplashScreen(
                             style = state.splashStyle,
-                            isDark = colors.isDark, // 传入深浅色
-                            onFinished = {
-                                showSplash = false
-                            }
+                            isDark = colors.isDark,
+                            onFinished = { showSplash = false }
                         )
                         androidx.compose.runtime.LaunchedEffect(Unit) {
                             kotlinx.coroutines.delay(4100)
