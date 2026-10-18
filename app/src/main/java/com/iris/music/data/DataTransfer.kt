@@ -114,7 +114,7 @@ object DataTransfer {
 
         return JSONObject().apply {
             put("format", FORMAT_VERSION)
-            put("app", "IRIS Music")
+            put("app", "Vv Music")
             put("exportedAt", System.currentTimeMillis())
             put("songs", songArray)
             put("playlists", playlistArray)
