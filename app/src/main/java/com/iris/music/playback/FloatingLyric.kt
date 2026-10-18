@@ -1,5 +1,9 @@
 package com.iris.music.playback
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
@@ -23,6 +27,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.media3.common.Player
@@ -65,7 +70,9 @@ object FloatingLyric {
     private var windowManager: WindowManager? = null
     
     private var container: FadeEdgeLayout? = null
-    private var textView: LyricTextView? = null
+    private var tvCurrent: LyricTextView? = null
+    private var tvNext: LyricTextView? = null
+    
     private var params: WindowManager.LayoutParams? = null
     private var bgDrawable: GradientDrawable? = null
 
@@ -90,6 +97,9 @@ object FloatingLyric {
 
     private var shown = false
     private var lastWidth = 0
+    
+    private var lastLineIdx = -1
+    private var isAnimating = false
 
     private val poll = object : Runnable {
         override fun run() {
@@ -108,7 +118,13 @@ object FloatingLyric {
 
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             when (key) {
-                KEY_FONT -> textView?.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
+                KEY_FONT -> {
+                    tvCurrent?.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
+                    tvNext?.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
+                    // 字体变化会导致高度变化，需要重新计算 Window 尺寸
+                    hide()
+                    if (enabled() && Settings.canDrawOverlays(context)) show(context)
+                }
                 KEY_WIDTH -> {
                     loadPrefs(sp)
                     applyWidth(sp.getFloat(KEY_WIDTH, WIDTH_DEFAULT))
@@ -163,25 +179,27 @@ object FloatingLyric {
         val wm = windowManager ?: return
         val sp = prefs ?: return
 
-        val tv = LyricTextView(ctx).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, sp.getFloat(KEY_FONT, FONT_DEFAULT))
-            // 让 TextView 不要挤压，按真实宽度排布
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER_VERTICAL or Gravity.START
-            )
-        }
-
         val box = FadeEdgeLayout(ctx)
-        // 确保超出悬浮窗的部分被裁剪，这样才能实现滑出效果
-        box.clipChildren = true 
+        box.clipChildren = true
 
         val widthPx = (screenW() * sp.getFloat(KEY_WIDTH, WIDTH_DEFAULT)).roundToInt()
         lastWidth = widthPx
 
+        val fontSp = sp.getFloat(KEY_FONT, FONT_DEFAULT)
+        val density = ctx.resources.displayMetrics.density
+        
+        // 计算固定高度，避免动画时窗口抖动
+        val measurePaint = Paint().apply {
+            textSize = fontSp * ctx.resources.displayMetrics.scaledDensity
+        }
+        val fm = measurePaint.fontMetrics
+        val textHeight = fm.bottom - fm.top
+        val padH = (16 * density).toInt()
+        val padV = (8 * density).toInt()
+        val boxHeight = (textHeight + padV * 2).toInt()
+
         val lp = WindowManager.LayoutParams(
-            widthPx, WindowManager.LayoutParams.WRAP_CONTENT,
+            widthPx, boxHeight,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -197,16 +215,24 @@ object FloatingLyric {
         }
 
         attachDrag(box, lp, sp)
-        
-        val density = ctx.resources.displayMetrics.density
-        val padH = (16 * density).toInt()
-        val padV = (8 * density).toInt()
         box.setPadding(padH, padV, padH, padV)
+
+        tvCurrent = LyricTextView(ctx).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp)
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER)
+        }
         
-        box.addView(tv)
+        tvNext = LyricTextView(ctx).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSp)
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER)
+            translationY = boxHeight.toFloat()
+            alpha = 0f
+        }
+
+        box.addView(tvCurrent)
+        box.addView(tvNext)
         
         runCatching { wm.addView(box, lp) }.onFailure { return }
-        textView = tv
         container = box
         params = lp
         shown = true
@@ -251,10 +277,12 @@ object FloatingLyric {
         handler.removeCallbacks(poll)
         container?.let { v -> runCatching { windowManager?.removeView(v) } }
         container = null
-        textView = null
+        tvCurrent = null
+        tvNext = null
         params = null
         bgDrawable = null
         shown = false
+        lastLineIdx = -1
     }
 
     private fun applyStyle() {
@@ -286,14 +314,14 @@ object FloatingLyric {
             val duration = if (p.duration > 0) p.duration else 0L
             scope.launch {
                 val lines = withContext(Dispatchers.IO) { runCatching { LyricParser.loadLyrics(path, duration) }.getOrDefault(emptyList()) }
-                if (loadingPath == path) { lyricLines = lines; loadingPath = null }
+                if (loadingPath == path) { lyricLines = lines; loadingPath = null; lastLineIdx = -1 }
             }
         }
 
         val lines = lyricLines
         if (lines.isEmpty()) { 
             val title = item.mediaMetadata.title?.toString() ?: ""
-            if (textView?.text?.toString() != title) setText(title) 
+            if (tvCurrent?.text?.toString() != title) setText(title) 
             return 
         }
         
@@ -314,8 +342,79 @@ object FloatingLyric {
                     ((p.currentPosition - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
                 }
             }
-            updateRenderView(line.text, frac)
+            
+            val (c1, c2) = getColors()
+            val unsungColor = Color.parseColor("#66FFFFFF")
+
+            if (lastLineIdx == -1) {
+                // 初始化第一句
+                lastLineIdx = idx
+                tvCurrent?.text = line.text
+                tvCurrent?.updateState(frac, c1, c2, unsungColor, isKaraoke)
+            } else if (idx != lastLineIdx) {
+                // 切句触发上下滚动动画
+                lastLineIdx = idx
+                if (!isAnimating) {
+                    startScrollAnim(line.text, frac, c1, c2, unsungColor)
+                } else {
+                    // 极端情况（例如快速拖动进度条），强制重置状态
+                    isAnimating = false
+                    tvCurrent?.text = line.text
+                    tvCurrent?.translationY = 0f
+                    tvCurrent?.alpha = 1f
+                    tvNext?.alpha = 0f
+                    tvCurrent?.updateState(frac, c1, c2, unsungColor, isKaraoke)
+                }
+            } else {
+                // 同一句，只更新进度
+                if (isAnimating) {
+                    tvNext?.updateState(frac, c1, c2, unsungColor, isKaraoke)
+                } else {
+                    tvCurrent?.updateState(frac, c1, c2, unsungColor, isKaraoke)
+                }
+            }
         } else { setText("") }
+    }
+
+    private fun startScrollAnim(nextText: String, nextFrac: Float, c1: Int, c2: Int, unsungColor: Int) {
+        val cur = tvCurrent ?: return
+        val nxt = tvNext ?: return
+        val box = container ?: return
+        isAnimating = true
+
+        // 下方准备新的一句
+        nxt.text = nextText
+        nxt.updateState(nextFrac, c1, c2, unsungColor, isKaraoke)
+        nxt.translationY = box.height.toFloat()
+        nxt.alpha = 1f
+        
+        // 旧的一句准备滚走
+        cur.isKaraoke = false // 停止旧句的光标更新
+
+        val curAnimY = ObjectAnimator.ofFloat(cur, "translationY", 0f, -box.height.toFloat())
+        val curAnimAlpha = ObjectAnimator.ofFloat(cur, "alpha", 1f, 0f)
+        val nxtAnimY = ObjectAnimator.ofFloat(nxt, "translationY", box.height.toFloat(), 0f)
+        
+        val set = AnimatorSet()
+        set.playTogether(curAnimY, curAnimAlpha, nxtAnimY)
+        set.duration = 450 
+        set.interpolator = AccelerateDecelerateInterpolator()
+        
+        set.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) {
+                // 动画结束后，交换两个 View 的身份
+                val temp = tvCurrent
+                tvCurrent = tvNext
+                tvNext = temp
+                
+                // 隐藏被替换下来的旧句
+                tvNext?.translationY = box.height.toFloat()
+                tvNext?.alpha = 0f
+                
+                isAnimating = false
+            }
+        })
+        set.start()
     }
 
     private fun getColors(): Pair<Int, Int> {
@@ -330,54 +429,20 @@ object FloatingLyric {
     }
 
     private fun setText(s: String) {
-        val tv = textView ?: return
-        tv.frac = 1f
-        tv.isKaraoke = false
-        if (tv.text?.toString() != s) {
-            tv.text = s
-        }
-        tv.translationX = 0f
-    }
-
-    private fun updateRenderView(text: String, frac: Float) {
-        val tv = textView ?: return
+        lastLineIdx = -1
+        isAnimating = false
+        val cur = tvCurrent ?: return
+        val nxt = tvNext ?: return
         val box = container ?: return
         
-        if (tv.text?.toString() != text) {
-            tv.text = text
-        }
+        cur.text = s
+        cur.frac = 1f
+        cur.isKaraoke = false
+        cur.translationY = 0f
+        cur.alpha = 1f
         
-        // 获取真实的 View 宽度（包含 padding）
-        val textW: Float = tv.width.toFloat()
-        val viewW: Float = box.width.toFloat()
-        
-        // 1. 处理跑马灯平移逻辑（复刻原生平滑效果）
-        if (textW > viewW) {
-            // 计算当前唱到的字符中心点 X 坐标（包含左侧 padding）
-            val contentW = textW - tv.paddingLeft - tv.paddingRight
-            val currentFocusX = tv.paddingLeft + contentW * frac
-            
-            // 让当前唱到的字固定在悬浮窗的 40% 位置（偏左，方便看后面的词）
-            val anchorX = viewW * 0.4f
-            var transX: Float = anchorX - currentFocusX
-            
-            // 边界限制（防止滑出第一字和最后一字）
-            if (transX > 0f) transX = 0f
-            if (transX < viewW - textW) transX = viewW - textW
-            
-            tv.translationX = transX
-        } else {
-            // 文字没超出，居中不动
-            tv.translationX = 0f
-        }
-        
-        // 2. 更新颜色
-        val (c1, c2) = getColors()
-        tv.c1 = c1
-        tv.c2 = c2
-        tv.unsungColor = Color.parseColor("#66FFFFFF")
-        tv.isKaraoke = isKaraoke
-        tv.frac = frac // 触发重绘
+        nxt.alpha = 0f
+        nxt.translationY = box.height.toFloat()
     }
 
     fun requestPermission(ctx: Context) = runCatching { ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -385,7 +450,7 @@ object FloatingLyric {
 }
 
 /**
- * 核心自定义 View：完美复刻原生跑马灯，支持像素级逐字流光
+ * 核心自定义 View：用于精准渲染逐字流光
  */
 class LyricTextView(context: Context) : TextView(context) {
     var frac = 1f
@@ -403,18 +468,17 @@ class LyricTextView(context: Context) : TextView(context) {
 
     init {
         maxLines = 1
-        // 【核心修复】：移除 ellipsize，绝对不让系统显示 "..."
-        ellipsize = null
-        gravity = Gravity.CENTER_VERTICAL
+        ellipsize = null // 不显示省略号
+        gravity = Gravity.CENTER // 居中显示
         setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
     }
-
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        // 【核心修复】：完全无视父容器宽度限制，用 UNSPECIFIED 让 TextView 根据文字真实长度撑开宽度
-        super.onMeasure(
-            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
-            heightMeasureSpec
-        )
+    
+    fun updateState(frac: Float, c1: Int, c2: Int, unsungColor: Int, karaoke: Boolean) {
+        this.c1 = c1
+        this.c2 = c2
+        this.unsungColor = unsungColor
+        this.isKaraoke = karaoke
+        this.frac = frac
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -446,8 +510,13 @@ class LyricTextView(context: Context) : TextView(context) {
         
         if (progressW > 0) {
             canvas.save()
-            // 从左侧 0 开始截取到已唱进度宽度，覆盖整个 View 高度
-            canvas.clipRect(0f, 0f, paddingLeft + progressW, height.toFloat())
+            
+            // 计算居中时的左侧留白
+            val paddingX = (width - textW) / 2f
+            val clipLeft = if (paddingX > 0) paddingX else 0f
+            val clipRight = clipLeft + progressW
+            
+            canvas.clipRect(clipLeft, 0f, clipRight, height.toFloat())
             
             if (c1 != c2) {
                 paint.shader = LinearGradient(0f, 0f, textW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
