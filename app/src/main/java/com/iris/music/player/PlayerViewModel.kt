@@ -241,7 +241,9 @@ data class PlayerUiState(
     val floatLyricCustomSecondary: Long = 0xFFFF2E97L,
 
     /** 启动动画：每次冷启动都播放 Hello 书写动画（关则不播） */
-    val splashEnabled: Boolean = true
+    val splashEnabled: Boolean = true,
+    /** 启动动画样式：0=简约(原版) 1=温柔(帽檐式) 2=细腻(尾巴式) */
+    val splashStyle: Int = 0
 ) {
     val currentSong: Song? get() = queue.getOrNull(currentIndex)
 
@@ -337,7 +339,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             floatLyricCustomPrimary = prefs.getLong(FloatingLyric.KEY_CUSTOM_PRIMARY, 0xFF00F0FFL),
             floatLyricCustomSecondary = prefs.getLong(FloatingLyric.KEY_CUSTOM_SECONDARY, 0xFFFF2E97L),
 
-            splashEnabled = prefs.getBoolean(KEY_SPLASH_ENABLED, true)
+            splashEnabled = prefs.getBoolean(KEY_SPLASH_ENABLED, true),
+            splashStyle = prefs.getInt(KEY_SPLASH_STYLE, 0).coerceIn(0, 2)
         )
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -911,6 +914,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setSplashEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SPLASH_ENABLED, enabled).apply()
         _state.value = _state.value.copy(splashEnabled = enabled)
+    }
+
+    fun setSplashStyle(style: Int) {
+        val v = style.coerceIn(0, 2)
+        prefs.edit().putInt(KEY_SPLASH_STYLE, v).apply()
+        _state.value = _state.value.copy(splashStyle = v)
     }
 
     fun setSilenceSkip(enabled: Boolean) {
@@ -1575,5 +1584,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_LYRIC_CUSTOM_PRIMARY = "lyric_custom_primary"
         const val KEY_LYRIC_CUSTOM_SECONDARY = "lyric_custom_secondary"
         const val KEY_SPLASH_ENABLED = "splash_enabled"
+        const val KEY_SPLASH_STYLE = "splash_style"
     }
 }
