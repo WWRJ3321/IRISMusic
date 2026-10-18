@@ -8,15 +8,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalView
-import kotlinx.coroutines.delay
+import androidx.compose.ui.graphics.graphicsLayer
 
 /**
  * 全局的主题波纹切换状态管理器
@@ -32,7 +30,6 @@ object ThemeRevealState {
  */
 @Composable
 fun ThemeRevealHost(content: @Composable () -> Unit) {
-    val view = LocalView.current
     val animProgress = remember { Animatable(0f) }
 
     // 拦截状态：当触发切换时，进行截屏和动画
@@ -59,48 +56,25 @@ fun ThemeRevealHost(content: @Composable () -> Unit) {
                 contentDescription = null,
                 modifier = Modifier
                     .fillMaxSize()
+                    // 必须开启离屏渲染，才能使用 DstOut 混合模式
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                     .drawWithContent {
+                        // 先把旧图整个画出来
+                        drawContent()
+                        
                         val progress = animProgress.value
-                        if (progress <= 0f) return@drawWithContent
-                        
-                        // 计算最大半径（屏幕对角线）
-                        val maxRadius = kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()
-                        val radius = maxRadius * progress
-                        
-                        // 根据点击坐标创建圆形路径
-                        val path = Path().apply {
-                            addOval(
-                                androidx.compose.ui.geometry.Rect(
-                                    center = ThemeRevealState.center,
-                                    radius = radius
-                                )
+                        if (progress > 0f) {
+                            // 计算屏幕对角线长度作为最大半径，保证能完全扩散出去
+                            val maxRadius = kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()
+                            val radius = maxRadius * progress
+                            
+                            // 用 DstOut 模式画圆：相当于在旧图上挖个圆孔，露出底下的新界面
+                            drawCircle(
+                                color = Color.Transparent, // 颜色值不重要，DstOut 只看透明度/混合结果
+                                radius = radius,
+                                center = ThemeRevealState.center,
+                                blendMode = BlendMode.DstOut
                             )
-                        }
-                        // 用圆形挖孔（DestinationOut），把旧截图一点点擦除
-                        clipPath(path) {
-                            this@drawWithContent.drawContent()
-                        }
-                    }
-                    // 注意：这里用的是 clipPath，实际上是反向裁剪。为了简单，我们用另一种方式：
-                    // 由于 Compose 没有直接的 "保留外部" 裁剪，我们用 Path 描边遮罩。
-                    .drawWithContent {
-                        val progress = animProgress.value
-                        val maxRadius = kotlin.math.hypot(size.width.toDouble(), size.height.toDouble()).toFloat()
-                        val radius = maxRadius * progress
-                        
-                        val path = Path().apply {
-                            // 全屏矩形
-                            addRect(androidx.compose.ui.geometry.Rect(Offset.Zero, size))
-                            // 减去一个圆
-                            val circle = Path().apply {
-                                addOval(androidx.compose.ui.geometry.Rect(ThemeRevealState.center, radius))
-                            }
-                            // 这里用 Path.op 减去圆形
-                            op(this, circle, androidx.compose.ui.graphics.PathOperation.Difference)
-                        }
-                        
-                        clipPath(path) {
-                            this@drawWithContent.drawContent()
                         }
                     }
             )
