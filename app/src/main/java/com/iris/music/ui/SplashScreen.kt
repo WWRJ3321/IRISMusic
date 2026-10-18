@@ -48,7 +48,7 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
         delay(400)
         exitProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing)
         )
         onFinished()
     }
@@ -59,8 +59,10 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(bgColor.copy(alpha = 1f - exitProgress.value))
+            .background(bgColor) // 背景色不在这里渐变，由下面的 graphicsLayer 统一控制透明度
             .graphicsLayer {
+                // === 核心修复：整个启动页（包括背景和文字）一起淡出 ===
+                alpha = 1f - exitProgress.value
                 val scale = 1f + (exitProgress.value * 0.05f)
                 scaleX = scale
                 scaleY = scale
@@ -68,7 +70,6 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            // 初始建立宽高
             val baseW = size.width * 0.85f
             val baseH = baseW / 3.45f
             
@@ -76,25 +77,21 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
             val bounds = fullPath.getBounds()
             
             if (bounds.width > 0 && bounds.height > 0) {
-                // 加上 10dp 的线条宽度，算出实际可能占用的最大矩形
                 val strokeWidthPx = 10.dp.toPx()
                 val realW = bounds.width + strokeWidthPx * 2
                 val realH = bounds.height + strokeWidthPx * 2
                 
-                // 留出足够的安全边距，使用 0.65 倍的画布宽高来缩放，保证绝对不截断
                 val scale = min(
                     (size.width * 0.65f) / realW,
                     (size.height * 0.65f) / realH
                 )
                 
-                // 计算绝对居中的偏移量
                 val dx = (size.width - realW * scale) / 2f - (bounds.left - strokeWidthPx) * scale
                 val dy = (size.height - realH * scale) / 2f - (bounds.top - strokeWidthPx) * scale
 
                 withTransform({
                     scale(scale, scale, pivot = Offset.Zero)
                     translate(dx / scale, dy / scale)
-                    // 微调位置
                     when (style) {
                         1 -> translate(0f, 120f / scale)
                         2 -> translate(0f, -120f / scale)
@@ -122,7 +119,7 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
                                 endY = bounds.bottom + strokeWidthPx
                             ),
                             style = Stroke(
-                                width = strokeWidthPx / scale, // 抵消缩放
+                                width = strokeWidthPx / scale,
                                 cap = StrokeCap.Round,
                                 join = StrokeJoin.Round
                             )
