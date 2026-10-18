@@ -1,7 +1,20 @@
 package com.iris.music.ui
 
 import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.EaseInOutCubic
+import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.derivedStateOf
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -85,6 +98,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+
 import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
 import com.iris.music.data.MusicFolder
@@ -111,6 +125,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+// ==================== 新增：完全复刻 Swift 的 blurSlide 动效 ====================
 @Composable
 fun Modifier.blurSlide(show: Boolean, delay: Int = 0): Modifier {
     val progress by animateFloatAsState(
@@ -124,6 +139,7 @@ fun Modifier.blurSlide(show: Boolean, delay: Int = 0): Modifier {
         .alpha(progress)
         .offset(y = (100f * (1f - progress)).dp)
 }
+// ===============================================================================
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -141,7 +157,7 @@ fun MainScreen(
     onCyclePlayMode: () -> Unit,
     onToggleSettings: (Boolean) -> Unit
 ) {
-    // === 核心修复：状态提升至根节点，确保只播放一次 ===
+    // === 核心修复：状态提升至根节点，确保入场动画只播放一次 ===
     var hasPlayedOnboarding by remember { mutableStateOf(false) }
     var showTopBar by remember { mutableStateOf(false) }
     var showRecommend by remember { mutableStateOf(false) }
@@ -158,11 +174,16 @@ fun MainScreen(
             hasPlayedOnboarding = true
         }
     }
+    // =======================================================
 
     val bgPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri -> viewModel.setCustomBackground(uri) }
-    androidx.compose.runtime.LaunchedEffect(state.jellyAnim) { IrisMotion.jelly = state.jellyAnim }
+    
+    androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
+        IrisMotion.jelly = state.jellyAnim
+    }
+    
     val targetColors = state.theme.colors(
         state.mode, state.systemDark,
         customPrimary = Color(state.customPrimaryArgb),
@@ -180,6 +201,7 @@ fun MainScreen(
     val colors = if (colorAnim.value >= 1f) targetColors else mixedColors
     val pagerState = rememberPagerState(pageCount = { 2 })
     val glass = isLiquidGlass
+
     val bgBackdrop = rememberIrisBackdrop()
     val pageBackdrop = rememberIrisBackdrop()
     val pageBackdrops = remember(glass, bgBackdrop) { if (glass) listOf(bgBackdrop) else emptyList() }
@@ -187,12 +209,14 @@ fun MainScreen(
 
     var showEqualizer by remember { mutableStateOf(false) }
     val eqState by EqualizerController.state.collectAsState()
+
     var showSleepTimer by remember { mutableStateOf(false) }
     var showPlaylists by remember { mutableStateOf(false) }
     var pendingAddSong by remember { mutableStateOf<Song?>(null) }
-    val onPlayerPage by remember { derivedStateOf { pagerState.currentPage == 1 } }
-    val hasOverlay = pendingAddSong != null || showPlaylists || showEqualizer || showSleepTimer || state.showReport || state.showSettings
 
+    val onPlayerPage by remember { derivedStateOf { pagerState.currentPage == 1 } }
+
+    val hasOverlay = pendingAddSong != null || showPlaylists || showEqualizer || showSleepTimer || state.showReport || state.showSettings
     BackHandler(enabled = hasOverlay) {
         when {
             pendingAddSong != null -> pendingAddSong = null
@@ -205,13 +229,24 @@ fun MainScreen(
     }
 
     val backScope = rememberCoroutineScope()
-    BackHandler(enabled = !hasOverlay && !state.layout.isDeck && onPlayerPage) { backScope.launch { pagerState.animateScrollToPage(0) } }
+    BackHandler(enabled = !hasOverlay && !state.layout.isDeck && onPlayerPage) {
+        backScope.launch { pagerState.animateScrollToPage(0) }
+    }
+
     val libraryListState = rememberLazyListState()
     val scrollerDragging = remember { mutableStateOf(false) }
-    var showCountLabel by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) { delay(4000); showCountLabel = false }
 
-    Box(Modifier.fillMaxSize().background(colors.background)) {
+    var showCountLabel by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(4000)
+        showCountLabel = false
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(colors.background)
+    ) {
         AuroraBackground(
             state.currentSong?.filePath,
             isDark = colors.isDark,
@@ -219,44 +254,81 @@ fun MainScreen(
             customUri = state.customBackgroundUri,
             modifier = if (glass) Modifier.irisBackdropSource(bgBackdrop) else Modifier
         )
+
         CompositionLocalProvider(LocalIrisBackdrops provides pageBackdrops) {
             Crossfade(
                 targetState = state.layout,
                 animationSpec = if (IrisMotion.jelly) IrisMotion.appear() else tween(420, easing = androidx.compose.animation.core.EaseInOut),
                 label = "layoutSwitch"
             ) { layout ->
-                if (layout.isDeck) {
-                    SongDeck(
-                        state = state, colors = colors,
-                        modifier = if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier,
-                        onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek, onSelect = onSelect,
-                        onToggleLike = onToggleLike, onCyclePlayMode = onCyclePlayMode, onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
-                        onOpenEqualizer = { showEqualizer = true }, onOpenSleepTimer = { showSleepTimer = true }, onOpenReport = { viewModel.toggleReport(true) },
-                        onOpenSettings = { onToggleSettings(true) }, onCycleLayout = { viewModel.setLayout(state.layout.next) }, onOpenPlaylists = { showPlaylists = true },
-                        onReload = { viewModel.reloadLibrary() }, eqActive = eqState.active
+            if (layout.isDeck) {
+                SongDeck(
+                    state = state,
+                    colors = colors,
+                    modifier = if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier,
+                    onToggle = onToggle,
+                    onPrev = onPrev,
+                    onNext = onNext,
+                    onSeek = onSeek,
+                    onSelect = onSelect,
+                    onToggleLike = onToggleLike,
+                    onCyclePlayMode = onCyclePlayMode,
+                    onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
+                    onOpenEqualizer = { showEqualizer = true },
+                    onOpenSleepTimer = { showSleepTimer = true },
+                    onOpenReport = { viewModel.toggleReport(true) },
+                    onOpenSettings = { onToggleSettings(true) },
+                    onCycleLayout = { viewModel.setLayout(state.layout.next) },
+                    onOpenPlaylists = { showPlaylists = true },
+                    onReload = { viewModel.reloadLibrary() },
+                    eqActive = eqState.active
+                )
+            } else {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier)
+            ) { page ->
+                when (page) {
+                    0 -> LibraryPage(
+                        state = state,
+                        colors = colors,
+                        listState = libraryListState,
+                        showTopBar = showTopBar,
+                        showRecommend = showRecommend,
+                        onSelect = { index -> onSelect(index) },
+                        onPlaySong = viewModel::playSong,
+                        onSearch = onSearch,
+                        onSettings = { onToggleSettings(true) },
+                        onReport = { viewModel.toggleReport(true) },
+                        onReload = { viewModel.reloadLibrary() },
+                        onCycleLayout = { viewModel.setLayout(state.layout.next) },
+                        onOpenPlaylists = { showPlaylists = true },
+                        onSortOrder = viewModel::setSortOrder,
+                        onSortDirection = viewModel::setSortDirection,
+                        onAddToPlaylist = { song -> pendingAddSong = song },
+                        scrollerDragging = scrollerDragging,
+                        showCount = showCountLabel
                     )
-                } else {
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier.fillMaxSize().then(if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier)
-                    ) { page ->
-                        when (page) {
-                            0 -> LibraryPage(
-                                state = state, colors = colors, listState = libraryListState,
-                                showTopBar = showTopBar, showRecommend = showRecommend,
-                                onSelect = { index -> onSelect(index) }, onPlaySong = viewModel::playSong, onSearch = onSearch,
-                                onSettings = { onToggleSettings(true) }, onReport = { viewModel.toggleReport(true) }, onReload = { viewModel.reloadLibrary() },
-                                onCycleLayout = { viewModel.setLayout(state.layout.next) }, onOpenPlaylists = { showPlaylists = true },
-                                onSortOrder = viewModel::setSortOrder, onSortDirection = viewModel::setSortDirection,
-                                onAddToPlaylist = { song -> pendingAddSong = song }, scrollerDragging = scrollerDragging, showCount = showCountLabel
-                            )
-                            1 -> PlayerPage(
-                                state = state, colors = colors, viewModel = viewModel, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek,
-                                onToggleLike = onToggleLike, onCyclePlayMode = onCyclePlayMode, onOpenEqualizer = { showEqualizer = true }, onOpenSleepTimer = { showSleepTimer = true }, eqActive = eqState.active
-                            )
-                        }
-                    }
+
+                    1 -> PlayerPage(
+                        state = state,
+                        colors = colors,
+                        viewModel = viewModel,
+                        onToggle = onToggle,
+                        onPrev = onPrev,
+                        onNext = onNext,
+                        onSeek = onSeek,
+                        onToggleLike = onToggleLike,
+                        onCyclePlayMode = onCyclePlayMode,
+                        onOpenEqualizer = { showEqualizer = true },
+                        onOpenSleepTimer = { showSleepTimer = true },
+                        eqActive = eqState.active
+                    )
                 }
+            }
+            }
             }
         }
 
@@ -269,7 +341,11 @@ fun MainScreen(
                     val recPoolNotEmpty = if (state.selectedFolders.isEmpty()) state.allSongs.isNotEmpty() else state.allSongs.any { it.folderPath in state.selectedFolders }
                     val headerOffset = if (recPoolNotEmpty && state.searchQuery.isBlank() && state.showRecommendations) 1 else 0
                     FastScroller(
-                        listState = libraryListState, colors = colors, topPadding = 0.dp, bottomPadding = 0.dp, visible = scrollerVisible,
+                        listState = libraryListState,
+                        colors = colors,
+                        topPadding = 0.dp,
+                        bottomPadding = 0.dp,
+                        visible = scrollerVisible,
                         onClick = { Haptics.tap(); if (state.currentIndex >= 0) { locateScope.launch { libraryListState.animateScrollToItem(state.currentIndex + headerOffset) } } },
                         labelForIndex = { i -> state.queue.getOrNull(i - headerOffset)?.title },
                         onDraggingChange = { scrollerDragging.value = it }
