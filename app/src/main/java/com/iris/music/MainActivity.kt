@@ -11,6 +11,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
@@ -18,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.iris.music.player.PlayerViewModel
@@ -34,7 +37,6 @@ class MainActivity : ComponentActivity() {
             viewModel.reloadLibrary()
         }
 
-    // 用户从「所有文件访问」设置页返回后重新建库
     private val allFilesLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             viewModel.reloadLibrary()
@@ -62,27 +64,65 @@ class MainActivity : ComponentActivity() {
                 glassBlur = state.glassBlur,
                 uiFont = state.uiFont
             ) {
-                // 启动动画覆盖层
+                // 控制 Splash 是否还盖在最上面
                 var showSplash by remember { mutableStateOf(state.splashEnabled) }
+                // 控制主界面的“呼吸感”状态：Splash 结束前不显示，结束后浮现
+                var isMainVisible by remember { mutableStateOf(!state.splashEnabled) }
+
+                // 主界面浮现动画：放大 + 透明度恢复
+                val mainAlpha by animateFloatAsState(
+                    targetValue = if (isMainVisible) 1f else 0f,
+                    animationSpec = tween(durationMillis = 1000),
+                    label = "mainAlpha"
+                )
+                val mainScale by animateFloatAsState(
+                    targetValue = if (isMainVisible) 1f else 0.94f,
+                    animationSpec = tween(durationMillis = 1000),
+                    label = "mainScale"
+                )
+
                 Box(Modifier.fillMaxSize()) {
-                    MainScreen(
-                        state = state,
-                        viewModel = viewModel,
-                        onToggle = viewModel::togglePlay,
-                        onPrev = viewModel::previous,
-                        onNext = viewModel::next,
-                        onSeek = viewModel::seekTo,
-                        onSelect = viewModel::playAt,
-                        onSearch = viewModel::updateSearch,
-                        onToggleLike = viewModel::toggleLike,
-                        onCyclePlayMode = viewModel::cyclePlayMode,
-                        onToggleSettings = viewModel::toggleSettings
-                    )
+                    // 底层主界面
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                alpha = mainAlpha
+                                scaleX = mainScale
+                                scaleY = mainScale
+                            }
+                    ) {
+                        MainScreen(
+                            state = state,
+                            viewModel = viewModel,
+                            onToggle = viewModel::togglePlay,
+                            onPrev = viewModel::previous,
+                            onNext = viewModel::next,
+                            onSeek = viewModel::seekTo,
+                            onSelect = viewModel::playAt,
+                            onSearch = viewModel::updateSearch,
+                            onToggleLike = viewModel::toggleLike,
+                            onCyclePlayMode = viewModel::cyclePlayMode,
+                            onToggleSettings = viewModel::toggleSettings
+                        )
+                    }
+
+                    // 顶层启动页
                     if (showSplash) {
                         SplashScreen(
                             style = state.splashStyle,
-                            onFinished = { showSplash = false }
+                            onFinished = {
+                                // 动画完全播完（背景已透明），才移除 Splash 层
+                                showSplash = false
+                            }
                         )
+                        // 当动画开始进入退出阶段时，让底下的 MainScreen 提前开始浮现
+                        // 使用 LaunchedEffect 监听 Splash 的进度，或者简单点，在 splash 准备结束时提前触发
+                        // 我们利用 state.splashEnabled 已经保证进来的逻辑，在这里直接用一个延迟触发主界面的淡入
+                        androidx.compose.runtime.LaunchedEffect(Unit) {
+                            kotlinx.coroutines.delay(4400) // 4秒书写 + 400ms 停留
+                            isMainVisible = true
+                        }
                     }
                 }
             }
@@ -94,18 +134,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
     }
 
-    /** 沉浸式系统栏：内容延伸至状态栏/导航栏区域，系统栏透明、图标跟随主题，常驻显示 */
     private fun enableImmersiveMode() {
-        // 内容延伸到状态栏/导航栏区域，背景铺满全屏（消除黑块）
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        // 保持系统栏常驻（不隐藏），只做透明化处理，避免滑动唤出导致退应用要划两次
     }
 
     private fun requestNeededPermissions() {
-        // targetSdk 30+：「所有文件访问」(MANAGE_EXTERNAL_STORAGE) 是曲库直扫的推荐权限，
-        // 但属于系统级高危权限且页面常被用户跳过——旧实现每次冷启动都强制跳过去，
-        // 等于每开一次 App 先把用户踢出去一趟。现在只在首次启动引导一次，
-        // 之后设置页「数据 → 存储权限」可随时手动开启。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
             val prefs = getSharedPreferences("app_state", MODE_PRIVATE)
             if (!prefs.getBoolean("all_files_prompted", false)) {
@@ -117,13 +150,11 @@ class MainActivity : ComponentActivity() {
                     )
                     allFilesLauncher.launch(intent)
                 }.onFailure {
-                    // 个别 ROM 不支持带包名的定向页，退回总列表页
                     runCatching {
                         allFilesLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                     }
                 }
             }
-            // 不再 return：继续走下面的常规权限（通知等）一次性申请
         }
 
         val perms = mutableListOf<String>()
@@ -133,9 +164,6 @@ class MainActivity : ComponentActivity() {
         } else {
             perms += Manifest.permission.READ_EXTERNAL_STORAGE
         }
-        // 只在确有未授予的权限时才弹窗。否则权限回调会触发 reloadLibrary()（完整扫盘），
-        // 导致每次冷启动都强制重扫一遍——这正是"重新进应用又重新加载"的来源。
-        // 权限齐全时什么都不做：ViewModel init 里的 loadLibrary() 已经走"缓存秒开"路径。
         val missing = perms.filter {
             checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
         }
