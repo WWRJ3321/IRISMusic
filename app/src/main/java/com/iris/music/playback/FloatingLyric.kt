@@ -14,9 +14,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.text.SpannableString
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -87,7 +84,7 @@ object FloatingLyric {
     private var shown = false
     private var lastWidth = 0
     
-    private var lastSplit = -1
+    private var lastFrac = -1f
     private var lastLineText = ""
 
     private val poll = object : Runnable {
@@ -285,7 +282,7 @@ object FloatingLyric {
             val nextLine = lines.getOrNull(idx + 1)?.timeMs ?: (if (p.duration > 0) p.duration else line.timeMs + 4000)
             
             if (isKaraoke) {
-                // 【核心修复 1】：加入伪逐字计算。没有词级时间标签时，按时间均分进度。
+                // 加入伪逐字计算，保证任何歌词都有平滑进度
                 val progressF = LyricParser.wordProgressCharsF(line, p.currentPosition, nextLine)
                 val frac = if (progressF >= 0f) {
                     progressF / line.text.length.coerceAtLeast(1)
@@ -295,10 +292,9 @@ object FloatingLyric {
                     val singMs = minOf(est, span).coerceAtLeast((span * 0.92f).toLong())
                     ((p.currentPosition - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
                 }
-                val split = (line.text.length * frac).toInt().coerceIn(0, line.text.length)
-                setRichText(line.text, split)
+                setRichText(line.text, frac)
             } else {
-                setRichText(line.text, line.text.length)
+                setRichText(line.text, 1f)
             }
         } else { setText("") }
     }
@@ -315,61 +311,83 @@ object FloatingLyric {
     }
 
     private fun setText(s: String) {
+        val tv = textView ?: return
         lastLineText = s
-        lastSplit = -1
-        textView?.apply {
-            // 恢复默认阴影和纯色
-            setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
-            paint.shader = null
-            setTextColor(Color.WHITE)
-            text = s
+        lastFrac = -1f
+        tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
+        tv.paint.shader = null
+        tv.setTextColor(Color.WHITE)
+        if (tv.text?.toString() != s) {
+            tv.text = s
+        } else {
+            tv.invalidate()
         }
     }
 
     /**
-     * 【核心修复 2】：彻底解决模糊问题。
-     * 已唱部分不加 Span，直接让渐变色透出来；未唱部分加半透明 Span。
-     * 同时，在逐字模式关闭阴影，彻底消除边缘发光！
+     * 核心黑科技：利用 LinearGradient 的 positions 实现像素级平滑流光。
      */
-    private fun setRichText(text: String, split: Int) {
+    private fun setRichText(text: String, frac: Float) {
         val tv = textView ?: return
-        if (text == lastLineText && split == lastSplit) return
+        if (text == lastLineText && Math.abs(frac - lastFrac) < 0.001f) return
         lastLineText = text
-        lastSplit = split
+        lastFrac = frac
         
         val (c1, c2) = getColors()
-        val unsungColor = Color.parseColor("#88FFFFFF")
+        val unsungColor = Color.parseColor("#66FFFFFF") // 未唱部分的半透明暗色
         
-        if (split >= text.length) {
-            // 已经唱完
-            tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt()) // 恢复阴影
-            if (useCustom) {
-                tv.paint.shader = LinearGradient(0f, 0f, tv.width.toFloat().coerceAtLeast(1f), 0f, c1, c2, Shader.TileMode.CLAMP)
-                tv.setTextColor(c1)
-            } else {
-                tv.paint.shader = null
-                tv.setTextColor(c1)
-            }
+        val w = tv.width.toFloat()
+        if (w <= 0f) {
+            tv.text = text
+            return
+        }
+
+        // 恢复阴影
+        tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
+        
+        val positions: FloatArray
+        val colors: IntArray
+        
+        if (frac >= 0.999f) {
+            // 已唱完：纯渐变
+            positions = floatArrayOf(0f, 1f)
+            colors = intArrayOf(c1, c2)
+        } else if (frac <= 0.001f) {
+            // 未开始：全暗
+            positions = floatArrayOf(0f, 1f)
+            colors = intArrayOf(unsungColor, unsungColor)
+        } else {
+            // 扫光中
+            val soft = 0.08f // 光带柔和度
+            val s1 = (frac - soft).coerceAtLeast(0f)
+            val s2 = frac
+            
+            // 算出当前扫光位置的过渡色
+            val edgeColor = lerpColor(c1, c2, frac)
+            
+            positions = floatArrayOf(0f, s1, s2, 1f)
+            // 已唱部分是渐变的，过渡带是边缘色到暗色
+            colors = intArrayOf(c1, edgeColor, unsungColor, unsungColor)
+        }
+        
+        // 直接给画笔上渐变色
+        tv.paint.shader = LinearGradient(0f, 0f, w, 0f, colors, positions, Shader.TileMode.CLAMP)
+        
+        // 如果文本没有变化，只重绘即可，不需要 setText 触发布局
+        if (tv.text?.toString() != text) {
             tv.text = text
         } else {
-            // 逐字中
-            tv.setShadowLayer(0f, 0f, 0f, Color.TRANSPARENT) // 【关键】关闭阴影，防止透明字出现模糊光晕！
-            if (useCustom) {
-                tv.paint.shader = LinearGradient(0f, 0f, tv.width.toFloat().coerceAtLeast(1f), 0f, c1, c2, Shader.TileMode.CLAMP)
-                tv.setTextColor(c1)
-            } else {
-                tv.paint.shader = null
-                tv.setTextColor(c1)
-            }
-            
-            val ss = SpannableString(text)
-            // 已唱部分（0 到 split）：不添加任何 Span，让它自动使用 paint.shader 透出渐变！
-            // 未唱部分（split 到 end）：添加半透明暗色覆盖。
-            if (split < text.length) {
-                ss.setSpan(ForegroundColorSpan(unsungColor), split, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-            tv.text = ss
+            tv.invalidate()
         }
+    }
+
+    private fun lerpColor(c1: Int, c2: Int, t: Float): Int {
+        return android.graphics.Color.argb(
+            (Color.alpha(c1) + (Color.alpha(c2) - Color.alpha(c1)) * t).toInt(),
+            (Color.red(c1) + (Color.red(c2) - Color.red(c1)) * t).toInt(),
+            (Color.green(c1) + (Color.green(c2) - Color.green(c1)) * t).toInt(),
+            (Color.blue(c1) + (Color.blue(c2) - Color.blue(c1)) * t).toInt()
+        )
     }
 
     fun requestPermission(ctx: Context) = runCatching { ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
