@@ -33,13 +33,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-/**
- * 桌面悬浮歌词：常驻全局覆盖窗，单行显示当前句，跟随播放进度滚动。
- *
- * 挂在 [MusicService] 上而非 Activity：服务是前台常驻的，App 退到桌面、切到别的
- * 应用，歌词窗依然跟随。所有可调项（开关/字号/长度/透明度）读 `iris_prefs`，
- * 注册 [SharedPreferences.OnSharedPreferenceChangeListener] 实时响应设置页改动。
- */
 object FloatingLyric {
 
     const val PREFS = "iris_prefs"
@@ -94,7 +87,6 @@ object FloatingLyric {
     private var shown = false
     private var lastWidth = 0
     
-    // 用于记录上一次的渲染进度，防止 50ms 内的重复渲染
     private var lastSplit = -1
     private var lastLineText = ""
 
@@ -290,23 +282,31 @@ object FloatingLyric {
         val idx = LyricParser.currentIndex(lines, p.currentPosition)
         if (idx in lines.indices) {
             val line = lines[idx]
-            val nextLine = lines.getOrNull(idx + 1)?.timeMs ?: p.duration
+            val nextLine = lines.getOrNull(idx + 1)?.timeMs ?: (if (p.duration > 0) p.duration else line.timeMs + 4000)
+            
             if (isKaraoke) {
-                // 借用原生插值方法获取浮点进度
-                val progress = LyricParser.wordProgressCharsF(line, p.currentPosition, nextLine)
-                val split = progress.toInt().coerceIn(0, line.text.length)
+                // 【核心修复 1】：加入伪逐字计算。没有词级时间标签时，按时间均分进度。
+                val progressF = LyricParser.wordProgressCharsF(line, p.currentPosition, nextLine)
+                val frac = if (progressF >= 0f) {
+                    progressF / line.text.length.coerceAtLeast(1)
+                } else {
+                    val span = (nextLine - line.timeMs).coerceAtLeast(1L)
+                    val est = (line.text.length * 300L).coerceAtLeast(600L)
+                    val singMs = minOf(est, span).coerceAtLeast((span * 0.92f).toLong())
+                    ((p.currentPosition - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
+                }
+                val split = (line.text.length * frac).toInt().coerceIn(0, line.text.length)
                 setRichText(line.text, split)
             } else {
-                // 非逐字，整句全亮
                 setRichText(line.text, line.text.length)
             }
         } else { setText("") }
     }
 
     private fun getColors(): Pair<Int, Int> {
-        if (!useCustom) return Color.WHITE to Color.BLACK
+        if (!useCustom) return Color.WHITE to Color.WHITE
         return when (theme) {
-            IrisTheme.MONO -> Color.WHITE to Color.BLACK
+            IrisTheme.MONO -> Color.WHITE to Color.WHITE
             IrisTheme.OCEAN -> 0xFF3D7BFF.toInt() to 0xFF00F0FF.toInt()
             IrisTheme.GRASS -> 0xFF2EE6A8.toInt() to 0xFFB4FF39.toInt()
             IrisTheme.CUSTOM -> customPrimary.toInt() to customSecondary.toInt()
@@ -316,28 +316,35 @@ object FloatingLyric {
 
     private fun setText(s: String) {
         lastLineText = s
-        textView?.text = s
+        lastSplit = -1
+        textView?.apply {
+            // 恢复默认阴影和纯色
+            setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
+            paint.shader = null
+            setTextColor(Color.WHITE)
+            text = s
+        }
     }
 
     /**
-     * 核心渲染逻辑：利用 paint.shader 铺渐变底色 + SpannableString 涂黑未唱部分。
+     * 【核心修复 2】：彻底解决模糊问题。
+     * 已唱部分不加 Span，直接让渐变色透出来；未唱部分加半透明 Span。
+     * 同时，在逐字模式关闭阴影，彻底消除边缘发光！
      */
     private fun setRichText(text: String, split: Int) {
         val tv = textView ?: return
-        if (text == lastLineText && split == lastSplit) return // 防重复渲染
-        
+        if (text == lastLineText && split == lastSplit) return
         lastLineText = text
         lastSplit = split
         
         val (c1, c2) = getColors()
-        // 未唱部分的半透明暗色
         val unsungColor = Color.parseColor("#88FFFFFF")
         
         if (split >= text.length) {
             // 已经唱完
+            tv.setShadowLayer(6f, 0f, 1f, 0x99000000.toInt()) // 恢复阴影
             if (useCustom) {
-                val shaderWidth = tv.width.toFloat().coerceAtLeast(1f)
-                tv.paint.shader = LinearGradient(0f, 0f, shaderWidth, 0f, c1, c2, Shader.TileMode.CLAMP)
+                tv.paint.shader = LinearGradient(0f, 0f, tv.width.toFloat().coerceAtLeast(1f), 0f, c1, c2, Shader.TileMode.CLAMP)
                 tv.setTextColor(c1)
             } else {
                 tv.paint.shader = null
@@ -345,10 +352,10 @@ object FloatingLyric {
             }
             tv.text = text
         } else {
-            // 逐字流光
+            // 逐字中
+            tv.setShadowLayer(0f, 0f, 0f, Color.TRANSPARENT) // 【关键】关闭阴影，防止透明字出现模糊光晕！
             if (useCustom) {
-                val shaderWidth = tv.width.toFloat().coerceAtLeast(1f)
-                tv.paint.shader = LinearGradient(0f, 0f, shaderWidth, 0f, c1, c2, Shader.TileMode.CLAMP)
+                tv.paint.shader = LinearGradient(0f, 0f, tv.width.toFloat().coerceAtLeast(1f), 0f, c1, c2, Shader.TileMode.CLAMP)
                 tv.setTextColor(c1)
             } else {
                 tv.paint.shader = null
@@ -356,12 +363,9 @@ object FloatingLyric {
             }
             
             val ss = SpannableString(text)
-            if (split > 0) {
-                // 已唱部分不需要 Span，直接让底部的 paint.shader 透出来
-                ss.setSpan(ForegroundColorSpan(Color.TRANSPARENT), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
+            // 已唱部分（0 到 split）：不添加任何 Span，让它自动使用 paint.shader 透出渐变！
+            // 未唱部分（split 到 end）：添加半透明暗色覆盖。
             if (split < text.length) {
-                // 未唱部分用半透明暗色覆盖
                 ss.setSpan(ForegroundColorSpan(unsungColor), split, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             tv.text = ss
