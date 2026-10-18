@@ -12,6 +12,7 @@ import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Shader
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
@@ -197,7 +198,6 @@ object FloatingLyric {
 
         attachDrag(box, lp, sp)
         
-        // 增加上下左右的 padding
         val density = ctx.resources.displayMetrics.density
         val padH = (16 * density).toInt()
         val padV = (12 * density).toInt()
@@ -263,8 +263,8 @@ object FloatingLyric {
     private fun applyStyle() {
         val box = container ?: return
         val fill = GradientDrawable().apply {
-            cornerRadius = 18 * box.resources.displayMetrics.density
-            setColor(((1f - bgT).coerceIn(0f, 1f) * 190).roundToInt().let { (it shl 24) })
+            cornerRadius = 18f * box.resources.displayMetrics.density
+            setColor(((1f - bgT).coerceIn(0f, 1f) * 190f).roundToInt().let { (it shl 24) })
         }
         bgDrawable = fill
         box.background = fill
@@ -304,17 +304,17 @@ object FloatingLyric {
         val idx = LyricParser.currentIndex(lines, p.currentPosition)
         if (idx in lines.indices) {
             val line = lines[idx]
-            val nextLine = lines.getOrNull(idx + 1)?.timeMs ?: (if (p.duration > 0) p.duration else line.timeMs + 4000)
+            val nextLine = lines.getOrNull(idx + 1)?.timeMs ?: (if (p.duration > 0) p.duration else line.timeMs + 4000L)
             
             var frac = 1f
             if (isKaraoke) {
                 val progressF = LyricParser.wordProgressCharsF(line, p.currentPosition, nextLine)
                 frac = if (progressF >= 0f) {
-                    progressF / line.text.length.coerceAtLeast(1)
+                    progressF / line.text.length.coerceAtLeast(1).toFloat()
                 } else {
-                    val span = (nextLine - line.timeMs).coerceAtLeast(1L)
-                    val est = (line.text.length * 300L).coerceAtLeast(600L)
-                    val singMs = minOf(est, span).coerceAtLeast((span * 0.92f).toLong())
+                    val span = (nextLine - line.timeMs).coerceAtLeast(1L).toFloat()
+                    val est = (line.text.length * 300L).coerceAtLeast(600L).toFloat()
+                    val singMs = minOf(est, span).coerceAtLeast((span * 0.92f))
                     ((p.currentPosition - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
                 }
             }
@@ -351,9 +351,6 @@ object FloatingLyric {
     fun hasPermission(ctx: Context): Boolean = Settings.canDrawOverlays(ctx)
 }
 
-/**
- * 核心渲染引擎：完全重写 onDraw，拒绝 TextView，杜绝任何测量闪烁。
- */
 class LyricRenderView(context: Context) : View(context) {
     var textSizeSp: Float = 18f
         set(value) {
@@ -364,11 +361,11 @@ class LyricRenderView(context: Context) : View(context) {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = textSizeSp * context.resources.displayMetrics.scaledDensity
-        typeface = android.graphics.Typeface.DEFAULT_BOLD
-        setShadowLayer(6f, 0f, 1f, 0x99000000.toInt()) // 恢复阴影提升暗背景可读性
+        typeface = Typeface.DEFAULT_BOLD
+        setShadowLayer(6f, 0f, 1f, 0x99000000.toInt())
     }
     
-    private val shaderPaint = Paint(Paint.ANTI_ALIAS_FLAG) // 用于绘制渐变色
+    private val shaderPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private var prevText = ""
     private var currText = ""
@@ -379,7 +376,7 @@ class LyricRenderView(context: Context) : View(context) {
     private var c2 = Color.WHITE
     private var unsungColor = Color.GRAY
 
-    private val GAP = "   " // 句子之间紧凑的间距
+    private val GAP = "   "
 
     fun updateContent(p: String, c: String, n: String, f: Float, col1: Int, col2: Int, unsung: Int, karaoke: Boolean) {
         prevText = p
@@ -390,7 +387,7 @@ class LyricRenderView(context: Context) : View(context) {
         c2 = col2
         unsungColor = unsung
         isKaraoke = karaoke
-        invalidate() // 只重绘，不重新布局
+        invalidate()
     }
 
     fun requestLayoutAndInvalidate() {
@@ -401,7 +398,6 @@ class LyricRenderView(context: Context) : View(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val fm = paint.fontMetrics
         val height = (fm.bottom - fm.top).toInt() + paddingTop + paddingBottom
-        // 宽度完全由外部 WindowManager 决定
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), height)
     }
 
@@ -409,8 +405,8 @@ class LyricRenderView(context: Context) : View(context) {
         super.onDraw(canvas)
         if (currText.isEmpty()) return
 
-        val viewW = width - paddingLeft - paddingRight
-        if (viewW <= 0) return
+        val viewW = width.toFloat() - paddingLeft.toFloat() - paddingRight.toFloat()
+        if (viewW <= 0f) return
 
         val fullText = buildString {
             if (prevText.isNotEmpty()) { append(prevText); append(GAP) }
@@ -422,34 +418,27 @@ class LyricRenderView(context: Context) : View(context) {
         val currW = paint.measureText(currText)
         val totalW = paint.measureText(fullText)
 
-        // 计算焦点：当前字的绝对 X 坐标
         val focusX = prevW + currW * frac
 
-        // 将画布平移，使得焦点固定在视图的中央
+        // 【修复 431 行】：将所有坐标强制转换为 Float
         val translateX = (viewW / 2f) - focusX
         canvas.save()
-        canvas.translate(paddingLeft + translateX, paddingTop)
+        canvas.translate(paddingLeft.toFloat() + translateX, paddingTop.toFloat())
 
-        // 1. 绘制文字底层（全亮或单色）
-        // 2. 如果开启流光，使用 LinearGradient 裁剪
-        
+        // 基础文字颜色
         paint.shader = null
         paint.color = if (useGradient()) c1 else (if (isKaraoke && frac < 0.999f) unsungColor else c1)
         
-        // 为了极致性能，我们用底层的文字（暗色/全亮），然后上面盖一层渐变来绘制“已唱部分”
         if (isKaraoke && frac > 0f) {
-            // 先画底层：所有字都是未唱颜色
             paint.color = unsungColor
             canvas.drawText(fullText, 0f, -paint.fontMetrics.top, paint)
             
-            // 再画已唱部分：
-            // 这里有个核心技巧：我们要画的也是这行长文本，但只画焦点左侧的部分，并且加上渐变色。
-            // 用 clipRect 裁掉右侧未唱的部分。
             canvas.save()
+            // 【修复 284 行】：确保 clipRect 里的所有参数都是 Float
             canvas.clipRect(0f, -paint.fontMetrics.ascent, focusX, -paint.fontMetrics.top)
             
             if (useGradient()) {
-                paint.shader = LinearGradient(0f, 0f, totalW, 0f, c1, c2, Shader.TileMode.CLAMP)
+                paint.shader = LinearGradient(0f, 0f, totalW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
             } else {
                 paint.shader = null
                 paint.color = c1
@@ -458,9 +447,8 @@ class LyricRenderView(context: Context) : View(context) {
             canvas.restore()
             
         } else {
-            // 非流光状态：只有全亮或未唱
             if (useGradient()) {
-                paint.shader = LinearGradient(0f, 0f, totalW, 0f, c1, c2, Shader.TileMode.CLAMP)
+                paint.shader = LinearGradient(0f, 0f, totalW, 0f, intArrayOf(c1, c2), floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
             } else {
                 paint.shader = null
                 paint.color = c1
@@ -476,9 +464,6 @@ class LyricRenderView(context: Context) : View(context) {
     }
 }
 
-/**
- * 依然保留边缘渐隐的容器，包裹我们手绘的 View。
- */
 class FadeEdgeLayout(context: Context) : FrameLayout(context) {
     private val paint = Paint().apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
