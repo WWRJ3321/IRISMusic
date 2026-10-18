@@ -27,26 +27,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
-/**
- * 启动动画：手写体 "Hello" 描边书写。
- * 样式：
- * 0 = 简约（原版居中，红蓝绿渐变）
- * 1 = 温柔（帽檐式，上方衬线 MUSIC，下方蓝粉渐变 hello）
- * 2 = 细腻（尾巴式，上方蓝紫渐变 hello，下方斜体 music）
- */
 @Composable
 fun SplashScreen(style: Int, onFinished: () -> Unit) {
     val drawProgress = remember { Animatable(0f) }
-    // 退场进度：0 = 完全显示，1 = 完全退场
     val exitProgress = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
-        // 1. 4秒书写
         drawProgress.animateTo(
             targetValue = 1f,
             animationSpec = tween(
@@ -54,10 +44,7 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
                 easing = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
             )
         )
-        // 2. 停留 400ms
         delay(400)
-        
-        // 3. 一镜到底转场：文字放大推进 + 黑底溶解
         exitProgress.animateTo(
             targetValue = 1f,
             animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
@@ -68,32 +55,28 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            // 背景不是生硬地消失，而是把透明度降为 0，透出底部的 MainScreen
             .background(Color.Black.copy(alpha = 1f - exitProgress.value))
             .graphicsLayer {
-                // 整个画面稍微放大一点点（1.0 -> 1.08），视觉上像穿过屏幕
-                val scale = 1f + (exitProgress.value * 0.08f)
+                val scale = 1f + (exitProgress.value * 0.05f)
                 scaleX = scale
                 scaleY = scale
             },
         contentAlignment = Alignment.Center
     ) {
         val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-        val helloW = screenWidth * 0.85f
+        // 稍微缩小一点实际图形比例，留出边界
+        val helloW = screenWidth * 0.75f
         val helloH = helloW / 3.45f
 
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier.graphicsLayer {
-                // 文字淡出得比黑底稍微快一点
                 alpha = 1f - (exitProgress.value * 1.5f).coerceIn(0f, 1f)
-                // 文字额外向前推进（放大）
                 val textScale = 1f + (exitProgress.value * 0.15f)
                 scaleX = textScale
                 scaleY = textScale
             }
         ) {
-            // 1. Hello 主画布
             Canvas(
                 Modifier
                     .size(helloW, helloH)
@@ -105,7 +88,13 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
                         }
                     }
             ) {
-                val fullPath = buildHelloPath(size.width, size.height, 0f, 0f)
+                // 因为原曲线有超出 0~1 范围的控制点，我们在这里对画布做一点安全内缩
+                val safeW = size.width * 0.9f
+                val safeH = size.height * 0.9f
+                val offsetX = (size.width - safeW) / 2f
+                val offsetY = (size.height - safeH) / 2f
+                
+                val fullPath = buildHelloPath(safeW, safeH, offsetX, offsetY)
                 val measure = PathMeasure().apply { setPath(fullPath, false) }
                 val totalLen = measure.length
                 if (totalLen <= 0f) return@Canvas
@@ -129,7 +118,6 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
                 )
             }
 
-            // 2. 帽檐式上方的 M U S I C
             if (style == 1) {
                 Text(
                     text = "M U S I C",
@@ -141,7 +129,6 @@ fun SplashScreen(style: Int, onFinished: () -> Unit) {
                 )
             }
 
-            // 3. 尾巴式右下方的 music
             if (style == 2) {
                 Text(
                     text = "music",
