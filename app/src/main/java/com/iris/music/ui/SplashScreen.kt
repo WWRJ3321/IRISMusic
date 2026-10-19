@@ -53,7 +53,7 @@ fun SplashScreen(style: Int, isDark: Boolean, onFinished: () -> Unit) {
         onFinished()
     }
 
-    val bgColor = if (isDark) Color.Black else Color.White
+    val bgColor = if (isDark) Color(0xFF1C1C1E) else Color(0xFFF2F2F7)
     val textColor = if (isDark) Color.White else Color.Black
 
     Box(
