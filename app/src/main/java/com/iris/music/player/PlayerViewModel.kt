@@ -34,7 +34,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// ===== 你的专属服务器域名 =====
 private const val API_BASE_URL = "https://vvmusic-331312-8-1420953316.sh.run.tcloudbase.com"
 
 data class PlayerUiState(
@@ -134,11 +133,11 @@ data class PlayerUiState(
     val splashStyle: Int = 0,
     val useNewSettingsStyle: Boolean = false,
     
-    // ===== 网络音乐状态 =====
     val isOnlineMode: Boolean = false,
     val onlineSearchResults: List<Song> = emptyList(),
     val onlineSearchLoading: Boolean = false,
-    val onlinePlayedHistory: List<Song> = emptyList()
+    val onlinePlayedHistory: List<Song> = emptyList(),
+    val onlineErrorMsg: String? = null // 新增错误提示
 ) {
     val currentSong: Song? get() = queue.getOrNull(currentIndex)
     val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
@@ -160,6 +159,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             conn.requestMethod = "GET"
             conn.connectTimeout = 8000
             conn.readTimeout = 8000
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0")
             val inputStream = conn.inputStream
             val result = inputStream.bufferedReader().use { it.readText() }
             conn.disconnect()
@@ -322,7 +322,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 queue = emptyList(),
                 currentIndex = -1,
                 searchQuery = "",
-                onlineSearchResults = emptyList()
+                onlineSearchResults = emptyList(),
+                onlineErrorMsg = null
             )
             controller?.clearMediaItems()
             loadOnlineRecommendations()
@@ -331,7 +332,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 isOnlineMode = false,
                 queue = emptyList(),
                 currentIndex = -1,
-                searchQuery = ""
+                searchQuery = "",
+                onlineErrorMsg = null
             )
             controller?.clearMediaItems()
             applyFilters(resetToFirst = true)
@@ -345,12 +347,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         
         if (_state.value.isOnlineMode) {
             if (query.isBlank()) {
-                _state.value = _state.value.copy(onlineSearchResults = emptyList(), onlineSearchLoading = false)
+                _state.value = _state.value.copy(onlineSearchResults = emptyList(), onlineSearchLoading = false, onlineErrorMsg = null)
                 return
             }
             searchJob = viewModelScope.launch {
                 delay(500)
-                _state.value = _state.value.copy(onlineSearchLoading = true)
+                _state.value = _state.value.copy(onlineSearchLoading = true, onlineErrorMsg = null)
                 val results = searchOnlineSongs(query)
                 _state.value = _state.value.copy(onlineSearchResults = results, onlineSearchLoading = false)
             }
@@ -363,7 +365,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         try {
             val encoded = URLEncoder.encode(keyword, "UTF-8")
             val url = "$API_BASE_URL/search?keywords=$encoded"
-            val jsonString = fetchUrl(url) ?: return@withContext emptyList()
+            val jsonString = fetchUrl(url)
+            if (jsonString == null) {
+                _state.value = _state.value.copy(onlineErrorMsg = "网络请求失败，请检查网络连接")
+                return@withContext emptyList()
+            }
             val jsonObject = JSONObject(jsonString)
             val resultObj = jsonObject.optJSONObject("result")
             val songsArray = resultObj?.optJSONArray("songs")
@@ -376,24 +382,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     val artists = songObj.optJSONArray("artists")
                     val artistName = artists?.optJSONObject(0)?.optString("name") ?: "未知歌手"
                     val duration = songObj.optLong("duration")
-                    // === 修复：补全必填参数 uri, folderPath, folderName ===
-                    list.add(Song(
-                        id = id, 
-                        title = name, 
-                        artist = artistName, 
-                        album = "", 
-                        filePath = "online_$id", 
-                        durationMs = duration, 
-                        albumArtUri = null,
-                        uri = android.net.Uri.parse(""), // 在线歌曲不需要真实文件 uri
-                        folderPath = "online",
-                        folderName = "网络音乐"
-                    ))
+                    list.add(Song(id = id, title = name, artist = artistName, album = "", filePath = "online_$id", durationMs = duration, albumArtUri = null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐"))
                 }
             }
             list
         } catch (e: Exception) {
             e.printStackTrace()
+            _state.value = _state.value.copy(onlineErrorMsg = "数据解析失败: ${e.message}")
             emptyList()
         }
     }
@@ -415,19 +410,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         val artists = songObj.optJSONArray("ar")
                         val artistName = artists?.optJSONObject(0)?.optString("name") ?: "未知歌手"
                         val duration = songObj.optLong("dt")
-                        // === 修复：补全必填参数 ===
-                        list.add(Song(
-                            id = id, 
-                            title = name, 
-                            artist = artistName, 
-                            album = "", 
-                            filePath = "online_$id", 
-                            durationMs = duration, 
-                            albumArtUri = null,
-                            uri = android.net.Uri.parse(""),
-                            folderPath = "online",
-                            folderName = "网络音乐"
-                        ))
+                        list.add(Song(id = id, title = name, artist = artistName, album = "", filePath = "online_$id", durationMs = duration, albumArtUri = null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐"))
                     }
                 }
                 if (list.isNotEmpty()) {
@@ -442,7 +425,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun playOnlineSong(song: Song) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. 获取播放链接
                 val url = "$API_BASE_URL/song/url?id=${song.id}"
                 val jsonString = fetchUrl(url) ?: return@launch
                 val jsonObject = JSONObject(jsonString)
@@ -450,7 +432,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 val audioUrl = dataArray?.optJSONObject(0)?.optString("url")
                 
                 if (!audioUrl.isNullOrEmpty()) {
-                    // 2. 静默获取歌词并缓存到本地
                     var finalFilePath = song.filePath
                     try {
                         val lyricUrl = "$API_BASE_URL/lyric?id=${song.id}"
@@ -465,25 +446,19 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                                 if (!cacheDir.exists()) cacheDir.mkdirs()
                                 val lyricFile = File(cacheDir, "online_${song.id}.lrc")
                                 lyricFile.writeText(lyricText)
-                                
-                                // 把歌词的绝对路径替换给 filePath
                                 finalFilePath = lyricFile.absolutePath
                             }
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace() // 歌词下载失败不影响播放
-                    }
+                    } catch (e: Exception) { e.printStackTrace() }
 
-                    // 3. 复制一个带有本地歌词路径的 Song
                     val playSong = song.copy(filePath = finalFilePath)
 
                     withContext(Dispatchers.Main) {
-                        // 4. 维护在线播放历史列表
                         val currentQueue = _state.value.queue.toMutableList()
                         val existIndex = currentQueue.indexOfFirst { it.id == playSong.id }
                         val playIndex: Int
                         if (existIndex >= 0) {
-                            currentQueue[existIndex] = playSong // 更新路径
+                            currentQueue[existIndex] = playSong
                             playIndex = existIndex
                         } else {
                             currentQueue.add(0, playSong)
@@ -491,7 +466,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         _state.value = _state.value.copy(queue = currentQueue)
                         
-                        // 5. 播放
                         val mediaItem = MediaItem.Builder()
                             .setMediaId(playSong.id.toString())
                             .setUri(android.net.Uri.parse(audioUrl))
@@ -499,9 +473,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                                 MediaMetadata.Builder()
                                     .setTitle(playSong.title)
                                     .setArtist(playSong.artist)
-                                    .setExtras(android.os.Bundle().apply {
-                                        putString("file_path", playSong.filePath)
-                                    })
+                                    .setExtras(android.os.Bundle().apply { putString("file_path", playSong.filePath) })
                                     .build()
                             ).build()
                         
@@ -511,9 +483,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         _state.value = _state.value.copy(currentIndex = playIndex)
                     }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            } catch (e: Exception) { e.printStackTrace() }
         }
     }
 
@@ -525,15 +495,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             currentQueue.removeAt(index)
             val newIndex = if (index == _state.value.currentIndex) {
                 if (currentQueue.isEmpty()) -1 else index.coerceAtMost(currentQueue.lastIndex)
-            } else if (index < _state.value.currentIndex) {
-                _state.value.currentIndex - 1
-            } else {
-                _state.value.currentIndex
-            }
+            } else if (index < _state.value.currentIndex) _state.value.currentIndex - 1
+            else _state.value.currentIndex
             _state.value = _state.value.copy(queue = currentQueue, currentIndex = newIndex)
-            if (currentQueue.isEmpty()) {
-                controller?.clearMediaItems()
-            }
+            if (currentQueue.isEmpty()) controller?.clearMediaItems()
         }
     }
 
