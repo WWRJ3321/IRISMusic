@@ -27,17 +27,34 @@ import java.net.URL
 import java.net.URLEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 // ===== 你的专属服务器域名 =====
 private const val API_BASE_URL = "https://vvmusic-331312-8-1420953316.sh.run.tcloudbase.com"
 
-// ===== 新增：网络数据类 =====
+// ===== 评论分页每页大小 =====
+private const val COMMENT_PAGE_SIZE = 20
+
+// ===== 搜索结果 URL 预检参数 =====
+/** 预检时最多取这么多首（搜索返回 50 首，超出部分没直链的会被滤掉） */
+private const val URL_CHECK_TAKE = 40
+/** 并发检查数：太高会打满连接池，太低搜索慢 */
+private const val URL_CHECK_CONCURRENCY = 20
+/** 每首 URL 预检超时（毫秒）：3 秒内拿不到直链视为无版权 */
+private const val URL_CHECK_TIMEOUT_MS = 3000L
+
+// ===== 网络数据类 =====
 data class MusicComment(
     val id: Long,
     val content: String,
@@ -134,6 +151,8 @@ data class PlayerUiState(
     val customPrimaryArgb: Long = 0xFF00F0FFL,
     val customSecondaryArgb: Long = 0xFFFF2E97L,
     val customBackgroundUri: String? = null,
+    /** 默认封面图（网络封面加载失败/超时的兜底），来自设置页「设置默认封面图」 */
+    val defaultCoverUri: android.net.Uri? = null,
     val scanRoot: String? = null,
     val lyricUseCustomColor: Boolean = false,
     val lyricTheme: IrisTheme = IrisTheme.MONO,
@@ -149,13 +168,13 @@ data class PlayerUiState(
     val splashEnabled: Boolean = true,
     val splashStyle: Int = 0,
     val useNewSettingsStyle: Boolean = false,
-    
+
     // ===== 网络音乐状态 =====
     val isOnlineMode: Boolean = false,
     val onlineSearchResults: List<Song> = emptyList(),
     val onlineSearchLoading: Boolean = false,
     val onlineErrorMsg: String? = null,
-    val showTranslationLyric: Boolean = true, // 双语歌词开关
+    val showTranslationLyric: Boolean = true,
     val topLists: List<TopListInfo> = emptyList(),
     val currentComments: List<MusicComment> = emptyList(),
     val currentCommentCount: Long = 0L,
@@ -246,6 +265,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             customPrimaryArgb = prefs.getLong(KEY_CUSTOM_PRIMARY, 0xFF00F0FFL),
             customSecondaryArgb = prefs.getLong(KEY_CUSTOM_SECONDARY, 0xFFFF2E97L),
             customBackgroundUri = prefs.getString(KEY_CUSTOM_BG_URI, null),
+            // === 新增：默认封面图（网络封面失败兜底）===
+            defaultCoverUri = prefs.getString(KEY_DEFAULT_COVER, null)?.let {
+                runCatching { android.net.Uri.parse(it) }.getOrNull()
+            },
             selectedFolders = readSelectedFolders(), scanRoot = readScanRoot(),
             lyricUseCustomColor = prefs.getBoolean(KEY_LYRIC_USE_CUSTOM, false),
             lyricTheme = runCatching { IrisTheme.valueOf(prefs.getString(KEY_LYRIC_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO),
@@ -266,7 +289,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         )
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
-    
+
     private var controller: MediaController? = null
     private var sleepUnsub: (() -> Unit)? = null
     private var searchJob: Job? = null
@@ -275,6 +298,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private var prevSongId: Long = -1L
     private var prevAccumMs: Long = 0L
     private var prevLegStartElapsed: Long = 0L
+
+    // ===== 评论分页状态 =====
+    /** 当前评论对应的歌曲 ID：切歌时用于丢弃旧请求的结果 */
+    private var currentCommentSongId: Long = -1L
+    /** 已加载到的评论数（= offset，用于拉下一页） */
+    private var commentOffset: Int = 0
 
     private fun prevPlayedMs(): Long {
         val open = if (prevLegStartElapsed > 0L) android.os.SystemClock.elapsedRealtime() - prevLegStartElapsed else 0L
@@ -343,6 +372,28 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(showTranslationLyric = show)
     }
 
+    // ===== 默认封面图 =====
+    /**
+     * 设置默认封面图（网络封面加载失败或超时的兜底）。
+     * 传 null = 清除（回到无兜底状态）。
+     */
+    fun setDefaultCoverUri(uri: android.net.Uri?) {
+        if (uri == null) {
+            prefs.edit().remove(KEY_DEFAULT_COVER).apply()
+            _state.value = _state.value.copy(defaultCoverUri = null)
+            return
+        }
+        val ctx = getApplication<android.app.Application>()
+        // 持久化 SAF 授权：重启应用后仍可读这张图
+        runCatching {
+            ctx.contentResolver.takePersistableUriPermission(
+                uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+        prefs.edit().putString(KEY_DEFAULT_COVER, uri.toString()).apply()
+        _state.value = _state.value.copy(defaultCoverUri = uri)
+    }
+
     fun setOnlineMode(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_ONLINE_MODE, enabled).apply()
         if (enabled) {
@@ -361,7 +412,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSearch(query: String) {
         _state.value = _state.value.copy(searchQuery = query)
         searchJob?.cancel()
-        
+
         if (_state.value.isOnlineMode) {
             if (query.isBlank()) {
                 _state.value = _state.value.copy(onlineSearchResults = emptyList(), onlineSearchLoading = false, onlineErrorMsg = null)
@@ -378,6 +429,15 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 全网搜索：拿到元数据后并发检查每首是否有直链，无直链（无版权）的直接剔除。
+     *
+     * 为什么要在搜索时就过滤：这些歌在点击播放时 `song/url/v1` 会返回 null，
+     * 旧版直接崩在 `setUri(parse(null))`。与其让用户点了才炸，不如列表里就不出现。
+     *
+     * 性能：40 首、并发 20、每首 3s 超时。典型 1-2 秒完成；最坏 2 轮 × 3s = 6s。
+     * 搜索期间 UI 显示"正在全网搜索…"，用户有反馈。
+     */
     private suspend fun searchOnlineSongs(keyword: String): List<Song> = withContext(Dispatchers.IO) {
         try {
             val encoded = URLEncoder.encode(keyword, "UTF-8")
@@ -403,28 +463,69 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     val duration = songObj.optLong("duration")
                     val popularity = songObj.optInt("popularity")
                     val publishTime = songObj.optLong("publishTime")
-                    
+
                     val albumObj = songObj.optJSONObject("album")
                     val albumName = albumObj?.optString("name") ?: ""
                     val rawPicUrl = albumObj?.optString("picUrl") ?: ""
                     val picUrl = if (rawPicUrl.isNotEmpty()) "$rawPicUrl?param=1024y1024" else ""
-                    
-                    list.add(Song(id = id, title = name, artist = artistName, album = albumName, filePath = "online_$id", durationMs = duration, albumArtUri = if (picUrl.isNotEmpty()) android.net.Uri.parse(picUrl) else null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐", popularity = popularity, publishTime = publishTime, artistAvatarUrl = artistAvatar))
+
+                    list.add(Song(
+                        id = id, title = name, artist = artistName, album = albumName,
+                        filePath = "online_$id", durationMs = duration,
+                        albumArtUri = if (picUrl.isNotEmpty()) android.net.Uri.parse(picUrl) else null,
+                        uri = android.net.Uri.parse(""),
+                        folderPath = "online", folderName = "网络音乐",
+                        popularity = popularity, publishTime = publishTime,
+                        artistAvatarUrl = artistAvatar
+                    ))
                 }
             }
-            
+
             // 智能排序：过滤翻唱，时长长的优先
             val blacklist = listOf("翻唱", "cover", "抖音", "片段", "dj", "伴奏", "live")
             list.sortWith(compareByDescending<Song> { song ->
                 val titleLower = song.title.lowercase()
                 if (blacklist.any { titleLower.contains(it) }) 0 else 1
             }.thenByDescending { it.durationMs })
-            
-            list
+
+            // ===== 关键：并发检查 URL，剔除无版权（无直链）的歌 =====
+            val candidates = list.take(URL_CHECK_TAKE)
+            val sem = Semaphore(URL_CHECK_CONCURRENCY)
+            val withUrl = coroutineScope {
+                candidates.map { song ->
+                    async {
+                        sem.withPermit {
+                            if (checkSongHasUrl(song.id)) song else null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+            withUrl
         } catch (e: Exception) {
             e.printStackTrace()
             _state.value = _state.value.copy(onlineErrorMsg = "解析失败")
             emptyList()
+        }
+    }
+
+    /**
+     * 检查某首歌是否有可用直链。exhigh 拿不到就降级 standard。
+     * 3 秒超时：超时视为无版权（网络太差时宁可少显示，也不给用户一个点不开的条目）。
+     */
+    private suspend fun checkSongHasUrl(songId: Long): Boolean = withContext(Dispatchers.IO) {
+        try {
+            withTimeoutOrNull(URL_CHECK_TIMEOUT_MS) {
+                for (level in listOf("exhigh", "standard")) {
+                    val url = "$API_BASE_URL/song/url/v1?id=$songId&level=$level"
+                    val jsonString = fetchUrl(url) ?: continue
+                    val dataArray = JSONObject(jsonString).optJSONArray("data")
+                    val urlStr = dataArray?.optJSONObject(0)?.optString("url")
+                    if (!urlStr.isNullOrEmpty()) return@withTimeoutOrNull true
+                }
+                false
+            } ?: false
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -451,8 +552,15 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         val albumName = albumObj?.optString("name") ?: ""
                         val rawPicUrl = albumObj?.optString("picUrl") ?: ""
                         val picUrl = if (rawPicUrl.isNotEmpty()) "$rawPicUrl?param=1024y1024" else ""
-                        
-                        list.add(Song(id = id, title = name, artist = artistName, album = albumName, filePath = "online_$id", durationMs = duration, albumArtUri = if (picUrl.isNotEmpty()) android.net.Uri.parse(picUrl) else null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐", artistAvatarUrl = artistAvatar))
+
+                        list.add(Song(
+                            id = id, title = name, artist = artistName, album = albumName,
+                            filePath = "online_$id", durationMs = duration,
+                            albumArtUri = if (picUrl.isNotEmpty()) android.net.Uri.parse(picUrl) else null,
+                            uri = android.net.Uri.parse(""),
+                            folderPath = "online", folderName = "网络音乐",
+                            artistAvatarUrl = artistAvatar
+                        ))
                     }
                 }
                 if (list.isNotEmpty()) _state.value = _state.value.copy(recommendations = list)
@@ -469,7 +577,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 if (listArray != null) {
                     for (i in 0 until listArray.length()) {
                         val obj = listArray.getJSONObject(i)
-                        list.add(TopListInfo(obj.getLong("id"), obj.getString("name"), obj.optString("coverImgUrl") + "?param=300y300", obj.optString("updateFrequency")))
+                        list.add(TopListInfo(
+                            obj.getLong("id"),
+                            obj.getString("name"),
+                            obj.optString("coverImgUrl") + "?param=300y300",
+                            obj.optString("updateFrequency")
+                        ))
                     }
                 }
                 _state.value = _state.value.copy(topLists = list)
@@ -488,7 +601,18 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         val songObj = tracks.getJSONObject(i)
                         val id = songObj.getLong("id")
                         val rawPicUrl = songObj.optJSONObject("al")?.optString("picUrl") ?: ""
-                        list.add(Song(id = id, title = songObj.getString("name"), artist = songObj.optJSONArray("ar")?.optJSONObject(0)?.optString("name") ?: "未知", album = "", filePath = "online_$id", durationMs = songObj.optLong("dt"), albumArtUri = if (rawPicUrl.isNotEmpty()) android.net.Uri.parse("$rawPicUrl?param=1024y1024") else null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐"))
+                        list.add(Song(
+                            id = id,
+                            title = songObj.getString("name"),
+                            artist = songObj.optJSONArray("ar")?.optJSONObject(0)?.optString("name") ?: "未知",
+                            album = "",
+                            filePath = "online_$id",
+                            durationMs = songObj.optLong("dt"),
+                            albumArtUri = if (rawPicUrl.isNotEmpty()) android.net.Uri.parse("$rawPicUrl?param=1024y1024") else null,
+                            uri = android.net.Uri.parse(""),
+                            folderPath = "online",
+                            folderName = "网络音乐"
+                        ))
                     }
                 }
                 withContext(Dispatchers.Main) {
@@ -512,7 +636,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     val urlStr = dataArray?.optJSONObject(0)?.optString("url")
                     if (!urlStr.isNullOrEmpty()) { audioUrl = urlStr; break }
                 }
-                
+
                 if (!audioUrl.isNullOrEmpty()) {
                     var finalFilePath = song.filePath
                     try {
@@ -538,18 +662,23 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         val existIndex = currentQueue.indexOfFirst { it.id == playSong.id }
                         val playIndex = if (existIndex >= 0) existIndex else { currentQueue.add(0, playSong); 0 }
                         _state.value = _state.value.copy(queue = currentQueue)
-                        
+
                         controller?.setMediaItem(
                             MediaItem.Builder()
                                 .setMediaId(playSong.id.toString())
                                 .setUri(android.net.Uri.parse(audioUrl))
-                                .setMediaMetadata(MediaMetadata.Builder().setTitle(playSong.title).setArtist(playSong.artist).setArtworkUri(playSong.albumArtUri).setExtras(android.os.Bundle().apply { putString("file_path", playSong.filePath) }).build())
+                                .setMediaMetadata(MediaMetadata.Builder()
+                                    .setTitle(playSong.title)
+                                    .setArtist(playSong.artist)
+                                    .setArtworkUri(playSong.albumArtUri)
+                                    .setExtras(android.os.Bundle().apply { putString("file_path", playSong.filePath) })
+                                    .build())
                                 .build()
                         )
                         controller?.prepare()
                         controller?.play()
                         _state.value = _state.value.copy(currentIndex = playIndex)
-                        
+
                         loadSongComments(playSong.id)
                     }
                 }
@@ -557,32 +686,118 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ===== 评论分页 =====
+
+    /**
+     * 加载某首歌的评论（第一页）。切歌 / 首次打开评论弹层时调用。
+     * 会清空旧评论、重置分页 offset。
+     */
     fun loadSongComments(songId: Long) {
-        _state.value = _state.value.copy(isCommentsLoading = true)
+        // 切歌：重置分页状态，清空旧评论（原版没清空，切歌后加载失败会显示上一首的评论）
+        currentCommentSongId = songId
+        commentOffset = 0
+        _state.value = _state.value.copy(
+            isCommentsLoading = true,
+            currentComments = emptyList(),
+            currentCommentCount = 0L
+        )
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val cJsonString = fetchUrl("$API_BASE_URL/comment/music?id=$songId&limit=20")
+                val page = fetchComments(songId, offset = 0, limit = COMMENT_PAGE_SIZE)
+                withContext(Dispatchers.Main) {
+                    // 防御：加载期间又切了歌，丢弃这次结果
+                    if (currentCommentSongId != songId) return@withContext
+                    _state.value = _state.value.copy(
+                        currentComments = page.comments,
+                        currentCommentCount = page.total,
+                        isCommentsLoading = false
+                    )
+                    commentOffset = page.comments.size
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    if (currentCommentSongId == songId) {
+                        _state.value = _state.value.copy(isCommentsLoading = false)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 加载下一页评论。评论弹层滑到底时调用。
+     * 已加载数 ≥ 总数、正在加载、或首次还没加载完时忽略。
+     */
+    fun loadMoreComments() {
+        val songId = currentCommentSongId
+        if (songId < 0) return
+        val s = _state.value
+        if (s.isCommentsLoading) return
+        if (s.currentComments.isEmpty()) return  // 首次还没加载完，交给 loadSongComments
+        if (commentOffset >= s.currentCommentCount) return  // 全部加载完
+
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                if (currentCommentSongId != songId) return@withContext
+                _state.value = _state.value.copy(isCommentsLoading = true)
+            }
+            try {
+                val page = fetchComments(songId, offset = commentOffset, limit = COMMENT_PAGE_SIZE)
+                withContext(Dispatchers.Main) {
+                    if (currentCommentSongId != songId) return@withContext
+                    // 按 commentId 去重：hot 与普通评论、跨页边界都可能重复
+                    val existing = _state.value.currentComments.map { it.id }.toHashSet()
+                    val newOnes = page.comments.filter { it.id !in existing }
+                    val merged = _state.value.currentComments + newOnes
+                    _state.value = _state.value.copy(
+                        currentComments = merged,
+                        currentCommentCount = maxOf(page.total, merged.size.toLong()),
+                        isCommentsLoading = false
+                    )
+                    commentOffset = merged.size
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    if (currentCommentSongId == songId) {
+                        _state.value = _state.value.copy(isCommentsLoading = false)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 拉一页评论。只用 comments 数组（不用 hotComments）：hot 只在第一页有，分页时会导致 offset 错乱、翻页重复。 */
+    private suspend fun fetchComments(songId: Long, offset: Int, limit: Int): CommentsPage =
+        withContext(Dispatchers.IO) {
+            try {
+                val cJsonString = fetchUrl("$API_BASE_URL/comment/music?id=$songId&limit=$limit&offset=$offset")
                 val comments = mutableListOf<MusicComment>()
                 var total = 0L
                 if (cJsonString != null) {
                     val cJson = JSONObject(cJsonString)
                     total = cJson.optLong("total")
-                    val hot = cJson.optJSONArray("hotComments")
-                    val arr = if (hot != null && hot.length() > 0) hot else cJson.optJSONArray("comments")
+                    val arr = cJson.optJSONArray("comments")
                     if (arr != null) {
                         for (i in 0 until arr.length()) {
                             val obj = arr.getJSONObject(i)
                             val user = obj.optJSONObject("user")
-                            comments.add(MusicComment(obj.getLong("commentId"), obj.getString("content"), user?.optString("nickname") ?: "匿名", user?.optString("avatarUrl") ?: "", obj.optInt("likedCount")))
+                            comments.add(MusicComment(
+                                obj.getLong("commentId"),
+                                obj.getString("content"),
+                                user?.optString("nickname") ?: "匿名",
+                                user?.optString("avatarUrl") ?: "",
+                                obj.optInt("likedCount")
+                            ))
                         }
                     }
                 }
-                withContext(Dispatchers.Main) { _state.value = _state.value.copy(currentComments = comments, currentCommentCount = total, isCommentsLoading = false) }
+                CommentsPage(comments, total)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { _state.value = _state.value.copy(isCommentsLoading = false) }
+                CommentsPage(emptyList(), 0L)
             }
         }
-    }
+
+    private data class CommentsPage(val comments: List<MusicComment>, val total: Long)
 
     fun removeOnlineSong(songId: Long) {
         if (!_state.value.isOnlineMode) return
@@ -961,7 +1176,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
     private fun persistPlayback(throttle: Boolean) {
         val song = _state.value.currentSong ?: return
-        if (_state.value.isOnlineMode) return 
+        if (_state.value.isOnlineMode) return
         val now = System.currentTimeMillis()
         if (throttle && now - lastPersistMs < 5_000L) return
         lastPersistMs = now
@@ -1091,6 +1306,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_CUSTOM_PRIMARY = "custom_primary"
         const val KEY_CUSTOM_SECONDARY = "custom_secondary"
         const val KEY_CUSTOM_BG_URI = "custom_bg_uri"
+        // === 新增：默认封面图 URI（网络封面失败兜底）===
+        const val KEY_DEFAULT_COVER = "default_cover_uri"
         const val KEY_ACTIVE_PLAYLIST = "active_playlist_id"
         const val KEY_LAYOUT = "ui_layout"
         const val KEY_SORT_ORDER = "sort_order"
