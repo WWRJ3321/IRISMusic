@@ -624,7 +624,6 @@ internal fun NewSettingsPanel(
                     colors = colors
                 ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
                 
-                // ===== 新增：切换服务器音乐 =====
                 SettingSwitchRow(
                     "切换服务器音乐",
                     subtitle = "开启后清空本地列表，搜索全网音乐",
@@ -672,8 +671,6 @@ internal fun NewSettingsPanel(
         )
     }
 }
-
-// ==================== 组件区 ====================
 
 @Composable
 private fun SettingsGroup(
@@ -880,7 +877,7 @@ private fun InlineOptionRow(
                                 ) {
                                     Haptics.tap()
                                     onSelect(i)
-                                    onToggleExpand() // 选完收回
+                                    onToggleExpand()
                                 }
                                 .padding(horizontal = 4.dp),
                             horizontalArrangement = Arrangement.Center,
@@ -908,7 +905,7 @@ private fun InlineOptionRow(
                             interactionSource = remember { MutableInteractionSource() }
                         ) {
                             Haptics.tap()
-                            onToggleExpand() // 展开
+                            onToggleExpand()
                         },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1524,70 +1521,4 @@ private fun FloatingLyricGroup(
                 showDivider = !(useCustomColor && floatTheme == IrisTheme.CUSTOM),
                 colors = colors,
                 isExpanded = expandedKey == "悬浮歌词颜色",
-                onToggleExpand = { onToggleExpand(if (expandedKey == "悬浮歌词颜色") null else "悬浮歌词颜色") },
-                onToggle = { useCustomColor = it; writeBool(FloatingLyric.KEY_USE_CUSTOM, it) },
-                onSelect = { index ->
-                    floatTheme = themeOptions[index]
-                    prefs.edit().putString(FloatingLyric.KEY_THEME, floatTheme.name).apply()
-                }
-            )
-
-            AnimatedVisibility(
-                visible = useCustomColor && floatTheme == IrisTheme.CUSTOM,
-                enter = expandVertically(tween(300, easing = FastOutSlowInEasing)) + fadeIn(tween(200)),
-                exit = shrinkVertically(tween(300, easing = FastOutSlowInEasing)) + fadeOut(tween(200))
-            ) {
-                InlineColorRow(
-                    title = "自定义悬浮歌词色",
-                    primaryArgb = customPrimary,
-                    secondaryArgb = customSecondary,
-                    surfaceStyle = surfaceStyle,
-                    colors = colors,
-                    isExpanded = expandedKey == "自定义悬浮歌词色",
-                    onToggleExpand = { onToggleExpand(if (expandedKey == "自定义悬浮歌词色") null else "自定义悬浮歌词色") },
-                    onColorsChange = { p, s ->
-                        customPrimary = p; customSecondary = s
-                        prefs.edit()
-                            .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
-                            .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
-                            .apply()
-                    }
-                )
-            }
-
-            InlineSliderRow(
-                title = "字号",
-                value = font,
-                valueRange = 12f..40f,
-                valueFormat = { "${it.toInt()}" },
-                surfaceStyle = surfaceStyle,
-                colors = colors,
-                isExpanded = expandedKey == "字号",
-                onToggleExpand = { onToggleExpand(if (expandedKey == "字号") null else "字号") }
-            ) { font = it; writeFloat(FloatingLyric.KEY_FONT, it) }
-
-            InlineSliderRow(
-                title = "宽度",
-                value = widthFrac,
-                valueRange = 0.3f..1f,
-                valueFormat = { "${(it * 100).toInt()}%" },
-                surfaceStyle = surfaceStyle,
-                colors = colors,
-                isExpanded = expandedKey == "宽度",
-                onToggleExpand = { onToggleExpand(if (expandedKey == "宽度") null else "宽度") }
-            ) { widthFrac = it; writeFloat(FloatingLyric.KEY_WIDTH, it) }
-
-            InlineSliderRow(
-                title = "背景透明度",
-                value = bg,
-                valueRange = 0f..1f,
-                valueFormat = { "${(it * 100).toInt()}%" },
-                surfaceStyle = surfaceStyle,
-                showDivider = false,
-                colors = colors,
-                isExpanded = expandedKey == "背景透明度",
-                onToggleExpand = { onToggleExpand(if (expandedKey == "背景透明度") null else "背景透明度") }
-            ) { bg = it; writeFloat(FloatingLyric.KEY_BG, it) }
-        }
-    }
-}
+                on
