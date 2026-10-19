@@ -78,6 +78,14 @@ import kotlin.math.pow
 
 /**
  * 卡片模式：整个 App 只剩一叠播放卡片，一首歌一张卡。
+ *
+ * 三种排布里两种共用同一张卡（[PlayerCard]），区别只在怎么摆：
+ * - [IrisLayout.CAROUSEL] 横向排布：卡片横向铺开，两侧露出邻卡，左右滑翻歌
+ * - [IrisLayout.STACK] 堆叠排布：卡片叠成一沓，把最上面那张拖走切歌
+ * - [IrisLayout.COMPACT] 紧凑排布：不放卡，整屏紧凑歌单 + 底部常驻迷你播放条
+ *
+ * 没有歌单也没有上栏，所以顶部留一行极简 chrome（队列位置 + 返回列表 / 报告 / 设置），
+ * 否则进了这个模式就再也回不去、也够不到设置。
  */
 @Composable
 fun SongDeck(
@@ -105,6 +113,8 @@ fun SongDeck(
     val frosted = isFrostedGlass
     val frostedBlur = frostedBlurRadius
 
+    // 歌词层浮在卡片之上，要折射「背景 + 卡片」两层。和 PlayerPage 同构：
+    // 卡片区单独录一层背板，歌词层是它的兄弟节点，取样方向单向不互相触发重绘。
     val cardBackdrop = rememberIrisBackdrop()
     val outerBackdrops = LocalIrisBackdrops.current
     val lyricsBackdrops = remember(glass, outerBackdrops, cardBackdrop) {
@@ -114,12 +124,15 @@ fun SongDeck(
 
     var showLyrics by remember { mutableStateOf(false) }
 
+    // 卡片模式的歌词层同样要吃掉返回键，否则直接退出应用
     androidx.activity.compose.BackHandler(enabled = showLyrics) { showLyrics = false }
     var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricLoading by remember { mutableStateOf(false) }
+    // 歌词层当前歌词所属文件：开着歌词层切歌时据此判断要重新加载
     var lyricPath by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
+    // 歌词层开着时自动切歌：旧词跟着走，路径一变先清空再按新歌重解析
     LaunchedEffect(showLyrics, state.currentSong?.filePath, state.durationMs) {
         val path = state.currentSong?.filePath
         if (showLyrics && !path.isNullOrBlank() && path != lyricPath) {
@@ -150,6 +163,7 @@ fun SongDeck(
                     lyricPath = song.filePath
                     showLyrics = true
                 } catch (_: Exception) {
+                    // 文件读取异常静默忽略
                 } finally {
                     lyricLoading = false
                 }
@@ -157,14 +171,17 @@ fun SongDeck(
         }
     }
 
+// 顶栏三档透明度联动：deck 内容区（非顶栏）任意按下 → contentTick++，顶栏升到中档。
     var contentTick by remember { mutableIntStateOf(0) }
 
     Box(modifier.fillMaxSize()) {
         if (state.layout == IrisLayout.COMPACT) {
+            // 海报墙铺满整屏（延伸进状态栏），顶部按钮作为浮层叠在最上层
             Box(
                 Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
+                        // 只观察、不消费：海报墙拖拽照常，这里仅统计"别处交互"
                         awaitPointerEventScope {
                             while (true) { awaitFirstDown(requireUnconsumed = false); contentTick++ }
                         }
@@ -219,6 +236,8 @@ fun SongDeck(
                     onOpenPlaylists = onOpenPlaylists,
                     onReload = onReload,
                     autoHide = state.topBarAutoHide,
+                    // 横屏窄化：顶栏玻璃与下方播放卡片同宽（用补偿值抵消 padding 差，
+                    // 唱片墙分支不走这里）
                     modifier = if (LocalConfiguration.current.orientation ==
                         android.content.res.Configuration.ORIENTATION_LANDSCAPE
                     ) Modifier.widthIn(max = LANDSCAPE_BAR_MAX_WIDTH) else Modifier
@@ -243,6 +262,7 @@ fun SongDeck(
                             android.content.res.Configuration.ORIENTATION_LANDSCAPE
                         val stackCur = state.queue.getOrNull(state.currentIndex)
                         if (stackLandscape) {
+                            // 横屏：左侧封面堆叠（复用原手势），右侧固定控制区
                             LandscapeDeckPlayer(
                                 title = stackCur?.title ?: "未选择",
                                 artist = stackCur?.artist ?: "",
@@ -269,6 +289,7 @@ fun SongDeck(
                                 visualizerEnabled = state.visualizerEnabled,
                                 onToggleVisualizer = onToggleVisualizer,
                                 tiltSpectrum = state.tiltSpectrum,
+                                // 堆叠往右后方，舞台留出余量给后面几层露头
                                 coverAspect = 1.30f
                             ) {
                                 DeckStack(
@@ -368,17 +389,25 @@ private fun DeckTopBar(
     onOpenSettings: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onReload: () -> Unit,
+    /** 内容区（非顶栏）交互计数：>0 时顶栏升到中档透明度 */
     contentTick: Int = 0,
+    /** 开启后：完全静止时顶栏淡到全透明（关=停在半透明 30%） */
     autoHide: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    // 静止时的回落透明度：开关开启则完全透明。
     val idleAlpha = if (autoHide) 0f else 0.3f
-    var interactionTick by remember { mutableIntStateOf(0) }
-    val barAlpha = remember { Animatable(0.9f) }
+    // 与主界面上栏完全一致：左 IRIS MUSIC 标题、右五个同款按钮，唯一区别是没有搜索框。
+    // 三档透明度：静止 2 秒淡到 30%；交互内容区（拖动海报墙等）升到 50%；
+    // 点顶栏本身升到 90%。任一交互都重置 2 秒回落计时。
+    // 顶栏整块消费点击（含空白区），不再穿透到后面的海报墙/卡片。
+    var interactionTick by remember { mutableIntStateOf(0) }   // 点顶栏
+    val barAlpha = remember { Animatable(0.9f) }               // 进场算顶栏档，先亮
     val barScope = rememberCoroutineScope()
     var idleJob by remember { mutableStateOf<Job?>(null) }
     fun bump(target: Float) {
         idleJob?.cancel()
+        // 先取消可能仍在跑的回落动画，再启动目标淡入（同 Animatable 新 animateTo 会接管）
         barScope.launch { barAlpha.animateTo(target, animationSpec = tween(250)) }
         idleJob = barScope.launch {
             delay(2000)
@@ -386,21 +415,29 @@ private fun DeckTopBar(
         }
     }
     LaunchedEffect(autoHide) {
+        // 进场 / 开关切换：2 秒无操作淡到静止档（默认 30%，开关开则全透明）
         idleJob = barScope.launch { delay(2000); barAlpha.animateTo(idleAlpha, animationSpec = tween(300)) }
     }
+    // 点顶栏与"动别处"会在同一次按下里同时 ++（覆盖全屏的海报墙观察层 requireUnconsumed=false
+    // 必须穿透海报墙自身消费，故点顶栏也会 contentTick++）。用时间戳让"点顶栏"压制同帧的
+    // "动别处"，保证点顶栏恒为 90% 而非被 50% 覆盖。
     var lastBarTouchAt by remember { androidx.compose.runtime.mutableLongStateOf(0L) }
     LaunchedEffect(interactionTick) {
-        if (interactionTick > 0) { lastBarTouchAt = System.nanoTime(); bump(0.9f) }
+        if (interactionTick > 0) { lastBarTouchAt = System.nanoTime(); bump(0.9f) }  // 点顶栏 → 90%
     }
     LaunchedEffect(contentTick) {
-        if (contentTick > 0 && System.nanoTime() - lastBarTouchAt > 80_000_000L) bump(0.5f)
+        if (contentTick > 0 && System.nanoTime() - lastBarTouchAt > 80_000_000L) bump(0.5f)  // 动别处 → 50%
     }
     Box(
         modifier
             .fillMaxWidth()
             .graphicsLayer { this.alpha = barAlpha.value }
+            // 上栏离顶太远：statusBarsPadding 已经避开状态栏，这里再叠 48dp
+            // 就把上栏压到屏幕偏中间。收到 20dp，视觉上贴近顶部但不顶到状态栏。
             .padding(top = 20.dp)
             .padding(horizontal = 22.dp)
+            // 唤醒：顶栏范围内任意按下（requireUnconsumed=false → 点按钮也算）都重置计时，
+            // 但不消费事件，子按钮照常响应。
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
@@ -409,6 +446,7 @@ private fun DeckTopBar(
                     }
                 }
             }
+            // 防穿透：空白/标题处点击在此消费，不再穿到后面的内容。子按钮会优先消费自己的点击。
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() }
@@ -422,6 +460,7 @@ private fun DeckTopBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // 标题：与主界面上栏同款 —— IRIS(primary) + MUSIC(secondary)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val wordPrimary = colors.primary.readableOn(colors.surface)
                 val wordSecondary = colors.secondary.readableOn(colors.surface)
@@ -429,6 +468,7 @@ private fun DeckTopBar(
                 Spacer(Modifier.width(4.dp))
                 Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
             }
+            // 按钮组：与主界面上栏完全同款同序（无搜索框、无刷新——刷新走下拉手势）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = activePlaylist)
                 Spacer(Modifier.width(8.dp))
@@ -442,6 +482,13 @@ private fun DeckTopBar(
     }
 }
 
+/**
+ * 切换排布：纵向 → 横向 → 堆叠 → 纵向循环。
+ *
+ * 画的是"下一种排布"的示意（复用上栏同款风格自绘），卡片模式下这是
+ * 唯一的排布入口——循环保证按几下总能回列表。列表模式上栏的同一枚按钮
+ * 在 MainScreen.kt，两者长得一样，用户认知上是一枚按钮。
+ */
 @Composable
 internal fun LayoutButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
     Box(
@@ -453,9 +500,12 @@ internal fun LayoutButton(onClick: () -> Unit, colors: IrisColors, plain: Boolea
     ) {
         Canvas(Modifier.size(17.dp)) {
             val c = colors.primary
+            val stroke = 1.2.dp.toPx()
             val gap = 1.5.dp.toPx()
             val cw = (size.width - gap * 2f) / 3f
             val ch = size.height * 0.68f
+            val cy = (size.height - ch) / 2f
+            // 三张并排竖卡：中间满高，两侧矮一截——"换排布"看形状就懂
             for (i in 0..2) {
                 val hh = if (i == 1) ch else ch * 0.62f
                 drawRoundRect(
@@ -471,8 +521,15 @@ internal fun LayoutButton(onClick: () -> Unit, colors: IrisColors, plain: Boolea
 
 // ==================== 横向排布 ====================
 
+/** 两侧留给邻卡的宽度：小了看不出旁边还有卡，大了当前卡就被挤得太窄 */
 private val CAROUSEL_PEEK = 38.dp
 
+/**
+ * 横屏封面 Pager 的页宽占舞台宽度的比例。
+ *
+ * 舞台宽 = 封面高 × 1.30（见 coverAspect），当前封面是正方形（宽=高），
+ * 所以当前页宽应占舞台的 1/1.30 ≈ 0.77，剩下的 23% 左右均分给邻曲露头。
+ */
 private val CoverPageSize = object : PageSize {
     override fun Density.calculateMainAxisPageSize(
         availableSpace: Int,
@@ -503,8 +560,10 @@ private fun DeckCarousel(
         initialPage = state.currentIndex.coerceAtLeast(0).coerceAtMost(queue.lastIndex.coerceAtLeast(0)),
         pageCount = { queue.size }
     )
+    // 下面两个 LaunchedEffect 里要读最新值，直接捕获会锁死启动那一帧的快照
     val liveIndex = rememberUpdatedState(state.currentIndex)
 
+    // 自动播完 / 通知栏切歌：卡片跟着滑过去
     LaunchedEffect(state.currentIndex) {
         val target = state.currentIndex
         if (target in queue.indices && target != pagerState.currentPage) {
@@ -512,6 +571,8 @@ private fun DeckCarousel(
         }
     }
 
+    // 翻到哪张卡就放哪首。首次发射要跳过：那只是初始页，不是用户翻的，
+    // 否则一进卡片模式就会自动开始播放。
     LaunchedEffect(pagerState) {
         var first = true
         snapshotFlow { pagerState.settledPage }
@@ -529,6 +590,7 @@ private fun DeckCarousel(
         android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
     if (isLandscape) {
+        // 横屏：封面 Pager（露左右邻曲）在左，固定控制区在右
         val cur = queue.getOrNull(state.currentIndex)
         LandscapeDeckPlayer(
             title = cur?.title ?: "未选择",
@@ -556,17 +618,28 @@ private fun DeckCarousel(
             visualizerEnabled = state.visualizerEnabled,
             onToggleVisualizer = onToggleVisualizer,
             tiltSpectrum = state.tiltSpectrum,
+            // 舞台比封面宽 30%：多出的部分左右均分，正好给邻曲露头
             coverAspect = 1.30f
         ) {
+            // 封面 Pager：封面本体清晰。左右边界做「向背景柔化淡出」——
+            // 用横向 DstIn 渐变只在最外侧约 24% 范围把封面 alpha 平滑降到 0，
+            // 中间全清晰。静止时中间露清晰封面、两侧本就无封面或已淡净，没有方块/色条，
+            // 滑动时封面滑到边界连续消失，不是糊成一坨。
+            // （注：曾用 haze 做两侧局部高斯模糊，但当前 haze 版本的 hazeChild 用独立
+            //  RenderEffect 层，外部 DstIn 蒙版擦不掉它，导致整片糊，故弃用。）
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier
                     .fillMaxHeight()
                     .fillMaxWidth()
+                    // 整层裁成圆角矩形，圆角方向与封面一致；
+                    // 两侧淡出的渐变在圆角处也随之柔化，形成"沿圆角淡出"。
                     .clip(RoundedCornerShape(18.dp))
                     .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                     .drawWithContent {
                         drawContent()
+                        // 两端淡出、中段全保留。多 stop 近似 smoothstep，
+                        // 落点更柔、无折角硬边。
                         drawRect(
                             brush = Brush.horizontalGradient(
                                 0.00f to Color.Black.copy(alpha = 0f),
@@ -606,6 +679,7 @@ private fun DeckCarousel(
                             .fillMaxHeight()
                             .aspectRatio(1f)
                             .graphicsLayer {
+                                // 邻曲轻微景深：越靠边越小越暗。封面本体不模糊。
                                 val dist = abs((page - pagerState.currentPage) - pagerState.currentPageOffsetFraction)
                                     .coerceIn(0f, 1f)
                                 val near = 1f - dist
@@ -647,6 +721,8 @@ private fun DeckCarousel(
                 onOpenSleepTimer = onOpenSleepTimer,
                 onClickArtwork = onClickArtwork,
                 eqActive = eqActive,
+                // 距离在 graphicsLayer 里算：这个 lambda 跑在绘制阶段，
+                // 滑动时只重绘不重组（写在外面每一帧都要重组一整张卡）
                 modifier = Modifier.graphicsLayer {
                     val dist = abs((page - pagerState.currentPage) - pagerState.currentPageOffsetFraction)
                         .coerceIn(0f, 1f)
@@ -662,14 +738,48 @@ private fun DeckCarousel(
 
 // ==================== 堆叠排布 ====================
 
+/**
+ * 后面露出几张。每张都是完整的 [PlayerCard]，张数直接乘绘制开销
+ * （液态玻璃下每张还是一层真折射），所以给到三层就停。
+ * 另外还会多画一张"上一首"（见 d = -1），同屏共 4 张。
+ */
 private const val STACK_DEPTH = 2
+
+/**
+ * 每往后一档上移多少。
+ *
+ * 必须明显大于缩放造成的内缩，否则后面的卡会被前面那张完全盖住：
+ * 播放卡有 600dp 上下的高度，缩 1% 顶边就往下走 3dp，
+ * 两者方向相反，抵消完剩下的才是能看见的那条边。
+ */
 private val STACK_STEP_Y = 16.dp
+
+/** 每往后一档缩小的比例。给得很小，原因同 [STACK_STEP_Y] */
 private const val STACK_SCALE_STEP = 0.02f
+
+/** 两侧留白。与列表模式的播放页一致——卡片是居中的，不需要为错位额外留边 */
 private val STACK_SIDE_PADDING = 26.dp
+
+/**
+ * 提交阈值占容器宽度的比例，以及它的下限。
+ *
+ * 原先写死 92dp。死值在窄屏上偏难划（要走掉四分之一屏宽），
+ * 而阈值偏大最直接的表现就是"用力划了但没反应"。
+ */
 private const val STACK_THROW_FRACTION = 0.18f
 private val STACK_THROW_MIN = 56.dp
+
+/** 跟手倾斜的最大角度。几度就够有"抽卡"的手感，多了像坏掉 */
 private const val STACK_TILT = 6f
+/** 或者甩得够快也算（px/s）。距离不够但手势方向明确时，弹回去是错的 */
 private const val STACK_FLING_VELOCITY = 420f
+
+/**
+ * 切歌所需的最小位移（px 见 minDragPx）。
+ * 之前只要卡片挪动 ≥1px 就认定方向、再叠加极低的 fling 阈值，
+ * 于是"手碰一下、轻轻挪一点"也会切歌。要求拖过这个门槛才可能切，
+ * 没到就一律弹回，手只是拿稳/微挪不触发切歌。
+ */
 private val STACK_SWIPE_MIN = 24.dp
 
 
@@ -697,20 +807,52 @@ private fun DeckStack(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val stepY = with(density) { STACK_STEP_Y.toPx() }
+        // 飞出行程。
+        // 竖屏：舞台就是整屏宽，走满一屏即彻底离场。
+        // 横屏：舞台只是左侧那块正方形，走满 maxWidth 只飞到舞台边缘，
+        // 卡片还留在画面里（就是"没飞出去、上一曲停在屏幕上"）。
+        // 再加 60% 余量，确保飞到舞台外并被 clipToBounds 裁掉。
         val flyOut = with(density) { maxWidth.toPx() } * (if (landscape) 1.6f else 1f)
         val throwPx = maxOf(
+            // 阈值按舞台实宽算，不跟着 flyOut 的余量放大，
+            // 否则横屏要多划 60% 距离才切歌。
             with(density) { maxWidth.toPx() } * STACK_THROW_FRACTION,
             with(density) { STACK_THROW_MIN.toPx() }
         )
+        // 切歌最小位移门槛：低于它无论甩多快都不切，直接弹回
         val minDragPx = with(density) { STACK_SWIPE_MIN.toPx() }
 
+        // 手势/动画位移。只在 graphicsLayer 里读（绘制阶段），拖动不触发重组。
         var cardX by remember { mutableFloatStateOf(0f) }
+
+        /**
+         * 这一沓当前摆在最上面的是第几首。
+         *
+         * 不能直接用 [base]：`onSelect` 要绕一圈 MediaController 才会把 currentIndex 传回来，
+         * 那一两帧里旧卡已经被甩出屏幕、新卡还没顶上来，看着就是"卡片凭空消失"。
+         */
         var visualBase by remember { mutableIntStateOf(base) }
+
+        /**
+         * 正在提交（卡片飞出 / 上一张归位）。这段时间必须锁住手势。
+         *
+         * 之前允许中途打断，于是提交协程被取消，[cardX] 停在半空、[visualBase] 也没推进。
+         * 下一次手势带着这个残留位移一起判定，就出现了两种症状：
+         * 上一次滑动像"没生效"（其实是提交被自己的第二次触摸掐掉了），
+         * 以及反向轻轻一碰就跨过阈值、甚至朝残留位移的方向切歌（"多划两个 / 划错方向"）。
+         */
         var committing by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         var snapJob by remember { mutableStateOf<Job?>(null) }
+        /** 提交飞出协程。句柄存下来，是为了下一次拖拽能在 onDragStarted 里打断它。 */
         var commitJob by remember { mutableStateOf<Job?>(null) }
 
+        // 外部改了当前曲目（自动播完、通知栏切歌、库刷新）时对齐。
+        // committing 也在 key 里：提交结束后要再跑一次，让乐观值与真实值收敛。
+        // 但不能立刻对齐——onSelect 要绕 MediaController 一圈才把 base 传回来，
+        // 上一首的提交动画很短，结束那一刻 base 往往还是旧值，直接重置会把
+        // visualBase 弹回上一首，等 base 到了再跳回来：先跳回再跳来，就是
+        // "切上一曲卡片抖一下"。等一小会儿，base 没追上来才真的需要对齐。
         LaunchedEffect(base, queue.size, committing) {
             if (!committing && visualBase != base) {
                 delay(160)
@@ -722,20 +864,30 @@ private fun DeckStack(
         }
         val top = visualBase.coerceIn(0, queue.lastIndex.coerceAtLeast(0))
 
+        // 用 draggable 而不是 detectHorizontalDragGestures：只有它在松手时给出速度。
+        // 没有速度就只能靠位移判定，快速轻甩会被判成"没拖够"而弹回去。
         val dragState = rememberDraggableState { delta -> cardX += delta }
 
         Box(
             Modifier
                 .fillMaxSize()
+                // 横屏：堆叠舞台是左侧那块正方形，飞出的卡必须裁在舞台内，
+                // 否则会横穿到右边的控制区上面。
                 .then(if (landscape) Modifier.clipToBounds() else Modifier)
                 .draggable(
                     state = dragState,
                     orientation = Orientation.Horizontal,
                     onDragStarted = {
+                        // 回弹与上一次的提交飞出都可被新拖拽打断：取消后提交协程的 finally
+                        // 会把 visualBase 推到目标、cardX 归零，于是这次按下立即从新卡的静止位
+                        // 开始跟手——连续快速滑动不再被"等飞出动画播完"卡住（旧版这里靠
+                        // enabled=!committing 全程锁死 draggable，飞出动画 StiffnessLow 飞满
+                        // 整屏要几百 ms，就是那段"滑完要等一下"的僵直来源）。
                         snapJob?.cancel()
                         commitJob?.cancel()
                     },
                     onDragStopped = { velocity ->
+                        // 位移没超过最小门槛：手只是微挪/拿稳，一律弹回，不切歌
                         if (abs(cardX) < minDragPx) {
                             scope.launch {
                                 Animatable(cardX, visibilityThreshold = 0.5f).animateTo(
@@ -744,6 +896,7 @@ private fun DeckStack(
                             }
                             return@draggable
                         }
+                        // 方向以位移为准；几乎没位移的快甩用速度定向
                         val dir = when {
                             cardX <= -1f -> -1
                             cardX >= 1f -> 1
@@ -753,6 +906,8 @@ private fun DeckStack(
                         }
                         val strongFling = abs(velocity) > STACK_FLING_VELOCITY
                         val velDir = if (velocity < 0f) -1 else 1
+                        // 甩得够快就按方向算，但必须与位移同向：
+                        // "先往左拖、又往右弹回去"不该被判成切歌
                         val pass = dir != 0 &&
                             if (strongFling) velDir == dir else abs(cardX) >= throwPx
                         val rawTarget = when {
@@ -760,6 +915,7 @@ private fun DeckStack(
                             dir < 0 -> top + 1
                             else -> top - 1
                         }
+                        // 到头/尾时循环（仅 ALL 模式）。OFF 模式弹回原位。
                         val target = when {
                             rawTarget !in queue.indices && state.repeatMode == RepeatMode.ALL -> {
                                 if (rawTarget > queue.lastIndex) 0 else queue.lastIndex
@@ -768,6 +924,7 @@ private fun DeckStack(
                         }
 
                         if (target !in queue.indices) {
+                            // 到头了且不循环：带着手上的速度弹回原位
                             snapJob?.cancel()
                             snapJob = scope.launch {
                                 Animatable(cardX, visibilityThreshold = 0.5f).animateTo(
@@ -779,11 +936,28 @@ private fun DeckStack(
                             }
                         } else {
                             snapJob?.cancel()
+                            // 先置位再启协程：committing 决定 draggable 的 enabled，
+                            // 放进协程里会晚一帧生效，那一帧足够挤进第二次手势。
                             committing = true
                             Haptics.click()
+                            // 声音立刻跟上，不等动画。晚 200ms 换歌是能听出来的。
                             onSelect(target)
                             commitJob = scope.launch {
                                 try {
+                                    // 落点就是"下一帧的静止姿态"：
+                                    // 下一首要把这张送出屏幕（-flyOut，正好是 d=-1 的停放点）；
+                                    // 上一首是把回来那张拉到正中（走满一档即 throwPx）。
+                                    // 所以提交时位移直接归零，画面上没有任何跳变。
+                                    // spring 而不是 tween：速度从手上传下来，起跑无缝，
+                                    // 曲线自然减速。参数偏"软"：
+                                    // - StiffnessLow：飞出比 StiffnessMedium 慢一拍，之前太急
+                                    // - 初速只接 35%：手甩速度直接全量传进去会让收尾猛冲，
+                                    //   掐掉大头后动画由弹簧自己走，节奏稳定
+                                    //
+                                    // 上一首与下一首用同一条 spring、走同等的剩余行程：
+                                    // 下一首 -flyOut、上一首 +flyOut（不是 throwPx——
+                                    // throwPx 离手上的位置太近，弹簧几帧就走完）。
+                                    // 上一首卡滑满剩余整屏的时间 = 下一首卡飞出的时间。
                                     val targetX = if (target > top) -flyOut else flyOut
                                     Animatable(cardX, visibilityThreshold = 0.5f).animateTo(
                                         targetX,
@@ -799,6 +973,8 @@ private fun DeckStack(
                                         initialVelocity = velocity * 0.35f
                                     ) { cardX = value }
                                 } finally {
+                                    // 即使协程被取消（退出卡片模式等）也要收干净，
+                                    // 留下非零位移就会把下一次手势判错
                                     visualBase = target
                                     cardX = 0f
                                     committing = false
@@ -809,24 +985,49 @@ private fun DeckStack(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            // 从最里层往外画：d 越大越靠后，越晚画的盖在越上面。
+            //
+            // 多画一张 d = -1（上一首）：它平时停在屏幕左外，右划时跟着手指滑进来。
+            // 之前右划看着没动画就是因为少了它——被"推回来"的那张卡根本不在画面里，
+            // 只能等状态更新后凭空出现。
             for (d in STACK_DEPTH downTo -1) {
                 val index = top + d
                 val song = queue.getOrNull(index) ?: continue
                 val depth = d.toFloat()
 
+                // key(index)：状态跟歌走，不跟槽位走。
+                // 没有它时槽位 d=0 的 remember（封面等）属于"这个位置"，
+                // visualBase 推进后新歌顶上来，位置上还是旧歌的封面状态——
+                // 先闪一帧上一首的封面再换，就是"闪一下上一首歌"的来源。
                 key(index) {
+
                 Box(
                     Modifier
                         .then(
+                            // 横屏：堆在正方形封面舞台里。留出右侧一点余量给
+                            // 后面几层露头（往右后方堆），所以不是铺满而是稍缩。
+                            // 竖屏：整卡堆叠，两侧留白同列表播放页
                             if (landscape) Modifier
                                 .fillMaxHeight(0.88f)
                                 .aspectRatio(1f)
                             else Modifier.fillMaxWidth().padding(horizontal = STACK_SIDE_PADDING)
                         )
                         .graphicsLayer {
+                            // 手势进度：-1 = 左划满（下一首），+1 = 右划满（上一首）
                             val t = (cardX / throwPx).coerceIn(-1f, 1f)
 
                             if (d < 0) {
+                                // 上一首卡：1:1 跟手（x = cardX - flyOut）。
+                                // cardX=0 停在屏幕左外；提交动画把 cardX 推到 +flyOut
+                                // 时正好落回正中央。之前用 -flyOut*(1-t)：手指只需走
+                                // throwPx（~56dp）t 就到 1，它整屏横穿在指下完成，
+                                // 右滑全程被压进这一小段，是"右滑比左滑快太多"的根源。
+                                // 跟手后拖动阶段它只从左缘探进来一点（同左滑时顶卡
+                                // 左移一点），剩余行程交给提交动画——与左滑完全对称。
+                                //
+                                // 倾斜：行程中段最陡、两端归零。停泊时若带倾角，
+                                // 600dp 高的卡转角会往右凸 ~30dp，盖过 26dp 侧边距，
+                                // 左侧会露出一条边。
                                 val u = (cardX / flyOut).coerceIn(0f, 1f)
                                 translationX = cardX - flyOut
                                 rotationZ = -STACK_TILT * 4f * u * (1f - u)
@@ -834,6 +1035,12 @@ private fun DeckStack(
                             }
 
                             if (d == 0) {
+                                // 顶卡只有左划跟手（滑向下一首）。
+                                // 右划不横移：顶卡留在横向原地，但参与档位动画
+                                // （走下面的 eff 公式，跟着整沓下移一档）。
+                                // 之前这里无条件 return，右划时顶卡钉死不动，
+                                // 提交后 visualBase 减一它瞬间从 eff=0 跳到 eff=1
+                                // ——就是"中间那张突然闪现"的来源。
                                 if (cardX < 0f) {
                                     translationX = cardX
                                     rotationZ = t * STACK_TILT
@@ -841,8 +1048,16 @@ private fun DeckStack(
                                 }
                             }
 
+                            // 档位：左划时整沓往前顶一档，右划时往后退一档。
+                            // d=0 也参与：右划是"把这张塞回去"，它该退到第二层，
+                            // 而不是跟着手指跑出屏幕。
                             val eff = (depth + t).coerceAtLeast(0f)
                             if (landscape) {
+                                // 横屏：舞台是矮而方的一块，沿用竖屏的"往上堆"
+                                // 会把后面的卡顶出上边界，再被 clipToBounds 裁掉
+                                // ——看着就是卡片从上面凭空消失。
+                                // 改成往右后方堆（也正是这个布局原本的设计），
+                                // 右移的同时轻微下沉，层次靠 X 位移体现。
                                 translationX = stepY * 1.35f * eff
                                 translationY = stepY * 0.28f * eff
                             } else {
@@ -851,11 +1066,15 @@ private fun DeckStack(
                             val s = 1f - STACK_SCALE_STEP * eff
                             scaleX = s
                             scaleY = s
+                            // 透明度在比渲染深度再深 0.6 档处归零，于是最深那张本身就很淡。
+                            // 往下一首推进时队尾会补进一张新卡（再深一档没有渲染），
+                            // 淡的层次让这次补位几乎看不出来。
                             alpha = (1f - (eff / (STACK_DEPTH + 0.6f)).pow(1.4f))
                                 .coerceIn(0f, 1f)
                         }
                 ) {
                     if (landscape) {
+                        // 横屏：只堆封面，控制区在外层固定。
                         PlayerCoverArt(
                             artworkPath = song.filePath,
                             positionMs = if (d == 0) state.positionMs else 0L,
@@ -871,6 +1090,8 @@ private fun DeckStack(
                     } else {
                     DeckCard(
                         song = song,
+                        // 最上面那张就是"正在放的那首"。不写 index == state.currentIndex：
+                        // 乐观推进的那一两帧里两者不等，进度条会瞬间归零再跳回来。
                         isCurrent = d == 0,
                         state = state,
                         colors = colors,
@@ -889,8 +1110,10 @@ private fun DeckStack(
                         fullWidth = false
                     )
                     }
+                    // 其它卡整块不接受点击——露出来的那条边误触一下就跳歌，比它带来的便利更烦。
+                    // 抽卡手势已经覆盖切歌，非当前卡不需要任何交互。
                 }
-                }
+                } // key(index)
             }
         }
     }
@@ -898,6 +1121,16 @@ private fun DeckStack(
 
 // ==================== 紧凑排布 ====================
 
+/**
+ * 紧凑排布：一屏看完整个队列。
+ *
+ * 借鉴 Folia 离线播放器的信息设计：一行 = 序号 + 标题 + 元信息（艺术家 · 时长 · 格式），
+ * 不放封面不放点赞性价比最高；但用 IRIS 自己的材质体系（irisSurface + 可选液态玻璃）
+ * 实现，并且列表本身参与折射背板——毛玻璃/液态玻璃模式下迷你播放条会折射到列表内容。
+ *
+ * 底部是常驻迷你播放条（标题 + 上一首/播放/下一首 + 细进度条），
+ * 点标题/封面区开歌词浮层。与 Folia 的差异：进度条可拖动 seek。
+ */
 @Composable
 private fun DeckCompact(
     state: PlayerUiState,
@@ -911,6 +1144,7 @@ private fun DeckCompact(
 ) {
     val queue = state.queue
     val listState = rememberLazyListState()
+    // 自动切歌时列表滚到当前行，浏览位置会被抢走——只在"外部变化且仍在视口外"时才滚
     LaunchedEffect(state.currentIndex, queue.size) {
         if (queue.isEmpty()) return@LaunchedEffect
         val target = state.currentIndex
@@ -927,7 +1161,9 @@ private fun DeckCompact(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(4.dp),
             contentPadding = PaddingValues(
-                start = 16.dp, end = 16.dp, top = 4.dp, bottom = 86.dp
+                start = 16.dp, end = 16.dp, top = 4.dp,
+                // 底部预留迷你播放条高度 + 安全区
+                bottom = 86.dp
             )
         ) {
             itemsIndexed(queue, key = { _, song -> "song-${song.id}" }) { index, song ->
@@ -942,6 +1178,7 @@ private fun DeckCompact(
             }
         }
 
+        // ===== 常驻迷你播放条 =====
         val song = queue.getOrNull(state.currentIndex)
         Column(
             Modifier
@@ -951,6 +1188,7 @@ private fun DeckCompact(
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // 细进度条（可拖动 seek）：宽度 = 位置/时长
             val duration = state.durationMs
             val position = state.positionMs
             val ratio = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
@@ -1008,6 +1246,7 @@ private fun DeckCompact(
                     }
                 }
                 Spacer(Modifier.width(10.dp))
+                // 三个按钮：⏮ ▶/⏸ ⏭ —— 项目不引图标库，用文字符号保持一致
                 CompactPlayButton("⏮", colors = colors, enabled = song != null) { Haptics.tap(); onPrev() }
                 CompactPlayButton(
                     if (state.isPlaying) "⏸" else "▶",
@@ -1022,6 +1261,7 @@ private fun DeckCompact(
     }
 }
 
+/** 紧凑模式的歌曲行：序号/跳动条 + 标题 + 元信息，无封面无点赞（Folia 式极简） */
 @Composable
 private fun CompactSongRow(
     song: Song,
@@ -1049,6 +1289,7 @@ private fun CompactSongRow(
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // 左侧 22dp 槽位：普通行放序号，播放行放跳动条
         Box(
             Modifier.width(24.dp),
             contentAlignment = Alignment.Center
@@ -1091,6 +1332,7 @@ private fun CompactSongRow(
                     color = colors.subText,
                     fontSize = 10.sp
                 )
+                // 格式徽章（Folia 的 LRC 徽章同理，这里展示音频格式）
                 Spacer(Modifier.width(6.dp))
                 Text(
                     song.formatLabel,
@@ -1110,8 +1352,13 @@ private fun CompactSongRow(
     }
 }
 
+/** 播放中的跳动条指示器（3 根柱子，随播放/暂停启停） */
 @Composable
 private fun CompactBarsIndicator(playing: Boolean, color: Color) {
+    // 相位只在 playing=true 时推进。
+    // 原先用 rememberInfiniteTransition：即使暂停（画的是静态柱子）动画也照跑，
+    // 每帧触发一次无意义重组——这在列表里是持续的后台耗电。
+    // 改成 Animatable + LaunchedEffect(playing)：暂停即协程挂起，彻底零开销。
     val phase = remember { Animatable(0f) }
     LaunchedEffect(playing) {
         if (playing) {
@@ -1126,14 +1373,17 @@ private fun CompactBarsIndicator(playing: Boolean, color: Color) {
     }
     Canvas(Modifier.size(width = 14.dp, height = 14.dp)) {
         if (!playing) {
+            // 暂停：三根静态柱子，仍然比纯序号醒目
             drawRoundRect(color, Offset(2f, size.height * 0.45f), Size(3f, size.height * 0.55f), CornerRadius(1.5f))
             drawRoundRect(color, Offset(6f, size.height * 0.25f), Size(3f, size.height * 0.75f), CornerRadius(1.5f))
             drawRoundRect(color, Offset(10f, size.height * 0.55f), Size(3f, size.height * 0.45f), CornerRadius(1.5f))
             return@Canvas
         }
+        // 三根柱子相位错开 1.33，视觉上此起彼伏
         val p = phase.value
         for (i in 0 until 3) {
             val t = (p + i * 1.33f) % 4f
+            // t: 0→1→3→4 映射高度 0.35→1→0.35（快升慢降）
             val h = when {
                 t < 1f -> 0.35f + 0.65f * t
                 else -> 1f - 0.65f * ((t - 1f) / 3f)
@@ -1149,6 +1399,7 @@ private fun CompactBarsIndicator(playing: Boolean, color: Color) {
     }
 }
 
+/** 迷你播放条上的圆按钮 */
 @Composable
 private fun CompactPlayButton(
     label: String,
@@ -1180,6 +1431,7 @@ private fun CompactPlayButton(
     }
 }
 
+/** 迷你播放条的细进度条：轨道 3dp + 点击 seek */
 @Composable
 private fun CompactSeekBar(
     progress: Float,
@@ -1190,6 +1442,8 @@ private fun CompactSeekBar(
 ) {
     val trackColor = colors.card
     val fillColor = colors.primary
+    // 拖动期间显示本地即时值（dragPos），松手才提交 seek——与海报墙封面进度条同款，
+    // 避免拖动途中每帧都真 seek 卡顿。-1f = 未在拖动。
     val dragPos = remember { mutableFloatStateOf(-1f) }
     val shown = if (dragPos.floatValue >= 0f) dragPos.floatValue else progress
     Box(
@@ -1218,6 +1472,7 @@ private fun CompactSeekBar(
                 )
             }
     ) {
+        // 轨道：稍加宽的命中区（18dp）内画 3dp 视觉轨道
         Canvas(Modifier.fillMaxSize()) {
             val trackY = (size.height - 3.dp.toPx()) / 2f
             drawRoundRect(
@@ -1236,6 +1491,7 @@ private fun CompactSeekBar(
     }
 }
 
+/** 毫秒 → "m:ss" */
 private fun fmtCompact(ms: Long): String {
     val t = ms / 1000
     return "%d:%02d".format(t / 60, t % 60)
@@ -1243,12 +1499,19 @@ private fun fmtCompact(ms: Long): String {
 
 // ==================== 单张卡 ====================
 
+/**
+ * 卡片模式里的一张卡。
+ *
+ * 非当前歌曲的卡上，所有控制都退化成"跳到这首歌"：显示别人的播放进度是错的，
+ * 而进度条的水平拖动还会把翻页 / 抽卡手势整段吃掉（见 [PlayerCard.interactive]）。
+ */
 @Composable
 private fun DeckCard(
     song: Song,
     isCurrent: Boolean,
     state: PlayerUiState,
     colors: IrisColors,
+    /** 点非当前卡上的任意控制：先跳到这首歌 */
     onActivate: () -> Unit,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
@@ -1262,6 +1525,7 @@ private fun DeckCard(
     onClickArtwork: () -> Unit,
     eqActive: Boolean,
     modifier: Modifier = Modifier,
+    /** true 时自己撑满可用宽度（横向排布由 Pager 给宽度），false 时由外层控制 */
     fullWidth: Boolean = true
 ) {
     Box(
@@ -1277,7 +1541,7 @@ private fun DeckCard(
             shuffle = state.shuffle,
             repeatMode = state.repeatMode,
             artworkPath = song.filePath,
-            artworkUri = song.albumArtUri, // === 修复：传入网络封面 ===
+            artworkUri = song.albumArtUri, // === 补全：网络封面 ===
             progress = if (isCurrent) state.progress else 0f,
             isPlaying = isCurrent && state.isPlaying,
             onToggle = if (isCurrent) onToggle else onActivate,
@@ -1296,12 +1560,18 @@ private fun DeckCard(
             onOpenEqualizer = if (isCurrent) onOpenEqualizer else onActivate,
             eqActive = eqActive,
             audioFormat = song.formatLabel,
+            // 频谱开关跟随全局状态，不带 isCurrent 条件：
+            // 带 isCurrent 时切歌瞬间新顶卡 false→true、旧顶卡 true→false，
+            // 两张卡一个淡入一个淡出（420ms morph），看着就是"关了再开"。
+            // 所有卡都显示频谱区后，切歌只是内容无缝换人，无动画跳变。
+            // 频谱数据来自全局单例，非当前卡画的内容与当前卡相同——
+            // 它们被上面的卡压住只露一条边，重复绘制的开销可以忽略。
             visualizerEnabled = state.visualizerEnabled,
-            tiltSpectrum = state.tiltSpectrum,
-            coverShakeEnabled = state.coverShake,
-            coverLyricEnabled = state.coverLyric,
-            onToggleVisualizer = if (isCurrent) onToggleVisualizer else onActivate,
-            onOpenComments = if (isCurrent) onClickArtwork else onActivate // === 修复：传入新参数，借用 onClickArtwork 逻辑或新增回调 ===
+tiltSpectrum = state.tiltSpectrum,
+             coverShakeEnabled = state.coverShake,
+             coverLyricEnabled = state.coverLyric,
+             onToggleVisualizer = if (isCurrent) onToggleVisualizer else onActivate,
+            onOpenComments = if (isCurrent) onClickArtwork else onActivate // === 补全：新版必需参数 ===
         )
     }
 }
