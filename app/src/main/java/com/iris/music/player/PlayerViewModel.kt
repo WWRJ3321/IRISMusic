@@ -34,7 +34,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// ===== 你的专属服务器域名 =====
 private const val API_BASE_URL = "https://vvmusic-331312-8-1420953316.sh.run.tcloudbase.com"
+
+// ===== 新增：网络数据类 =====
+data class MusicComment(
+    val id: Long,
+    val content: String,
+    val nickname: String,
+    val avatarUrl: String,
+    val likedCount: Int
+)
+
+data class TopListInfo(
+    val id: Long,
+    val name: String,
+    val coverImgUrl: String,
+    val updateFrequency: String
+)
 
 data class PlayerUiState(
     val allSongs: List<Song> = emptyList(),
@@ -133,11 +150,16 @@ data class PlayerUiState(
     val splashStyle: Int = 0,
     val useNewSettingsStyle: Boolean = false,
     
+    // ===== 网络音乐状态 =====
     val isOnlineMode: Boolean = false,
     val onlineSearchResults: List<Song> = emptyList(),
     val onlineSearchLoading: Boolean = false,
-    val onlinePlayedHistory: List<Song> = emptyList(),
-    val onlineErrorMsg: String? = null // 新增错误提示
+    val onlineErrorMsg: String? = null,
+    val showTranslationLyric: Boolean = true, // 双语歌词开关
+    val topLists: List<TopListInfo> = emptyList(),
+    val currentComments: List<MusicComment> = emptyList(),
+    val currentCommentCount: Long = 0L,
+    val isCommentsLoading: Boolean = false
 ) {
     val currentSong: Song? get() = queue.getOrNull(currentIndex)
     val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
@@ -151,14 +173,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    // 原生网络请求工具
+    // 原生网络请求工具，替代 OkHttp，免加依赖
     private fun fetchUrl(urlStr: String): String? {
         return try {
             val url = URL(urlStr)
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "GET"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
+            conn.connectTimeout = 10000
+            conn.readTimeout = 10000
             conn.setRequestProperty("User-Agent", "Mozilla/5.0")
             val inputStream = conn.inputStream
             val result = inputStream.bufferedReader().use { it.readText() }
@@ -239,7 +261,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             splashEnabled = prefs.getBoolean(KEY_SPLASH_ENABLED, true),
             splashStyle = prefs.getInt(KEY_SPLASH_STYLE, 0).coerceIn(0, 2),
             useNewSettingsStyle = prefs.getBoolean(KEY_NEW_SETTINGS, false),
-            isOnlineMode = prefs.getBoolean(KEY_ONLINE_MODE, false)
+            isOnlineMode = prefs.getBoolean(KEY_ONLINE_MODE, false),
+            showTranslationLyric = prefs.getBoolean("show_translation", true)
         )
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -304,6 +327,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             viewModelScope.launch { loadLibrary() }
         } else {
             loadOnlineRecommendations()
+            loadTopLists()
         }
         viewModelScope.launch { tickPosition() }
         SleepTimer.attach(getApplication())
@@ -314,27 +338,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         app.registerComponentCallbacks(configCallbacks)
     }
 
+    fun setShowTranslationLyric(show: Boolean) {
+        prefs.edit().putBoolean("show_translation", show).apply()
+        _state.value = _state.value.copy(showTranslationLyric = show)
+    }
+
     fun setOnlineMode(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_ONLINE_MODE, enabled).apply()
         if (enabled) {
-            _state.value = _state.value.copy(
-                isOnlineMode = true,
-                queue = emptyList(),
-                currentIndex = -1,
-                searchQuery = "",
-                onlineSearchResults = emptyList(),
-                onlineErrorMsg = null
-            )
+            _state.value = _state.value.copy(isOnlineMode = true, queue = emptyList(), currentIndex = -1, searchQuery = "", onlineSearchResults = emptyList(), onlineErrorMsg = null)
             controller?.clearMediaItems()
             loadOnlineRecommendations()
+            loadTopLists()
         } else {
-            _state.value = _state.value.copy(
-                isOnlineMode = false,
-                queue = emptyList(),
-                currentIndex = -1,
-                searchQuery = "",
-                onlineErrorMsg = null
-            )
+            _state.value = _state.value.copy(isOnlineMode = false, queue = emptyList(), currentIndex = -1, searchQuery = "", onlineErrorMsg = null)
             controller?.clearMediaItems()
             applyFilters(resetToFirst = true)
             updateRecommendations()
@@ -364,10 +381,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun searchOnlineSongs(keyword: String): List<Song> = withContext(Dispatchers.IO) {
         try {
             val encoded = URLEncoder.encode(keyword, "UTF-8")
-            val url = "$API_BASE_URL/search?keywords=$encoded"
+            val url = "$API_BASE_URL/search?keywords=$encoded&limit=50"
             val jsonString = fetchUrl(url)
             if (jsonString == null) {
-                _state.value = _state.value.copy(onlineErrorMsg = "网络请求失败，请检查网络连接")
+                _state.value = _state.value.copy(onlineErrorMsg = "网络请求失败")
                 return@withContext emptyList()
             }
             val jsonObject = JSONObject(jsonString)
@@ -380,15 +397,33 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     val id = songObj.getLong("id")
                     val name = songObj.getString("name")
                     val artists = songObj.optJSONArray("artists")
-                    val artistName = artists?.optJSONObject(0)?.optString("name") ?: "未知歌手"
+                    val artistObj = artists?.optJSONObject(0)
+                    val artistName = artistObj?.optString("name") ?: "未知歌手"
+                    val artistAvatar = artistObj?.optString("img1v1Url") ?: ""
                     val duration = songObj.optLong("duration")
-                    list.add(Song(id = id, title = name, artist = artistName, album = "", filePath = "online_$id", durationMs = duration, albumArtUri = null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐"))
+                    val popularity = songObj.optInt("popularity")
+                    val publishTime = songObj.optLong("publishTime")
+                    
+                    val albumObj = songObj.optJSONObject("album")
+                    val albumName = albumObj?.optString("name") ?: ""
+                    val rawPicUrl = albumObj?.optString("picUrl") ?: ""
+                    val picUrl = if (rawPicUrl.isNotEmpty()) "$rawPicUrl?param=1024y1024" else ""
+                    
+                    list.add(Song(id = id, title = name, artist = artistName, album = albumName, filePath = "online_$id", durationMs = duration, albumArtUri = if (picUrl.isNotEmpty()) android.net.Uri.parse(picUrl) else null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐", popularity = popularity, publishTime = publishTime, artistAvatarUrl = artistAvatar))
                 }
             }
+            
+            // 智能排序：过滤翻唱，时长长的优先
+            val blacklist = listOf("翻唱", "cover", "抖音", "片段", "dj", "伴奏", "live")
+            list.sortWith(compareByDescending<Song> { song ->
+                val titleLower = song.title.lowercase()
+                if (blacklist.any { titleLower.contains(it) }) 0 else 1
+            }.thenByDescending { it.durationMs })
+            
             list
         } catch (e: Exception) {
             e.printStackTrace()
-            _state.value = _state.value.copy(onlineErrorMsg = "数据解析失败: ${e.message}")
+            _state.value = _state.value.copy(onlineErrorMsg = "解析失败")
             emptyList()
         }
     }
@@ -408,82 +443,144 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         val id = songObj.getLong("id")
                         val name = songObj.getString("name")
                         val artists = songObj.optJSONArray("ar")
-                        val artistName = artists?.optJSONObject(0)?.optString("name") ?: "未知歌手"
+                        val artistObj = artists?.optJSONObject(0)
+                        val artistName = artistObj?.optString("name") ?: "未知歌手"
+                        val artistAvatar = artistObj?.optString("img1v1Url") ?: ""
                         val duration = songObj.optLong("dt")
-                        list.add(Song(id = id, title = name, artist = artistName, album = "", filePath = "online_$id", durationMs = duration, albumArtUri = null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐"))
+                        val albumObj = songObj.optJSONObject("al")
+                        val albumName = albumObj?.optString("name") ?: ""
+                        val rawPicUrl = albumObj?.optString("picUrl") ?: ""
+                        val picUrl = if (rawPicUrl.isNotEmpty()) "$rawPicUrl?param=1024y1024" else ""
+                        
+                        list.add(Song(id = id, title = name, artist = artistName, album = albumName, filePath = "online_$id", durationMs = duration, albumArtUri = if (picUrl.isNotEmpty()) android.net.Uri.parse(picUrl) else null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐", artistAvatarUrl = artistAvatar))
                     }
                 }
-                if (list.isNotEmpty()) {
-                    _state.value = _state.value.copy(recommendations = list)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+                if (list.isNotEmpty()) _state.value = _state.value.copy(recommendations = list)
+            } catch (e: Exception) { e.printStackTrace() }
         }
     }
 
-    fun playOnlineSong(song: Song) {
+    private fun loadTopLists() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val url = "$API_BASE_URL/song/url?id=${song.id}"
-                val jsonString = fetchUrl(url) ?: return@launch
-                val jsonObject = JSONObject(jsonString)
-                val dataArray = jsonObject.optJSONArray("data")
-                val audioUrl = dataArray?.optJSONObject(0)?.optString("url")
+                val jsonString = fetchUrl("$API_BASE_URL/toplist") ?: return@launch
+                val listArray = JSONObject(jsonString).optJSONArray("list")
+                val list = mutableListOf<TopListInfo>()
+                if (listArray != null) {
+                    for (i in 0 until listArray.length()) {
+                        val obj = listArray.getJSONObject(i)
+                        list.add(TopListInfo(obj.getLong("id"), obj.getString("name"), obj.optString("coverImgUrl") + "?param=300y300", obj.optString("updateFrequency")))
+                    }
+                }
+                _state.value = _state.value.copy(topLists = list)
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    fun playTopList(topListId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val jsonString = fetchUrl("$API_BASE_URL/playlist/detail?id=$topListId") ?: return@launch
+                val tracks = JSONObject(jsonString).optJSONObject("playlist")?.optJSONArray("tracks")
+                val list = mutableListOf<Song>()
+                if (tracks != null) {
+                    for (i in 0 until tracks.length()) {
+                        val songObj = tracks.getJSONObject(i)
+                        val id = songObj.getLong("id")
+                        val rawPicUrl = songObj.optJSONObject("al")?.optString("picUrl") ?: ""
+                        list.add(Song(id = id, title = songObj.getString("name"), artist = songObj.optJSONArray("ar")?.optJSONObject(0)?.optString("name") ?: "未知", album = "", filePath = "online_$id", durationMs = songObj.optLong("dt"), albumArtUri = if (rawPicUrl.isNotEmpty()) android.net.Uri.parse("$rawPicUrl?param=1024y1024") else null, uri = android.net.Uri.parse(""), folderPath = "online", folderName = "网络音乐"))
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    _state.value = _state.value.copy(queue = list)
+                    playOnlineSong(list.firstOrNull())
+                }
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    fun playOnlineSong(song: Song?) {
+        if (song == null) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var audioUrl: String? = null
+                // 音质降级抓取
+                for (level in listOf("exhigh", "standard")) {
+                    val url = "$API_BASE_URL/song/url/v1?id=${song.id}&level=$level"
+                    val jsonString = fetchUrl(url) ?: continue
+                    val dataArray = JSONObject(jsonString).optJSONArray("data")
+                    val urlStr = dataArray?.optJSONObject(0)?.optString("url")
+                    if (!urlStr.isNullOrEmpty()) { audioUrl = urlStr; break }
+                }
                 
                 if (!audioUrl.isNullOrEmpty()) {
                     var finalFilePath = song.filePath
                     try {
-                        val lyricUrl = "$API_BASE_URL/lyric?id=${song.id}"
-                        val lyricJsonString = fetchUrl(lyricUrl)
+                        val lyricJsonString = fetchUrl("$API_BASE_URL/lyric?id=${song.id}")
                         if (lyricJsonString != null) {
                             val lyricJson = JSONObject(lyricJsonString)
-                            val lrcObj = lyricJson.optJSONObject("lrc")
-                            val lyricText = lrcObj?.optString("lyric")
-                            
-                            if (!lyricText.isNullOrEmpty()) {
+                            val lyricText = lyricJson.optJSONObject("lrc")?.optString("lyric") ?: ""
+                            val tLyricText = lyricJson.optJSONObject("tlyric")?.optString("lyric") ?: ""
+                            if (lyricText.isNotEmpty()) {
                                 val cacheDir = File(getApplication<Application>().cacheDir, "online_lyrics")
                                 if (!cacheDir.exists()) cacheDir.mkdirs()
                                 val lyricFile = File(cacheDir, "online_${song.id}.lrc")
                                 lyricFile.writeText(lyricText)
                                 finalFilePath = lyricFile.absolutePath
+                                if (tLyricText.isNotEmpty()) File(cacheDir, "online_${song.id}_t.lrc").writeText(tLyricText)
                             }
                         }
                     } catch (e: Exception) { e.printStackTrace() }
 
                     val playSong = song.copy(filePath = finalFilePath)
-
                     withContext(Dispatchers.Main) {
                         val currentQueue = _state.value.queue.toMutableList()
                         val existIndex = currentQueue.indexOfFirst { it.id == playSong.id }
-                        val playIndex: Int
-                        if (existIndex >= 0) {
-                            currentQueue[existIndex] = playSong
-                            playIndex = existIndex
-                        } else {
-                            currentQueue.add(0, playSong)
-                            playIndex = 0
-                        }
+                        val playIndex = if (existIndex >= 0) existIndex else { currentQueue.add(0, playSong); 0 }
                         _state.value = _state.value.copy(queue = currentQueue)
                         
-                        val mediaItem = MediaItem.Builder()
-                            .setMediaId(playSong.id.toString())
-                            .setUri(android.net.Uri.parse(audioUrl))
-                            .setMediaMetadata(
-                                MediaMetadata.Builder()
-                                    .setTitle(playSong.title)
-                                    .setArtist(playSong.artist)
-                                    .setExtras(android.os.Bundle().apply { putString("file_path", playSong.filePath) })
-                                    .build()
-                            ).build()
-                        
-                        controller?.setMediaItem(mediaItem)
+                        controller?.setMediaItem(
+                            MediaItem.Builder()
+                                .setMediaId(playSong.id.toString())
+                                .setUri(android.net.Uri.parse(audioUrl))
+                                .setMediaMetadata(MediaMetadata.Builder().setTitle(playSong.title).setArtist(playSong.artist).setArtworkUri(playSong.albumArtUri).setExtras(android.os.Bundle().apply { putString("file_path", playSong.filePath) }).build())
+                                .build()
+                        )
                         controller?.prepare()
                         controller?.play()
                         _state.value = _state.value.copy(currentIndex = playIndex)
+                        
+                        loadSongComments(playSong.id)
                     }
                 }
             } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    fun loadSongComments(songId: Long) {
+        _state.value = _state.value.copy(isCommentsLoading = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cJsonString = fetchUrl("$API_BASE_URL/comment/music?id=$songId&limit=20")
+                val comments = mutableListOf<MusicComment>()
+                var total = 0L
+                if (cJsonString != null) {
+                    val cJson = JSONObject(cJsonString)
+                    total = cJson.optLong("total")
+                    val hot = cJson.optJSONArray("hotComments")
+                    val arr = if (hot != null && hot.length() > 0) hot else cJson.optJSONArray("comments")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            val user = obj.optJSONObject("user")
+                            comments.add(MusicComment(obj.getLong("commentId"), obj.getString("content"), user?.optString("nickname") ?: "匿名", user?.optString("avatarUrl") ?: "", obj.optInt("likedCount")))
+                        }
+                    }
+                }
+                withContext(Dispatchers.Main) { _state.value = _state.value.copy(currentComments = comments, currentCommentCount = total, isCommentsLoading = false) }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { _state.value = _state.value.copy(isCommentsLoading = false) }
+            }
         }
     }
 
@@ -495,8 +592,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             currentQueue.removeAt(index)
             val newIndex = if (index == _state.value.currentIndex) {
                 if (currentQueue.isEmpty()) -1 else index.coerceAtMost(currentQueue.lastIndex)
-            } else if (index < _state.value.currentIndex) _state.value.currentIndex - 1
-            else _state.value.currentIndex
+            } else if (index < _state.value.currentIndex) _state.value.currentIndex - 1 else _state.value.currentIndex
             _state.value = _state.value.copy(queue = currentQueue, currentIndex = newIndex)
             if (currentQueue.isEmpty()) controller?.clearMediaItems()
         }
@@ -526,8 +622,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playAt(index: Int) {
         if (_state.value.isOnlineMode) {
-            val song = _state.value.queue.getOrNull(index) ?: return
-            playOnlineSong(song)
+            playOnlineSong(_state.value.queue.getOrNull(index))
             return
         }
         val c = controller ?: return
@@ -755,7 +850,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setShowRowPlaylist(show: Boolean) { prefs.edit().putBoolean(KEY_ROW_PLAYLIST, show).apply(); _state.value = _state.value.copy(showRowPlaylist = show) }
     fun setSearchPersistent(on: Boolean) { prefs.edit().putBoolean(KEY_SEARCH_PERSISTENT, on).apply(); _state.value = _state.value.copy(searchPersistent = on) }
     fun setShowLikedBadge(show: Boolean) { prefs.edit().putBoolean(KEY_LIKED_BADGE, show).apply(); _state.value = _state.value.copy(showLikedBadge = show) }
-
     fun setVisualizerEnabled(enabled: Boolean) { prefs.edit().putBoolean(KEY_VISUALIZER, enabled).apply(); SpectrumAnalyzer.enabled = enabled; _state.value = _state.value.copy(visualizerEnabled = enabled) }
     fun setPhysicsFx(enabled: Boolean) { prefs.edit().putBoolean(KEY_TILT_SPECTRUM, enabled).putBoolean(KEY_COVER_SHAKE, enabled).apply(); _state.value = _state.value.copy(tiltSpectrum = enabled, coverShake = enabled) }
     fun setLyricAlign(align: Int) { val a = align.coerceIn(0, 2); prefs.edit().putInt(KEY_LYRIC_ALIGN, a).apply(); _state.value = _state.value.copy(lyricAlign = a) }
@@ -774,11 +868,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setShowRecommendations(show: Boolean) { prefs.edit().putBoolean(KEY_SHOW_RECS, show).apply(); _state.value = _state.value.copy(showRecommendations = show) }
     fun setShowSortBar(show: Boolean) { prefs.edit().putBoolean(KEY_SHOW_SORT_BAR, show).apply(); _state.value = _state.value.copy(showSortBar = show) }
     fun setJellyAnim(enabled: Boolean) { prefs.edit().putBoolean(KEY_JELLY_ANIM, enabled).apply(); _state.value = _state.value.copy(jellyAnim = enabled) }
-
     fun setSplashEnabled(enabled: Boolean) { prefs.edit().putBoolean(KEY_SPLASH_ENABLED, enabled).apply(); _state.value = _state.value.copy(splashEnabled = enabled) }
     fun setSplashStyle(style: Int) { val v = style.coerceIn(0, 2); prefs.edit().putInt(KEY_SPLASH_STYLE, v).apply(); _state.value = _state.value.copy(splashStyle = v) }
     fun setUseNewSettingsStyle(enabled: Boolean) { prefs.edit().putBoolean(KEY_NEW_SETTINGS, enabled).apply(); _state.value = _state.value.copy(useNewSettingsStyle = enabled) }
-
     fun setSilenceSkip(enabled: Boolean) { prefs.edit().putBoolean(SilenceSkipper.KEY_ENABLED, enabled).apply(); SilenceSkipper.setEnabled(enabled); _state.value = _state.value.copy(silenceSkip = enabled) }
     fun setBassHaptics(enabled: Boolean) { prefs.edit().putBoolean(BassHaptics.KEY_ENABLED, enabled).apply(); BassHaptics.setEnabled(enabled); _state.value = _state.value.copy(bassHaptics = enabled) }
     fun setBassHapticsIntensity(level: Int) { val lv = level.coerceIn(0, 2); prefs.edit().putInt(BassHaptics.KEY_INTENSITY, lv).apply(); BassHaptics.setIntensity(lv); BassHaptics.preview(lv); _state.value = _state.value.copy(bassHapticsIntensity = lv) }
@@ -786,7 +878,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setBassHapticsSensitivity(level: Int) { val v = level.coerceIn(1, 10); prefs.edit().putInt(BassHaptics.KEY_SENSITIVITY, v).apply(); BassHaptics.setSensitivity(v); _state.value = _state.value.copy(bassHapticsSensitivity = v) }
     fun setBassHapticsLowCutoff(hz: Int) { val v = hz.coerceIn(120, 320); prefs.edit().putInt(BassHaptics.KEY_LOW_CUTOFF, v).apply(); BassHaptics.setLowCutoffHz(v); _state.value = _state.value.copy(bassHapticsLowCutoff = v) }
     fun setBassHapticsAdaptive(enabled: Boolean) { prefs.edit().putBoolean(BassHaptics.KEY_ADAPTIVE, enabled).apply(); BassHaptics.setAdaptive(enabled); _state.value = _state.value.copy(bassHapticsAdaptive = enabled) }
-
     fun setVirtualBass(enabled: Boolean) { prefs.edit().putBoolean(VirtualBass.KEY_ENABLED, enabled).apply(); VirtualBass.setEnabled(enabled); _state.value = _state.value.copy(virtualBass = enabled) }
     fun setVirtualBassStrength(v: Int) { val x = v.coerceIn(0, 100); prefs.edit().putInt(VirtualBass.KEY_STRENGTH, x).apply(); VirtualBass.setStrength(x); _state.value = _state.value.copy(virtualBassStrength = x) }
     fun setRangeEnhancer(enabled: Boolean) { prefs.edit().putBoolean(RangeEnhancer.KEY_ENABLED, enabled).apply(); RangeEnhancer.setEnabled(enabled); _state.value = _state.value.copy(rangeEnhancer = enabled) }
@@ -799,7 +890,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setSafeLimiterStrength(v: Int) { val x = v.coerceIn(0, 100); prefs.edit().putInt(SafeLimiter.KEY_STRENGTH, x).apply(); SafeLimiter.setStrength(x); _state.value = _state.value.copy(safeLimiterStrength = x) }
     fun setLoudnorm(enabled: Boolean) { prefs.edit().putBoolean(TrackGain.KEY_ENABLED, enabled).apply(); TrackGain.setEnabled(enabled); _state.value = _state.value.copy(loudnorm = enabled) }
     fun setLoudnormStrength(v: Int) { val x = v.coerceIn(0, 100); prefs.edit().putInt(TrackGain.KEY_STRENGTH, x).apply(); TrackGain.setStrength(x); _state.value = _state.value.copy(loudnormStrength = x) }
-
     fun setLyricUseCustomColor(on: Boolean) { prefs.edit().putBoolean(KEY_LYRIC_USE_CUSTOM, on).apply(); _state.value = _state.value.copy(lyricUseCustomColor = on) }
     fun setLyricTheme(theme: IrisTheme) { prefs.edit().putString(KEY_LYRIC_THEME, theme.name).apply(); _state.value = _state.value.copy(lyricTheme = theme) }
     fun setLyricCustomColors(primary: Long, secondary: Long) { prefs.edit().putLong(KEY_LYRIC_CUSTOM_PRIMARY, primary).putLong(KEY_LYRIC_CUSTOM_SECONDARY, secondary).apply(); _state.value = _state.value.copy(lyricCustomPrimary = primary, lyricCustomSecondary = secondary) }
@@ -809,7 +899,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setFloatLyricFixMode(mode: Int) { prefs.edit().putInt(FloatingLyric.KEY_FIX_MODE, mode).apply(); _state.value = _state.value.copy(floatLyricFixMode = mode) }
     fun setFloatLyricTheme(theme: IrisTheme) { prefs.edit().putString(FloatingLyric.KEY_THEME, theme.name).apply(); _state.value = _state.value.copy(floatLyricTheme = theme) }
     fun setFloatLyricCustomColors(primary: Long, secondary: Long) { prefs.edit().putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, primary).putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, secondary).apply(); _state.value = _state.value.copy(floatLyricCustomPrimary = primary, floatLyricCustomSecondary = secondary) }
-
     fun toggleLike(songId: Long) { PlayHistory.toggleLike(songId); _state.value = _state.value.copy(likedSongIds = PlayHistory.getLikes()); updateRecommendations(); if (_state.value.onlyLiked) applyFilters(resetToFirst = false) }
     fun setOnlyLiked(only: Boolean) { _state.value = _state.value.copy(onlyLiked = only); applyFilters(resetToFirst = true) }
 
@@ -820,34 +909,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val end = SleepTimer.set(app, minutes)
         _state.value = _state.value.copy(sleepTimerMs = totalMs, sleepTimerEndMs = end)
     }
-
     fun cancelSleepTimer() { SleepTimer.cancel(); if (_state.value.sleepTimerMs > 0) _state.value = _state.value.copy(sleepTimerMs = 0L, sleepTimerEndMs = 0L) }
-
     fun toggleReport(show: Boolean) { _state.value = _state.value.copy(showReport = show); if (show) loadReport(_state.value.report.range) }
-
-    fun setReportRange(range: StatRange) {
-        val cached = statEntries
-        if (cached != null) _state.value = _state.value.copy(report = ListenReportBuilder.build(cached, _state.value.allSongs, range))
-        else loadReport(range)
-    }
-
-    fun playSongById(songId: Long) { val song = _state.value.allSongs.firstOrNull { it.id == songId } ?: return; playSong(song) }
-
+    fun setReportRange(range: StatRange) { statEntries?.let { _state.value = _state.value.copy(report = ListenReportBuilder.build(it, _state.value.allSongs, range)) } ?: loadReport(range) }
+    fun playSongById(songId: Long) { _state.value.allSongs.firstOrNull { it.id == songId }?.let { playSong(it) } }
     private fun loadReport(range: StatRange) {
         reportJob?.cancel()
         if (statEntries == null) _state.value = _state.value.copy(report = _state.value.report.copy(loading = true))
         reportJob = viewModelScope.launch {
             val entries = withContext(Dispatchers.IO) { ListenStats.load() }
             statEntries = entries
-            val report = withContext(Dispatchers.Default) { ListenReportBuilder.build(entries, _state.value.allSongs, range) }
-            _state.value = _state.value.copy(report = report)
+            _state.value = _state.value.copy(report = ListenReportBuilder.build(entries, _state.value.allSongs, range))
         }
     }
-
-    private fun refreshReportIfNeeded() {
-        val entries = statEntries ?: return
-        _state.value = _state.value.copy(report = ListenReportBuilder.build(entries, _state.value.allSongs, _state.value.report.range))
-    }
+    private fun refreshReportIfNeeded() { statEntries?.let { _state.value = _state.value.copy(report = ListenReportBuilder.build(it, _state.value.allSongs, _state.value.report.range)) } }
 
     private fun connectController() {
         val app = getApplication<Application>()
@@ -856,25 +931,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         future.addListener({
             runCatching {
                 val c = future.get()
-                c.addListener(listener)
-                controller = c
-                applyPlaybackModes()
+                c.addListener(listener); controller = c; applyPlaybackModes()
                 c.currentMediaItem?.mediaId?.toLongOrNull()?.let { id -> pendingRestoreId = id; pendingRestorePos = c.currentPosition.coerceAtLeast(0L) }
                 if (_state.value.queue.isNotEmpty()) {
                     val restoreId = pendingRestoreId
                     val hit = if (restoreId != null) _state.value.queue.indexOfFirst { it.id == restoreId } else -1
                     pendingRestoreId = null
-                    val startPos = if (hit >= 0) pendingRestorePos else c.currentPosition.coerceAtLeast(0L)
+                    pushQueue(startIndex = if (hit >= 0) hit else _state.value.currentIndex.coerceAtLeast(0), startPositionMs = if (hit >= 0) pendingRestorePos else c.currentPosition.coerceAtLeast(0L))
                     pendingRestorePos = 0L
-                    pushQueue(startIndex = if (hit >= 0) hit else _state.value.currentIndex.coerceAtLeast(0), startPositionMs = startPos)
                 }
                 viewModelScope.launch { warmUpSync() }
             }
         }, MoreExecutors.directExecutor())
     }
-
     private suspend fun warmUpSync() { repeat(10) { delay(200); syncFromController(); if (_state.value.currentIndex >= 0) return } }
-
     private suspend fun tickPosition() {
         var lastPos = -1L
         while (true) {
@@ -889,7 +959,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             delay(500)
         }
     }
-
     private fun persistPlayback(throttle: Boolean) {
         val song = _state.value.currentSong ?: return
         if (_state.value.isOnlineMode) return 
@@ -898,7 +967,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         lastPersistMs = now
         prefs.edit().putLong(KEY_LAST_SONG, song.id).putLong(KEY_LAST_POS, (controller?.currentPosition ?: _state.value.positionMs).coerceAtLeast(0L)).apply()
     }
-
     private fun syncFromController() {
         val c = controller ?: return
         val cid = c.currentMediaItem?.mediaId?.toLongOrNull()
@@ -906,9 +974,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val newSong = _state.value.queue.getOrNull(newIndex)
         if (newSong != null && cid != null && newSong.id != cid) return
         if (newSong != null && newSong.id != prevSongId && prevSongId >= 0) {
-            val playedMs = prevPlayedMs()
-            val prevDuration = _state.value.allSongs.firstOrNull { it.id == prevSongId }?.durationMs ?: 0L
-            PlayHistory.recordPlay(prevSongId, playedMs, prevDuration)
+            PlayHistory.recordPlay(prevSongId, prevPlayedMs(), _state.value.allSongs.firstOrNull { it.id == prevSongId }?.durationMs ?: 0L)
         }
         if (newSong != null && newSong.id != prevSongId) {
             prevSongId = newSong.id; prevAccumMs = 0L
@@ -918,32 +984,22 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         _state.value = _state.value.copy(currentIndex = newIndex, isPlaying = c.isPlaying, positionMs = c.currentPosition, durationMs = c.duration.coerceAtLeast(0L))
     }
-
     private fun updateRecommendations() {
         if (_state.value.isOnlineMode) return
-        val pool = recommendationPool()
-        if (pool.isEmpty()) return
+        if (recommendationPool().isEmpty()) return
         val exploration = _state.value.exploration
         viewModelScope.launch {
-            val recs = withContext(Dispatchers.Default) { Recommender.recommend(pool, exploration = exploration) }
+            val recs = withContext(Dispatchers.Default) { Recommender.recommend(recommendationPool(), exploration = exploration) }
             _state.value = _state.value.copy(recommendations = recs, recommendationsVersion = _state.value.recommendationsVersion + 1)
         }
     }
-
-    private fun recommendationPool(): List<Song> {
-        val all = _state.value.allSongs
-        val sel = _state.value.selectedFolders
-        return if (sel.isEmpty()) all else all.filter { it.folderPath in sel }
-    }
-
+    private fun recommendationPool(): List<Song> { val all = _state.value.allSongs; val sel = _state.value.selectedFolders; return if (sel.isEmpty()) all else all.filter { it.folderPath in sel } }
     fun setExploration(value: Float) { val v = value.coerceIn(0f, 1f); prefs.edit().putFloat(KEY_EXPLORATION, v).apply(); _state.value = _state.value.copy(exploration = v); updateRecommendations() }
-
     private fun applyPlaybackModes() {
         val c = controller ?: return
         c.shuffleModeEnabled = false
         c.repeatMode = when (_state.value.repeatMode) { RepeatMode.OFF -> if (_state.value.shuffle) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF; RepeatMode.ALL -> Player.REPEAT_MODE_ALL; RepeatMode.ONE -> Player.REPEAT_MODE_ONE }
     }
-
     private suspend fun loadLibrary() {
         if (_state.value.isOnlineMode) return
         val root = _state.value.scanRoot
@@ -958,12 +1014,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(allSongs = songs, folders = MusicRepository.buildFolders(songs), likedSongIds = PlayHistory.getLikes(), playlists = Playlists.all(), loading = false)
         applyFilters(resetToFirst = true); updateRecommendations(); refreshReportIfNeeded()
     }
-
     private fun applyFilters(resetToFirst: Boolean) {
         if (_state.value.isOnlineMode) return
-        val s = _state.value
-        val playing = s.currentSong
-        var list = s.allSongs
+        val s = _state.value; val playing = s.currentSong; var list = s.allSongs
         val activePid = _state.value.activePlaylistId
         if (activePid != null) { val ids = Playlists.songs(activePid).toSet(); list = list.filter { it.id in ids } }
         else {
@@ -985,7 +1038,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val keepPosition = when { keptIndex >= 0 -> controller?.currentPosition ?: 0L; restoreIndex >= 0 -> restorePos; else -> 0L }
         pushQueue(startIndex = newIndex.coerceAtLeast(0), startPositionMs = keepPosition)
     }
-
     private fun pushQueue(startIndex: Int, startPositionMs: Long) {
         val c = controller ?: return
         val queue = _state.value.queue
@@ -993,42 +1045,28 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val index = startIndex.coerceIn(0, queue.lastIndex)
         val playingId = c.currentMediaItem?.mediaId?.toLongOrNull()
         if (playingId != null && queue.getOrNull(index)?.id == playingId && c.isPlaying) {
-            syncQueueAroundCurrent(c, queue, index)
-            _state.value = _state.value.copy(currentIndex = index)
-            return
+            syncQueueAroundCurrent(c, queue, index); _state.value = _state.value.copy(currentIndex = index); return
         }
         val pinId = if (_state.value.shuffle) queue[index].id else null
-        val order = playOrder(queue, pinId)
-        val playIdx = if (pinId != null) 0 else index
-        c.setMediaItems(order.map { it.toMediaItem() }, playIdx, startPositionMs)
-        c.prepare()
-        _state.value = _state.value.copy(currentIndex = index)
+        c.setMediaItems(playOrder(queue, pinId).map { it.toMediaItem() }, if (pinId != null) 0 else index, startPositionMs)
+        c.prepare(); _state.value = _state.value.copy(currentIndex = index)
     }
-
     private fun syncQueueAroundCurrent(c: MediaController, queue: List<Song>, index: Int) {
         val pinId = if (_state.value.shuffle) queue[index].id else null
         val order = playOrder(queue, pinId)
         val playIdx = order.indexOfFirst { it.id == queue[index].id }.coerceAtLeast(0)
-        val cur = c.currentMediaItemIndex
-        val count = c.mediaItemCount
-        if (cur + 1 < count) c.removeMediaItems(cur + 1, count)
-        if (cur > 0) c.removeMediaItems(0, cur)
-        val after = order.drop(playIdx + 1)
-        val before = order.take(playIdx)
+        val cur = c.currentMediaItemIndex; val count = c.mediaItemCount
+        if (cur + 1 < count) c.removeMediaItems(cur + 1, count); if (cur > 0) c.removeMediaItems(0, cur)
+        val after = order.drop(playIdx + 1); val before = order.take(playIdx)
         if (after.isNotEmpty()) c.addMediaItems(after.map { it.toMediaItem() })
         if (before.isNotEmpty()) c.addMediaItems(0, before.map { it.toMediaItem() })
     }
-
-    private fun refreshSystemDark() {
-        val dark = (getApplication<Application>().resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-        _state.value = _state.value.copy(systemDark = dark)
-    }
-
+    private fun refreshSystemDark() { _state.value = _state.value.copy(systemDark = (getApplication<Application>().resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES) }
     private fun readTheme(): IrisTheme = runCatching { IrisTheme.valueOf(prefs.getString(KEY_THEME, IrisTheme.MONO.name)!!) }.getOrDefault(IrisTheme.MONO)
     private fun readMode(): IrisMode = runCatching { IrisMode.valueOf(prefs.getString(KEY_MODE, IrisMode.LIGHT.name)!!) }.getOrDefault(IrisMode.LIGHT)
     private fun readSurfaceStyle(): IrisSurfaceStyle {
         val saved = prefs.getString(KEY_SURFACE_STYLE, null)
-        if (saved == null) { val legacyHaze = prefs.getBoolean(KEY_HAZE, true); val migrated = if (legacyHaze) IrisSurfaceStyle.FROSTED else IrisSurfaceStyle.SOLID; prefs.edit().putString(KEY_SURFACE_STYLE, migrated.name).apply(); return migrated }
+        if (saved == null) { val migrated = if (prefs.getBoolean(KEY_HAZE, true)) IrisSurfaceStyle.FROSTED else IrisSurfaceStyle.SOLID; prefs.edit().putString(KEY_SURFACE_STYLE, migrated.name).apply(); return migrated }
         return runCatching { IrisSurfaceStyle.valueOf(saved) }.getOrDefault(IrisSurfaceStyle.SOLID)
     }
     private fun readSortOrder(): SortOrder = runCatching { SortOrder.valueOf(prefs.getString(KEY_SORT_ORDER, SortOrder.TITLE.name)!!) }.getOrDefault(SortOrder.TITLE)
@@ -1038,19 +1076,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun readRepeatMode(): RepeatMode = runCatching { RepeatMode.valueOf(prefs.getString(KEY_REPEAT, RepeatMode.OFF.name)!!) }.getOrDefault(RepeatMode.OFF)
     private fun saveSelectedFolders(sets: Set<String>) = prefs.edit().putString(KEY_SELECTED_FOLDERS, sets.joinToString(",")).apply()
     private fun readScanRoot(): String? = prefs.getString(KEY_SCAN_ROOT, null)?.trim()?.takeIf { it.isNotEmpty() }
-
-    private fun Song.toMediaItem(): MediaItem =
-        MediaItem.Builder().setMediaId(id.toString()).setUri(uri)
-            .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artist).setAlbumTitle(album).setArtworkUri(albumArtUri).setExtras(android.os.Bundle().apply { putString("file_path", filePath) }).build())
-            .build()
-
+    private fun Song.toMediaItem(): MediaItem = MediaItem.Builder().setMediaId(id.toString()).setUri(uri).setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artist).setAlbumTitle(album).setArtworkUri(albumArtUri).setExtras(android.os.Bundle().apply { putString("file_path", filePath) }).build()).build()
     override fun onCleared() {
         sleepUnsub?.let { it() }; sleepUnsub = null
         controller?.removeListener(listener); controller?.release(); controller = null
-        getApplication<Application>().unregisterComponentCallbacks(configCallbacks)
-        super.onCleared()
+        getApplication<Application>().unregisterComponentCallbacks(configCallbacks); super.onCleared()
     }
-
     private companion object {
         const val PREFS = "iris_prefs"
         private const val KEY_THEME = "theme"
@@ -1101,7 +1132,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_SPLASH_ENABLED = "splash_enabled"
         const val KEY_SPLASH_STYLE = "splash_style"
         const val KEY_NEW_SETTINGS = "use_new_settings"
-        
         const val KEY_ONLINE_MODE = "online_mode_enabled"
     }
 }
