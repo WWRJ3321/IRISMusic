@@ -124,7 +124,7 @@ fun MainScreen(
     onToggleLike: (Long) -> Unit,
     onCyclePlayMode: () -> Unit,
     onToggleSettings: (Boolean) -> Unit,
-    modifier: Modifier = Modifier // <-- 新增 modifier
+    modifier: Modifier = Modifier
 ) {
     val bgPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -178,7 +178,7 @@ fun MainScreen(
     var showCountLabel by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { delay(4000); showCountLabel = false }
 
-    Box(modifier.fillMaxSize().background(colors.background)) { // <-- 使用 modifier
+    Box(modifier.fillMaxSize().background(colors.background)) {
         AuroraBackground(
             state.currentSong?.filePath,
             isDark = colors.isDark,
@@ -445,7 +445,12 @@ private fun LibraryPage(
                 item {
                     Crossfade(targetState = state.recommendationsVersion to state.recommendations, animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut), label = "recommendationFade") { (_, recs) ->
                         if (recs.isNotEmpty()) {
-                            RecommendationSection(recommendations = recs, colors = colors, showArtist = state.showRowArtist, onSelect = onPlaySong)
+                            // === 替换为新的轮播图 ===
+                            MaterialCarouselView(
+                                recommendations = recs,
+                                colors = colors,
+                                onSelect = onPlaySong
+                            )
                         } else { Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) { Text("推荐中…", color = colors.subText, fontSize = 12.sp) } }
                     }
                 }
