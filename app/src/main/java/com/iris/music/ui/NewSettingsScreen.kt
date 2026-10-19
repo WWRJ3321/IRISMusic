@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.iris.music.data.DataTransfer
 import com.iris.music.playback.FloatingLyric
 import com.iris.music.player.PlayerUiState
@@ -141,7 +142,7 @@ internal fun NewSettingsPanel(
                 SheetDragHandle(sheetDrag, onDismiss, colors.card)
                 Spacer(Modifier.height(14.dp))
                 // 顶部占位，给标题腾出空间
-                Box(Modifier.fillMaxWidth().height(44.dp))
+                Box(Modifier.fillMaxWidth().height(88.dp))
                 Spacer(Modifier.height(12.dp))
 
                 // ==================== 外观 ====================
@@ -334,39 +335,33 @@ internal fun NewSettingsPanel(
                     SettingSwitchRow("逐字流光", checked = state.karaokeLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
                         viewModel.setKaraokeLyric(!state.karaokeLyric)
                     }
-                    SettingSwitchRow("歌词颜色", checked = state.lyricUseCustomColor, surfaceStyle = state.surfaceStyle, showDivider = !state.lyricUseCustomColor, colors = colors) {
-                        viewModel.setLyricUseCustomColor(!state.lyricUseCustomColor)
-                    }
+                    
+                    // 歌词颜色改成滑动展开选项
+                    val themeOptions = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
+                    InlineSwitchOptionRow(
+                        title = "歌词颜色",
+                        checked = state.lyricUseCustomColor,
+                        options = themeOptions.map { it.label },
+                        selectedIndex = themeOptions.indexOf(state.lyricTheme),
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = !(state.lyricUseCustomColor && state.lyricTheme == IrisTheme.CUSTOM),
+                        colors = colors,
+                        onToggle = { viewModel.setLyricUseCustomColor(it) },
+                        onSelect = { index -> viewModel.setLyricTheme(themeOptions[index]) }
+                    )
 
                     AnimatedVisibility(
-                        visible = state.lyricUseCustomColor,
+                        visible = state.lyricUseCustomColor && state.lyricTheme == IrisTheme.CUSTOM,
                         enter = expandVertically(tween(300, easing = FastOutSlowInEasing)) + fadeIn(tween(200)),
                         exit = shrinkVertically(tween(300, easing = FastOutSlowInEasing)) + fadeOut(tween(200))
                     ) {
-                        Column {
-                            InlineOptionRow(
-                                title = "歌词主题",
-                                options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
-                                selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.lyricTheme),
-                                surfaceStyle = state.surfaceStyle,
-                                colors = colors
-                            ) { index ->
-                                viewModel.setLyricTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
-                            }
-                            AnimatedVisibility(
-                                visible = state.lyricTheme == IrisTheme.CUSTOM,
-                                enter = expandVertically(tween(300, easing = FastOutSlowInEasing)) + fadeIn(tween(200)),
-                                exit = shrinkVertically(tween(300, easing = FastOutSlowInEasing)) + fadeOut(tween(200))
-                            ) {
-                                InlineColorRow(
-                                    title = "自定义歌词色",
-                                    primaryArgb = state.lyricCustomPrimary,
-                                    secondaryArgb = state.lyricCustomSecondary,
-                                    surfaceStyle = state.surfaceStyle,
-                                    colors = colors
-                                ) { p, s -> viewModel.setLyricCustomColors(p, s) }
-                            }
-                        }
+                        InlineColorRow(
+                            title = "自定义歌词色",
+                            primaryArgb = state.lyricCustomPrimary,
+                            secondaryArgb = state.lyricCustomSecondary,
+                            surfaceStyle = state.surfaceStyle,
+                            colors = colors
+                        ) { p, s -> viewModel.setLyricCustomColors(p, s) }
                     }
 
                     InlineOptionRow(
@@ -620,10 +615,23 @@ internal fun NewSettingsPanel(
             Spacer(Modifier.height(18.dp))
         }
 
-        // ==================== 顶部悬浮标题层 ====================
-        // 不在 verticalScroll 内部，固定在顶部，随滚动状态平滑移向左上角
+        // ==================== 顶部模糊遮罩与标题层 ====================
+        // 遮罩层：覆盖状态栏到“外观”标题上方的区域
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(100.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(panelBg, panelBg.copy(alpha = 0.95f), panelBg.copy(alpha = 0.7f), Color.Transparent)
+                    )
+                )
+                .zIndex(1f)
+        )
+
         val targetX = if (isScrolled) 20.dp else (maxW / 2f - 32.dp)
-        val targetY = if (isScrolled) 20.dp else 64.dp
+        // 当向上滑动时，文字停留在模糊区域的偏下方边缘（贴近遮罩边缘）
+        val targetY = if (isScrolled) 52.dp else 64.dp
         val targetSize = if (isScrolled) 18f else 24f
 
         val animatedX by animateDpAsState(targetX, spring(dampingRatio = 0.8f, stiffness = 400f))
@@ -638,6 +646,7 @@ internal fun NewSettingsPanel(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .offset(x = animatedX, y = animatedY)
+                .zIndex(2f) // 放在遮罩层上面
         )
     }
 }
@@ -828,7 +837,7 @@ private fun InlineOptionRow(
                         } else {
                             if (isLiquid) colors.subText.copy(alpha = 0.08f) else Color.White
                         }
-                        // 平面按钮逻辑：去掉了 shadow 和 border
+                        // 平面按钮逻辑
                         val btnModifier = if (isLiquid) {
                             Modifier.irisSurface(GlassLevel.CHIP, colors, RoundedCornerShape(10.dp), solid = btnBg)
                         } else {
@@ -944,7 +953,6 @@ private fun InlineSwitchOptionRow(
                             } else {
                                 if (isLiquid) colors.subText.copy(alpha = 0.08f) else Color.White
                             }
-                            // 平面按钮逻辑：去掉了 shadow 和 border
                             val btnModifier = if (isLiquid) {
                                 Modifier.irisSurface(GlassLevel.CHIP, colors, RoundedCornerShape(10.dp), solid = btnBg)
                             } else {
@@ -1334,7 +1342,10 @@ private fun LiquidSwitch(
     val thumbD = 27.dp
     val travel = trackW - thumbD - 4.dp
     val thumbOffset = 2.dp + travel * progress
-    val trackColor = lerp(colors.subText.copy(alpha = 0.3f), colors.primary, progress)
+    
+    // 开启后变为 iOS 绿色
+    val iosGreen = Color(0xFF34C759)
+    val trackColor = lerp(colors.subText.copy(alpha = 0.3f), iosGreen, progress)
     Box(
         Modifier
             .size(trackW, trackH)
@@ -1428,7 +1439,6 @@ private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyl
         if (enabled && !FloatingLyric.hasPermission(ctx)) FloatingLyric.requestPermission(ctx)
     }
 
-    // === 增加平滑展开动画 ===
     AnimatedVisibility(
         visible = enabled,
         enter = expandVertically(tween(300, easing = FastOutSlowInEasing)) + fadeIn(tween(200)),
