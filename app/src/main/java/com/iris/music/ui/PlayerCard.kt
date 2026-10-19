@@ -35,13 +35,16 @@ import androidx.compose.foundation.border
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
@@ -56,6 +59,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.request.ImageRequest
 import com.iris.music.data.LyricLine
 import com.iris.music.data.LyricParser
 import com.iris.music.data.RepeatMode
@@ -79,6 +85,10 @@ fun PlayerCard(
     shuffle: Boolean,
     repeatMode: RepeatMode,
     artworkPath: String?,
+    /** 网络音乐封面 URI（仅在线音乐）。非空时优先用它，忽略 artworkPath（不再读本地内嵌封面） */
+    artworkUri: android.net.Uri? = null,
+    /** 默认封面（在线封面加载失败或超过 3 秒超时时显示的兜底图）。由设置页「设置默认封面图」提供 */
+    defaultCoverUri: android.net.Uri? = null,
     progress: Float,
     isPlaying: Boolean,
     onToggle: () -> Unit,
@@ -89,6 +99,8 @@ fun PlayerCard(
     onToggleLike: () -> Unit = {},
     liked: Boolean = false,
     onClickArtwork: () -> Unit = {},
+    /** 点击评论按钮的回调（打开当前歌曲的评论弹层） */
+    onOpenComments: () -> Unit = {},
     colors: IrisColors,
     modifier: Modifier = Modifier,
     // 睡眠定时器（弹层在根层级，这里只负责按钮与倒计时环）
@@ -179,6 +191,8 @@ fun PlayerCard(
             ) {
                 PlayerCoverArt(
                     artworkPath = artworkPath,
+                    artworkUri = artworkUri,
+                    defaultCoverUri = defaultCoverUri,
                     positionMs = positionMs,
                     isDark = colors.isDark,
                     vizAlpha = vizT.value,
@@ -210,6 +224,7 @@ fun PlayerCard(
                     onCyclePlayMode = onCyclePlayMode,
                     onToggleLike = onToggleLike,
                     liked = liked,
+                    onOpenComments = onOpenComments,
                     sleepTimerMs = sleepTimerMs,
                     sleepTimerEndMs = sleepTimerEndMs,
                     onOpenSleepTimer = onOpenSleepTimer,
@@ -236,6 +251,8 @@ fun PlayerCard(
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 PlayerCoverArt(
                     artworkPath = artworkPath,
+                    artworkUri = artworkUri,
+                    defaultCoverUri = defaultCoverUri,
                     positionMs = positionMs,
                     isDark = colors.isDark,
                     vizAlpha = vizT.value,
@@ -269,6 +286,7 @@ fun PlayerCard(
                     onCyclePlayMode = onCyclePlayMode,
                     onToggleLike = onToggleLike,
                     liked = liked,
+                    onOpenComments = onOpenComments,
                     sleepTimerMs = sleepTimerMs,
                     sleepTimerEndMs = sleepTimerEndMs,
                     onOpenSleepTimer = onOpenSleepTimer,
@@ -298,10 +316,18 @@ fun PlayerCard(
 /**
  * 封面块（点击开歌词、频谱压暗层、封面歌词），从 PlayerCard 抽出以便横屏时
  * 单独承担翻页/堆叠而控制区固定。尺寸由外部 modifier 决定（竖屏按宽、横屏按高）。
+ *
+ * 封面来源优先级：
+ * 1. [artworkUri] 非空（在线音乐）→ Coil 加载网络图，3 秒超时 + 失败时用 [defaultCoverUri] 兜底
+ * 2. 否则 → 原版 [AlbumArt]，从本地音频文件读内嵌封面
  */
 @Composable
 internal fun PlayerCoverArt(
     artworkPath: String?,
+    /** 在线音乐封面；非空时优先它，忽略 artworkPath */
+    artworkUri: android.net.Uri? = null,
+    /** 网络封面加载失败/超时的兜底图（来自设置页「设置默认封面图」） */
+    defaultCoverUri: android.net.Uri? = null,
     positionMs: Long,
     isDark: Boolean,
     vizAlpha: Float,
@@ -323,7 +349,11 @@ internal fun PlayerCoverArt(
             ))
             .clickable { Haptics.tap(); onClickArtwork() }
     ) {
-        AlbumArt(filePath = artworkPath)
+        if (artworkUri != null) {
+            NetworkCoverArt(uri = artworkUri, fallbackUri = defaultCoverUri)
+        } else {
+            AlbumArt(filePath = artworkPath)
+        }
         // 压暗层：固定盖满整卡，让频谱清晰可辨
         if (vizAlpha > 0.01f) {
             Box(
@@ -343,6 +373,50 @@ internal fun PlayerCoverArt(
                     .padding(start = 14.dp, bottom = 14.dp)
             )
         }
+    }
+}
+
+/**
+ * 网络封面：Coil AsyncImage + 3 秒超时 + 失败兜底。
+ *
+ * 3 秒超时的实现方式：给 ImageRequest 设 httpRequestTimeoutMillis(3000)，
+ * Coil 在超时后回调 State.Error，我们翻到兜底图。不用自己写计时器。
+ *
+ * 兜底策略：
+ * - 加载失败/超时 → 若有 defaultCoverUri，切到它（一次成功即不再重试）
+ * - 没有 defaultCoverUri → 保持占位色块（外层 Box 的 HSV 底色）
+ *
+ * loadFailed 用 remember(uri) 绑定到 uri，切歌自动重置——每首新歌重新给 3 秒机会。
+ */
+@Composable
+private fun NetworkCoverArt(
+    uri: android.net.Uri,
+    fallbackUri: android.net.Uri?
+) {
+    val context = LocalContext.current
+    var loadFailed by remember(uri) { mutableStateOf(false) }
+
+    if (loadFailed && fallbackUri != null) {
+        // 兜底图：只是本地/已下载 URI，通常秒开，不需要 3s 超时
+        AsyncImage(
+            model = fallbackUri,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+    } else {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(uri)
+                .httpRequestTimeoutMillis(3000)
+                .build(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            onState = { state ->
+                if (state is AsyncImagePainter.State.Error) loadFailed = true
+            },
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 
@@ -367,6 +441,7 @@ private fun PlayerControls(
     onCyclePlayMode: () -> Unit,
     onToggleLike: () -> Unit,
     liked: Boolean,
+    onOpenComments: () -> Unit,
     sleepTimerMs: Long,
     sleepTimerEndMs: Long,
     onOpenSleepTimer: () -> Unit,
@@ -536,12 +611,14 @@ private fun PlayerControls(
 
         Spacer(Modifier.height(gapBeforeMini))
 
-        // 副控制行：随机 / 循环 / 点赞 / 睡眠 / 均衡器 + 音频格式徽章
+        // 副控制行：随机 / 循环 / 点赞 / 评论 / 睡眠 / 均衡器 + 音频格式徽章
+        // 加评论按钮后由 4 枚变 5 枚，重新按可用宽度反算间距（原版 5 = 4 按钮 + 1 badge 估算位，
+        // 现改 6 = 5 按钮 + 1 badge 估算位，宁可间距略挤也不让徽章换行）
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val glyph = with(LocalDensity.current) { 11.sp.toDp() } * 0.72f
             val badgeReserve =
                 if (audioFormat.isEmpty()) 0.dp else glyph * audioFormat.length + 20.dp
-            val gap = ((maxWidth - MINI_BTN_SIZE * 5 - badgeReserve) / 5)
+            val gap = ((maxWidth - MINI_BTN_SIZE * 6 - badgeReserve) / 6)
                 .coerceIn(3.dp, 12.dp)
 
             Row(
@@ -558,6 +635,10 @@ private fun PlayerControls(
                     }
                     MiniControlButton(liked, onToggleLike, btnColor, onCard) {
                         Icon(if (liked) Icons.Favorite else Icons.FavoriteBorder, null, Modifier.size(20.dp), it)
+                    }
+                    // 评论按钮：无"激活"态（纯入口），active 恒为 false
+                    MiniControlButton(false, onOpenComments, btnColor, onCard) {
+                        CommentIcon(it)
                     }
                     SleepTimerButton(
                         active = sleepTimerMs > 0,
@@ -594,6 +675,40 @@ private fun PlayerControls(
                 }
             }
         }
+    }
+}
+
+/**
+ * 评论图标：手绘圆角气泡 + 三圆点，与 [MiniControlButton] 里其他手绘图标同一线宽。
+ * 尺寸 20dp 与其他副控制图标一致，tint 由 [MiniControlButton] 传入。
+ */
+@Composable
+private fun CommentIcon(tint: Color) {
+    Canvas(Modifier.size(20.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * 0.11f
+        // 气泡主体：圆角矩形
+        drawRoundRect(
+            color = tint,
+            topLeft = Offset(w * 0.08f, h * 0.12f),
+            size = Size(w * 0.84f, h * 0.58f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.16f, w * 0.16f),
+            style = Stroke(width = stroke)
+        )
+        // 小尾巴：左下角向下伸出的尖角
+        val tail = Path().apply {
+            moveTo(w * 0.28f, h * 0.68f)
+            lineTo(w * 0.30f, h * 0.88f)
+            lineTo(w * 0.52f, h * 0.68f)
+        }
+        drawPath(tail, color = tint, style = Stroke(width = stroke, join = StrokeJoin.Round, cap = StrokeCap.Round))
+        // 气泡中心三圆点
+        val dotR = w * 0.045f
+        val cy = h * 0.41f
+        drawCircle(tint, dotR, Offset(w * 0.34f, cy))
+        drawCircle(tint, dotR, Offset(w * 0.50f, cy))
+        drawCircle(tint, dotR, Offset(w * 0.66f, cy))
     }
 }
 
@@ -1257,6 +1372,7 @@ internal fun LandscapeDeckPlayer(
     onCyclePlayMode: () -> Unit,
     onToggleLike: () -> Unit,
     liked: Boolean,
+    onOpenComments: () -> Unit = {},
     colors: IrisColors,
     sleepTimerMs: Long,
     sleepTimerEndMs: Long,
@@ -1362,6 +1478,7 @@ internal fun LandscapeDeckPlayer(
                 onCyclePlayMode = onCyclePlayMode,
                 onToggleLike = onToggleLike,
                 liked = liked,
+                onOpenComments = onOpenComments,
                 sleepTimerMs = sleepTimerMs,
                 sleepTimerEndMs = sleepTimerEndMs,
                 onOpenSleepTimer = onOpenSleepTimer,
