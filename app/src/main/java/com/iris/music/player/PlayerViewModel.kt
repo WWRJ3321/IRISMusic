@@ -135,7 +135,7 @@ data class PlayerUiState(
     val splashStyle: Int = 0,
     val useNewSettingsStyle: Boolean = false,
     
-    // ===== 新增：网络音乐状态 =====
+    // ===== 网络音乐状态 =====
     val isOnlineMode: Boolean = false,
     val onlineSearchResults: List<Song> = emptyList(),
     val onlineSearchLoading: Boolean = false,
@@ -405,6 +405,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun playOnlineSong(song: Song) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // 1. 获取播放链接
                 val url = "$API_BASE_URL/song/url?id=${song.id}"
                 val response = httpClient.newCall(Request.Builder().url(url).build()).execute()
                 val jsonString = response.body?.string() ?: return@launch
@@ -413,23 +414,57 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 val audioUrl = dataArray?.optJSONObject(0)?.optString("url")
                 
                 if (!audioUrl.isNullOrEmpty()) {
+                    // 2. 静默获取歌词并缓存到本地
+                    var finalFilePath = song.filePath
+                    try {
+                        val lyricUrl = "$API_BASE_URL/lyric?id=${song.id}"
+                        val lyricRes = httpClient.newCall(Request.Builder().url(lyricUrl).build()).execute()
+                        val lyricJson = JSONObject(lyricRes.body?.string() ?: "")
+                        val lrcObj = lyricJson.optJSONObject("lrc")
+                        val lyricText = lrcObj?.optString("lyric")
+                        
+                        if (!lyricText.isNullOrEmpty()) {
+                            val cacheDir = File(getApplication<Application>().cacheDir, "online_lyrics")
+                            if (!cacheDir.exists()) cacheDir.mkdirs()
+                            val lyricFile = File(cacheDir, "online_${song.id}.lrc")
+                            lyricFile.writeText(lyricText)
+                            
+                            // 把歌词的绝对路径替换给 filePath
+                            finalFilePath = lyricFile.absolutePath
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace() // 歌词下载失败不影响播放
+                    }
+
+                    // 3. 复制一个带有本地歌词路径的 Song
+                    val playSong = song.copy(filePath = finalFilePath)
+
                     withContext(Dispatchers.Main) {
+                        // 4. 维护在线播放历史列表
                         val currentQueue = _state.value.queue.toMutableList()
-                        val existIndex = currentQueue.indexOfFirst { it.id == song.id }
+                        val existIndex = currentQueue.indexOfFirst { it.id == playSong.id }
                         val playIndex: Int
                         if (existIndex >= 0) {
+                            currentQueue[existIndex] = playSong // 更新路径
                             playIndex = existIndex
                         } else {
-                            currentQueue.add(0, song)
+                            currentQueue.add(0, playSong)
                             playIndex = 0
                         }
                         _state.value = _state.value.copy(queue = currentQueue)
                         
+                        // 5. 播放 (修复了 setUri 的类型报错)
                         val mediaItem = MediaItem.Builder()
-                            .setMediaId(song.id.toString())
-                            .setUri(audioUrl)
+                            .setMediaId(playSong.id.toString())
+                            .setUri(android.net.Uri.parse(audioUrl)) // 类型强转
                             .setMediaMetadata(
-                                MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).build()
+                                MediaMetadata.Builder()
+                                    .setTitle(playSong.title)
+                                    .setArtist(playSong.artist)
+                                    .setExtras(android.os.Bundle().apply {
+                                        putString("file_path", playSong.filePath)
+                                    })
+                                    .build()
                             ).build()
                         
                         controller?.setMediaItem(mediaItem)
@@ -592,7 +627,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun reloadLibrary() {
-        if (_state.value.refreshing) return
+        if (_state.value.refreshing || _state.value.isOnlineMode) return
         viewModelScope.launch {
             _state.value = _state.value.copy(refreshing = true)
             val songs = MusicRepository.rescanAndReload(getApplication(), _state.value.scanRoot)
@@ -616,7 +651,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun resolveScanRoot(uri: android.net.Uri): String? = ScanPath.resolve(getApplication(), uri)
 
     fun refreshRecommendations() {
-        if (_state.value.refreshing) return
+        if (_state.value.refreshing || _state.value.isOnlineMode) return
         _state.value = _state.value.copy(refreshing = true)
         val pool = recommendationPool()
         val exploration = _state.value.exploration
@@ -854,7 +889,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun persistPlayback(throttle: Boolean) {
         val song = _state.value.currentSong ?: return
-        if (_state.value.isOnlineMode) return // 在线模式不记忆本地播放位置
+        if (_state.value.isOnlineMode) return 
         val now = System.currentTimeMillis()
         if (throttle && now - lastPersistMs < 5_000L) return
         lastPersistMs = now
@@ -882,7 +917,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun updateRecommendations() {
-        if (_state.value.isOnlineMode) return // 在线模式不更新本地推荐
+        if (_state.value.isOnlineMode) return
         val pool = recommendationPool()
         if (pool.isEmpty()) return
         val exploration = _state.value.exploration
@@ -1064,7 +1099,6 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_SPLASH_STYLE = "splash_style"
         const val KEY_NEW_SETTINGS = "use_new_settings"
         
-        // ===== 新增：在线模式存储键 =====
         const val KEY_ONLINE_MODE = "online_mode_enabled"
     }
 }
