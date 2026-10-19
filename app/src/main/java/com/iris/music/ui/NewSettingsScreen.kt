@@ -80,8 +80,22 @@ internal fun NewSettingsPanel(
 
     // === 手风琴展开状态 ===
     var expandedKey by remember { mutableStateOf<String?>(null) }
-    // === 沉浸式背景模糊状态 ===
-    var isScrubbingBlur by remember { mutableStateOf(false) }
+
+    // === 滚动边界震动反馈 ===
+    var lastEdgeState by remember { mutableStateOf(0) } // 0 none, 1 top, 2 bottom
+    LaunchedEffect(scrollState.value, scrollState.maxValue) {
+        if (scrollState.maxValue > 0) {
+            if (scrollState.value == 0 && lastEdgeState != 1) {
+                Haptics.tap()
+                lastEdgeState = 1
+            } else if (scrollState.value >= scrollState.maxValue && lastEdgeState != 2) {
+                Haptics.tap()
+                lastEdgeState = 2
+            } else if (scrollState.value > 0 && scrollState.value < scrollState.maxValue) {
+                lastEdgeState = 0
+            }
+        }
+    }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -219,9 +233,7 @@ internal fun NewSettingsPanel(
                     surfaceStyle = state.surfaceStyle,
                     colors = colors,
                     isExpanded = expandedKey == "背景模糊",
-                    onToggleExpand = { expandedKey = if (expandedKey == "背景模糊") null else "背景模糊" },
-                    onScrubStart = { isScrubbingBlur = true },
-                    onScrubEnd = { isScrubbingBlur = false }
+                    onToggleExpand = { expandedKey = if (expandedKey == "背景模糊") null else "背景模糊" }
                 ) { viewModel.setBgBlur(it) }
 
                 InlineSliderRow(
@@ -615,12 +627,11 @@ internal fun NewSettingsPanel(
                 ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
             }
 
-            // 底部安全留白，确保所有内容可以滑动到虚化层上方进行点击
-            Spacer(Modifier.height(120.dp)) 
+            // 底部留白极小，让内容贴底
+            Spacer(Modifier.height(30.dp)) 
         }
 
-        // ==================== 顶部与底部渐变遮罩 ====================
-        // 顶部遮罩
+        // ==================== 顶部渐变遮罩 ====================
         Box(
             Modifier
                 .fillMaxWidth()
@@ -628,20 +639,6 @@ internal fun NewSettingsPanel(
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(panelBg, panelBg.copy(alpha = 0.95f), panelBg.copy(alpha = 0.7f), Color.Transparent)
-                    )
-                )
-                .zIndex(1f)
-        )
-        
-        // 底部边缘虚化遮罩 (延伸至屏幕最底部，解决截断问题)
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(140.dp)
-                .align(Alignment.BottomCenter)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, panelBg.copy(alpha = 0.7f), panelBg.copy(alpha = 0.95f), panelBg)
                     )
                 )
                 .zIndex(1f)
@@ -666,33 +663,6 @@ internal fun NewSettingsPanel(
                 .offset(x = animatedX, y = animatedY)
                 .zIndex(2f)
         )
-
-        // ==================== 沉浸式背景模糊浮层 ====================
-        if (isScrubbingBlur) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(panelBg.copy(alpha = 0.95f))
-                    .zIndex(10f)
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}, // 拦截点击
-                contentAlignment = Alignment.Center
-            ) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("背景模糊", color = colors.text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(10.dp))
-                    Text("${state.bgBlur.toInt()}", color = colors.primary, fontSize = 48.sp, fontWeight = FontWeight.Black)
-                    Spacer(Modifier.height(30.dp))
-                    RoundSlider(
-                        value = state.bgBlur,
-                        valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
-                        colors = colors,
-                        onChange = { viewModel.setBgBlur(it) },
-                        onFinished = { isScrubbingBlur = false }, // 松开恢复
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -1074,8 +1044,6 @@ private fun InlineSliderRow(
     onToggleExpand: () -> Unit,
     showDivider: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
-    onScrubStart: (() -> Unit)? = null,
-    onScrubEnd: (() -> Unit)? = null,
     onValueChange: (Float) -> Unit
 ) {
     Column(
@@ -1109,9 +1077,7 @@ private fun InlineSliderRow(
                 onChange = onValueChange,
                 onFinished = { 
                     onValueChangeFinished?.invoke()
-                    onScrubEnd?.invoke()
                 },
-                onStart = { onScrubStart?.invoke() },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
@@ -1126,7 +1092,6 @@ private fun RoundSlider(
     colors: IrisColors,
     onChange: (Float) -> Unit,
     onFinished: () -> Unit,
-    onStart: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
@@ -1139,7 +1104,6 @@ private fun RoundSlider(
             .height(32.dp)
             .pointerInput(valueRange) {
                 detectDragGestures(
-                    onDragStart = { onStart?.invoke() },
                     onDragEnd = { onFinished() },
                     onDragCancel = { onFinished() }
                 ) { change, _ ->
