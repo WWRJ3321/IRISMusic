@@ -445,10 +445,11 @@ private fun LibraryPage(
                 item {
                     Crossfade(targetState = state.recommendationsVersion to state.recommendations, animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut), label = "recommendationFade") { (_, recs) ->
                         if (recs.isNotEmpty()) {
-                            // === 替换为新的轮播图 ===
-                            MaterialCarouselView(
-                                recommendations = recs,
-                                colors = colors,
+                            // === 恢复为你原本的高级横滑组件 ===
+                            RecommendationSection(
+                                recommendations = recs, 
+                                colors = colors, 
+                                showArtist = state.showRowArtist, 
                                 onSelect = onPlaySong
                             )
                         } else { Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) { Text("推荐中…", color = colors.subText, fontSize = 12.sp) } }
