@@ -76,6 +76,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 
 import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
@@ -112,7 +114,9 @@ internal fun RecommendationSection(
     colors: IrisColors,
     onSelect: (Song) -> Unit,
     /** 卡片是否显示歌手（跟随设置「歌单行显示歌手」） */
-    showArtist: Boolean = true
+    showArtist: Boolean = true,
+    /** === 新增：网络封面加载失败/超时兜底图（来自设置页「设置默认封面图」）=== */
+    defaultCoverUri: android.net.Uri? = null
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
     val scrollState = rememberScrollState()
@@ -155,6 +159,7 @@ internal fun RecommendationSection(
                         song = song,
                         colors = colors,
                         showArtist = showArtist,
+                        defaultCoverUri = defaultCoverUri,
                         onClick = { onSelect(song) }
                     )
                 }
@@ -170,6 +175,8 @@ private fun RecommendCard(
     song: Song,
     colors: IrisColors,
     showArtist: Boolean = true,
+    /** === 新增：网络封面兜底图 === */
+    defaultCoverUri: android.net.Uri? = null,
     onClick: () -> Unit
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
@@ -181,14 +188,26 @@ private fun RecommendCard(
             .clickable { Haptics.tap(); onClick() }
             .padding(10.dp)
     ) {
-        // 封面：SongArtwork（异步加载 + HSV 占位 + 音符图标）
-        SongArtwork(
-            filePath = song.filePath,
-            seedId = song.id,
-            modifier = Modifier.fillMaxWidth().height(100.dp),
-            isDark = colors.isDark,
-            noteIcon = true
-        )
+        // 封面：
+        // - 有网络封面 URI（在线音乐）→ NetworkRecommendCover（3s 超时 + 兜底）
+        // - 否则 → SongArtwork 原版（异步加载 + HSV 占位 + 音符图标）
+        if (song.albumArtUri != null) {
+            NetworkRecommendCover(
+                uri = song.albumArtUri,
+                fallbackUri = defaultCoverUri,
+                seedId = song.id,
+                isDark = colors.isDark,
+                modifier = Modifier.fillMaxWidth().height(100.dp)
+            )
+        } else {
+            SongArtwork(
+                filePath = song.filePath,
+                seedId = song.id,
+                modifier = Modifier.fillMaxWidth().height(100.dp),
+                isDark = colors.isDark,
+                noteIcon = true
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             song.title,
@@ -210,6 +229,83 @@ private fun RecommendCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+    }
+}
+
+/**
+ * === 新增：网络推荐封面（3 秒超时 + 兜底 + 占位） ===
+ *
+ * 三阶段渲染，避免"网络图加载失败后什么都不显示"：
+ * - phase 0：加载网络图（最多等 3 秒）
+ * - phase 1：网络图失败/超时，加载兜底图（若有）
+ * - phase 2：兜底图也失败，或用户没设置兜底图 → 显示 HSV 占位色块 + 音符图标
+ *
+ * 超时用协程实现，不依赖 Coil 2.6 的 httpRequestTimeoutMillis 扩展（该 API 需要额外 import，
+ * 且 onState 参数在 Coil 2.x 里不存在）。
+ * phase 用 remember(uri) 绑定到 uri，切歌/换推荐自动重置——每张新图重新给 3 秒机会。
+ */
+@Composable
+private fun NetworkRecommendCover(
+    uri: android.net.Uri,
+    fallbackUri: android.net.Uri?,
+    seedId: Long,
+    isDark: Boolean,
+    modifier: Modifier = Modifier
+) {
+    // phase：0 = 网络图，1 = 兜底图，2 = 纯占位
+    var phase by remember(uri) { mutableStateOf(0) }
+
+    LaunchedEffect(uri) {
+        delay(3000)
+        if (phase == 0) {
+            phase = if (fallbackUri != null) 1 else 2
+        }
+    }
+
+    // 占位色（同 SongArtwork 的 HSV 底色）：即使 phase=0 网络图还没到，
+    // 底色也先铺上，避免加载中出现纯黑块。
+    val hue = (seedId % 360).toFloat()
+    val placeholderColor = Color.hsv(hue, 0.35f, if (isDark) 0.18f else 0.92f)
+
+    Box(
+        modifier
+            .clip(IrisShape.chip)
+            .background(placeholderColor),
+        contentAlignment = Alignment.Center
+    ) {
+        when (phase) {
+            0 -> AsyncImage(
+                model = uri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                onSuccess = { /* 保持在 phase 0，不切占位 */ },
+                onError = { phase = if (fallbackUri != null) 1 else 2 },
+                modifier = Modifier.fillMaxSize()
+            )
+            1 -> AsyncImage(
+                model = fallbackUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                onError = { phase = 2 },
+                modifier = Modifier.fillMaxSize()
+            )
+            else -> Canvas(Modifier.size(28.dp)) {
+                // 占位音符（同 SongArtwork 的 noteIcon 风格）
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.6f),
+                    radius = size.minDimension * 0.28f,
+                    center = Offset(size.width * 0.42f, size.height * 0.42f),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = size.minDimension * 0.1f)
+                )
+                drawLine(
+                    color = Color.White.copy(alpha = 0.6f),
+                    start = Offset(size.width * 0.62f, size.height * 0.62f),
+                    end = Offset(size.width * 0.88f, size.height * 0.88f),
+                    strokeWidth = size.minDimension * 0.1f,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+            }
         }
     }
 }
