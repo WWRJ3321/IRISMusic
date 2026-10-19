@@ -2,15 +2,19 @@ package com.iris.music.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -19,7 +23,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.iris.music.data.Song
 import com.iris.music.ui.theme.IrisColors
-import androidx.compose.ui.draw.clipToBounds
+import kotlin.math.roundToInt
 
 @Composable
 fun MaterialCarouselView(
@@ -27,63 +31,74 @@ fun MaterialCarouselView(
     colors: IrisColors,
     onSelect: (Song) -> Unit
 ) {
-    val scrollState = rememberScrollState()
     val density = LocalDensity.current
+    val lazyListState = rememberLazyListState()
 
-    // SwiftUI 的基础数值换算
+    // 严格 1:1 的尺寸换算
     val baseWidthPx = with(density) { 180.dp.toPx() }
     val spacingPx = with(density) { 10.dp.toPx() }
-    val spaceWidthPx = with(density) { 130.dp.toPx() }
+    // 调整这个值可以控制后方卡片保留的宽度，原版是 130f，这里调成 85f 左右让后面多露出两张
+    val spaceWidthPx = with(density) { 85.dp.toPx() }
     val divisor = 190f
 
-    // 使用 Row 替代自定义 Layout，固定每个卡片的占位，避免引起滚动死循环
-    Row(
+    // 计算全局的滚动偏移量
+    val totalOffset = (lazyListState.firstVisibleItemIndex * (baseWidthPx + spacingPx) - lazyListState.firstVisibleItemScrollOffset).toFloat()
+
+    LazyRow(
+        state = lazyListState,
+        // 使用自带的吸附行为，完美实现“滑动一次只切一张”且有物理阻尼感
+        flingBehavior = rememberSnapFlingBehavior(lazyListState),
         modifier = Modifier
             .fillMaxWidth()
             .height(200.dp)
-            .horizontalScroll(scrollState)
-            .padding(horizontal = 15.dp), // 左右边距
-        horizontalArrangement = Arrangement.spacedBy(10.dp) // 卡片间距 10dp
+            .padding(vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = 15.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        recommendations.forEachIndexed { index, song ->
-            // 计算当前卡片的 minX（相对于屏幕左侧的位置）
-            val minX = index * (baseWidthPx + spacingPx) - scrollState.value
+        items(recommendations.size) { index ->
+            val song = recommendations[index]
+            
+            // 计算当前卡片相对于屏幕最左侧的物理位置
+            val minX = index * (baseWidthPx + spacingPx) - totalOffset
 
-            // 1. 计算压缩/拉伸后的宽度
+            // SwiftUI 挤压算法
             val reducingWidth = (minX / divisor) * spaceWidthPx
             val cappedWidth = minOf(reducingWidth, spaceWidthPx)
+            
             val frameWidth = baseWidthPx - (if (minX > 0) cappedWidth else -cappedWidth)
-            val finalWidth = maxOf(frameWidth, 1f) // 防止宽度为0崩溃
-
-            // 2. 计算自身偏移量
+            val safeWidth = maxOf(frameWidth, 1f)
+            
             val baseOffsetX = if (minX > 0) 0f else -cappedWidth
-
-            // 3. 计算前一张卡片带来的挤压影响（让后面的卡片向左补位）
+            
+            // 计算前驱影响，填补空隙
             var previousOffset = 0f
             if (index > 0) {
-                val prevMinX = (index - 1) * (baseWidthPx + spacingPx) - scrollState.value
+                val prevMinX = (index - 1) * (baseWidthPx + spacingPx) - totalOffset
                 val prevReducingWidth = (prevMinX / divisor) * spaceWidthPx
-                previousOffset = if (prevMinX < 0) 0f else prevReducingWidth
+                previousOffset = if (prevMinX < 0f) 0f else prevReducingWidth
             }
 
-            // 最终绘制的 X 偏移量
+            // 最终绘制位置
             val finalOffsetX = baseOffsetX - previousOffset
 
-            // 外层固定占位 180x200，防止滚动条抖动，并设置 zIndex 保证左侧盖住右侧
+            // 外层使用固定宽度占位，防止 LazyRow 在计算时发生抖动，并通过 zIndex 保证层级
             Box(
                 modifier = Modifier
                     .width(180.dp)
                     .height(200.dp)
                     .zIndex((recommendations.size - index).toFloat()),
-                contentAlignment = Alignment.TopStart // 必须靠左对齐，宽度缩小时才能留出右边的间距
+                contentAlignment = Alignment.CenterStart
             ) {
-                // 内层动态改变宽度、偏移和裁剪
+                // 内层执行真实的宽度缩放与偏移，同时裁剪圆角
                 Box(
                     modifier = Modifier
-                        .width(with(density) { finalWidth.toDp() })
+                        .width(with(density) { safeWidth.toDp() })
                         .height(200.dp)
-                        .offset(x = with(density) { finalOffsetX.toDp() })
-                        .clipToBounds() // 确保内容不会溢出这个被压缩的盒子
+                        // 【关键修复】：强制四舍五入取整像素，彻底解决边缘亚像素渲染产生的“闪线”Bug
+                        .graphicsLayer {
+                            translationX = finalOffsetX.roundToInt().toFloat()
+                        }
+                        .clipToBounds()
                         .clip(RoundedCornerShape(25.dp))
                         .background(colors.surface)
                         .clickable { onSelect(song) }
@@ -92,9 +107,11 @@ fun MaterialCarouselView(
                 }
             }
         }
-
-        // 尾部留白，让最后一张卡片也能滑到最左侧
-        Spacer(Modifier.width(50.dp))
+        
+        // 尾部留白，防止最后一张卡片被边缘卡住
+        item {
+            Spacer(Modifier.width(50.dp))
+        }
     }
 }
 
@@ -106,7 +123,7 @@ private fun CarouselCardInnerContent(song: Song, colors: IrisColors) {
             SongArtwork(
                 filePath = song.filePath,
                 seedId = song.id,
-                artworkSize = 200.dp, // 传大一点让裁切填满
+                artworkSize = 180.dp,
                 isDark = colors.isDark,
                 modifier = Modifier.fillMaxSize()
             )
