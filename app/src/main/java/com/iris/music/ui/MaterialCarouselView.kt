@@ -65,7 +65,7 @@ fun MaterialCarouselView(
             val cappedWidth = minOf(reducingWidth, spaceWidthPx)
             
             val frameWidth = baseWidthPx - (if (minX > 0) cappedWidth else -cappedWidth)
-            val safeWidth = maxOf(frameWidth, 0f).roundToInt() // 防止宽度变成负数
+            val safeWidth = maxOf(frameWidth, 1f).roundToInt() // 防止宽度变成负数或0导致崩溃
             
             assignedXs[i] = currentX
             
