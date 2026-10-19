@@ -9,7 +9,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.EaseInCubic
 import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -23,7 +22,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -33,20 +32,24 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -134,10 +137,12 @@ internal fun NewSettingsPanel(
                 color = colors.text,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 12.dp)
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
             )
             Spacer(Modifier.height(18.dp))
 
+            // ==================== 外观 ====================
             SettingsGroup("外观", colors) {
                 InlineOptionRow(
                     title = "明暗模式",
@@ -146,8 +151,23 @@ internal fun NewSettingsPanel(
                     colors = colors
                 ) { viewModel.setMode(IrisMode.entries[it]) }
 
+                SettingActionRow(
+    title = "背景图片",
+    trailingText = if (state.customBackgroundUri != null) "自定义" else "跟随封面",
+    showDivider = true,
+    colors = colors
+) { onPickBackground() }
+
+                if (state.customBackgroundUri != null) {
+                    SettingActionRow(
+                        title = "恢复封面背景",
+                        trailingText = "重置",
+                        colors = colors
+                    ) { viewModel.setCustomBackground(null) }
+                }
+
                 InlineOptionRow(
-                    title = "主题",
+                    title = "按钮颜色",
                     options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
                     selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
                     optionDots = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
@@ -159,7 +179,7 @@ internal fun NewSettingsPanel(
 
                 if (state.theme == IrisTheme.CUSTOM) {
                     InlineColorRow(
-                        title = "自定义主题色",
+                        title = "自定义按钮颜色",
                         primaryArgb = state.customPrimaryArgb,
                         secondaryArgb = state.customSecondaryArgb,
                         colors = colors
@@ -174,20 +194,21 @@ internal fun NewSettingsPanel(
                 ) { viewModel.setSurfaceStyle(IrisSurfaceStyle.entries[it]) }
 
                 if (state.surfaceStyle != IrisSurfaceStyle.SOLID) {
+                    val glassSpan = (GLASS_BLUR_MAX - GLASS_BLUR_MIN).takeIf { it > 0f } ?: 1f
                     InlineSliderRow(
                         title = "玻璃模糊",
-                        value = state.glassBlur,
-                        valueRange = GLASS_BLUR_MIN..GLASS_BLUR_MAX,
+                        value = ((state.glassBlur - GLASS_BLUR_MIN) / glassSpan * 100f).coerceIn(0f, 100f),
+                        valueRange = 0f..100f,
                         valueFormat = { "${it.toInt()}" },
                         colors = colors
-                    ) { viewModel.setGlassBlur(it) }
+                    ) { v -> viewModel.setGlassBlur(GLASS_BLUR_MIN + (v / 100f) * glassSpan) }
                 }
 
                 InlineSliderRow(
                     title = "背景模糊",
                     value = state.bgBlur,
                     valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
-                    valueFormat = { "${it.toInt()} dp" },
+                    valueFormat = { "${it.toInt()}" },
                     colors = colors
                 ) { viewModel.setBgBlur(it) }
 
@@ -195,17 +216,20 @@ internal fun NewSettingsPanel(
                     title = "界面圆角",
                     value = state.cornerBase,
                     valueRange = 0f..44f,
-                    valueFormat = { "${it.toInt()} dp" },
+                    valueFormat = { "${it.toInt()}" },
                     colors = colors
                 ) { viewModel.setCornerBase(it) }
 
+                var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
                 InlineSliderRow(
                     title = "字体大小",
-                    value = state.fontScale,
+                    value = pendingFontScale,
                     valueRange = 0.85f..1.30f,
                     valueFormat = { "${(it * 100).toInt()}%" },
-                    colors = colors
-                ) { viewModel.setFontScale(it) }
+                    colors = colors,
+                    onValueChange = { pendingFontScale = it },
+                    onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) }
+                )
 
                 InlineOptionRow(
                     title = "界面字体",
@@ -220,33 +244,14 @@ internal fun NewSettingsPanel(
                     selectedIndex = IrisLayout.entries.indexOf(state.layout),
                     colors = colors
                 ) { viewModel.setLayout(IrisLayout.entries[it]) }
-
-                SettingActionRow(
-                    title = "背景图片",
-                    trailingText = if (state.customBackgroundUri != null) "自定义" else "跟随封面",
-                    showDivider = state.customBackgroundUri != null,
-                    colors = colors
-                ) { onPickBackground() }
-
-                if (state.customBackgroundUri != null) {
-                    SettingActionRow(
-                        title = "恢复封面背景",
-                        trailingText = "重置",
-                        showDivider = false,
-                        colors = colors
-                    ) { viewModel.setCustomBackground(null) }
-                }
             }
 
+            // ==================== 列表 ====================
             if (!state.layout.isDeck) {
                 SettingsGroup("列表", colors) {
-                    InlineOptionRow(
-                        title = "行尺寸",
-                        options = listOf("紧凑", "标准", "宽松"),
-                        selectedIndex = state.rowSize,
-                        colors = colors
-                    ) { viewModel.setRowSize(it) }
-
+                    SettingSwitchRow("搜索框常驻", checked = state.searchPersistent, colors = colors) {
+                        viewModel.setSearchPersistent(!state.searchPersistent)
+                    }
                     SettingSwitchRow("行显示封面", checked = state.showRowCover, colors = colors) {
                         viewModel.setShowRowCover(!state.showRowCover)
                     }
@@ -256,19 +261,45 @@ internal fun NewSettingsPanel(
                     SettingSwitchRow("行显示所属歌单", checked = state.showRowPlaylist, colors = colors) {
                         viewModel.setShowRowPlaylist(!state.showRowPlaylist)
                     }
-                    SettingSwitchRow("搜索框常驻", checked = state.searchPersistent, colors = colors) {
-                        viewModel.setSearchPersistent(!state.searchPersistent)
-                    }
                     SettingSwitchRow(
                         "行显示点赞角标",
                         checked = state.showLikedBadge,
-                        showDivider = false,
                         colors = colors
                     ) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
+
+                    InlineOptionRow(
+                        title = "卡片距离",
+                        options = listOf("紧凑", "标准", "宽松"),
+                        selectedIndex = state.rowSize,
+                        colors = colors
+                    ) { viewModel.setRowSize(it) }
                 }
             }
 
-            SettingsGroup("播放与歌词", colors) {
+            // ==================== 播放 ====================
+            SettingsGroup("播放", colors) {
+                SettingSwitchRow("上栏静止时隐藏", checked = state.topBarAutoHide, colors = colors) {
+                    viewModel.setTopBarAutoHide(!state.topBarAutoHide)
+                }
+                SettingSwitchRow("无声略过", checked = state.silenceSkip, colors = colors) {
+                    viewModel.setSilenceSkip(!state.silenceSkip)
+                }
+                SettingSwitchRow("淡入淡出", checked = state.fadeEnabled, colors = colors) {
+                    viewModel.setFadeEnabled(!state.fadeEnabled)
+                }
+                if (state.fadeEnabled) {
+                    InlineSliderRow(
+                        title = "淡入淡出时长",
+                        value = state.fadeMs.toFloat(),
+                        valueRange = 500f..5000f,
+                        valueFormat = { String.format(java.util.Locale.US, "%.1f s", it / 1000f) },
+                        colors = colors
+                    ) { viewModel.setFadeMs(it.toLong()) }
+                }
+            }
+
+            // ==================== 歌词 ====================
+            SettingsGroup("歌词", colors) {
                 SettingSwitchRow("封面歌词", checked = state.coverLyric, colors = colors) {
                     viewModel.setCoverLyric(!state.coverLyric)
                 }
@@ -321,35 +352,14 @@ internal fun NewSettingsPanel(
                     valueFormat = { "${it.toInt()}" },
                     colors = colors
                 ) { viewModel.setLyricFontSize(it) }
-
-                SettingSwitchRow("淡入淡出", checked = state.fadeEnabled, colors = colors) {
-                    viewModel.setFadeEnabled(!state.fadeEnabled)
-                }
-                if (state.fadeEnabled) {
-                    InlineSliderRow(
-                        title = "淡入淡出时长",
-                        value = state.fadeMs.toFloat(),
-                        valueRange = 500f..5000f,
-                        valueFormat = { String.format(java.util.Locale.US, "%.1f s", it / 1000f) },
-                        colors = colors
-                    ) { viewModel.setFadeMs(it.toLong()) }
-                }
-
-                SettingSwitchRow("无声略过", checked = state.silenceSkip, colors = colors) {
-                    viewModel.setSilenceSkip(!state.silenceSkip)
-                }
-                SettingSwitchRow(
-                    "上栏静止时隐藏",
-                    checked = state.topBarAutoHide,
-                    showDivider = false,
-                    colors = colors
-                ) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
             }
 
+            // ==================== 悬浮歌词 ====================
             SettingsGroup("悬浮歌词", colors) {
                 FloatingLyricGroup(colors)
             }
 
+            // ==================== 动效与反馈 ====================
             SettingsGroup("动效与反馈", colors) {
                 SettingSwitchRow("触感反馈", checked = state.hapticsEnabled, colors = colors) {
                     viewModel.setHapticsEnabled(!state.hapticsEnabled)
@@ -387,6 +397,7 @@ internal fun NewSettingsPanel(
                 }
             }
 
+            // ==================== 推荐 ====================
             SettingsGroup("推荐", colors) {
                 InlineSliderRow(
                     title = "探索度",
@@ -404,6 +415,7 @@ internal fun NewSettingsPanel(
                 ) { viewModel.setShowRecommendations(!state.showRecommendations) }
             }
 
+            // ==================== 数据 ====================
             SettingsGroup("数据", colors) {
                 SettingActionRow(
                     title = "扫描文件夹",
@@ -419,13 +431,6 @@ internal fun NewSettingsPanel(
                         colors = colors
                     ) { viewModel.setScanRoot(null) }
                 }
-
-                SettingSwitchRow(
-                    "上栏显示排序",
-                    checked = state.showSortBar,
-                    showDivider = false,
-                    colors = colors
-                ) { viewModel.setShowSortBar(!state.showSortBar) }
 
                 SettingDivider(colors)
 
@@ -463,6 +468,12 @@ internal fun NewSettingsPanel(
                 }
                 SettingDivider(colors)
 
+                SettingSwitchRow(
+                    "上栏显示排序",
+                    checked = state.showSortBar,
+                    colors = colors
+                ) { viewModel.setShowSortBar(!state.showSortBar) }
+
                 SettingActionRow(
                     title = "导出数据",
                     trailingText = if (transferBusy) "请稍候" else null,
@@ -491,6 +502,7 @@ internal fun NewSettingsPanel(
                 Spacer(Modifier.height(12.dp))
             }
 
+            // ==================== 动画 ====================
             SettingsGroup("动画", colors) {
                 SettingSwitchRow("启动动画", checked = state.splashEnabled, colors = colors) {
                     viewModel.setSplashEnabled(!state.splashEnabled)
@@ -505,6 +517,7 @@ internal fun NewSettingsPanel(
                 }
             }
 
+            // ==================== 设置样式 ====================
             SettingsGroup("设置样式", colors) {
                 SettingSwitchRow(
                     "切换回经典设置面板",
@@ -539,6 +552,9 @@ internal fun NewSettingsPanel(
         Spacer(Modifier.height(18.dp))
     }
 }
+// =====================================================================
+// 分组卡片 & 基础行（统一行高 54dp，内容垂直居中，分割线左右内缩）
+// =====================================================================
 
 @Composable
 private fun SettingsGroup(
@@ -571,7 +587,7 @@ private fun SettingDivider(colors: IrisColors) {
     Box(
         Modifier
             .fillMaxWidth()
-            .padding(start = 16.dp)
+            .padding(horizontal = 16.dp)
             .height(0.5.dp)
             .background(colors.subText.copy(alpha = 0.12f))
     )
@@ -590,11 +606,12 @@ private fun SettingSwitchRow(
         Row(
             Modifier
                 .fillMaxWidth()
+                .heightIn(min = 54.dp)
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
                 ) { Haptics.tap(); onToggle() }
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
@@ -627,12 +644,13 @@ private fun SettingActionRow(
         Row(
             Modifier
                 .fillMaxWidth()
+                .heightIn(min = 54.dp)
                 .clickable(
                     enabled = enabled,
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
                 ) { Haptics.tap(); onClick() }
-                .padding(horizontal = 16.dp, vertical = 16.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -649,6 +667,10 @@ private fun SettingActionRow(
     }
 }
 
+// =====================================================================
+// 内联选项行：标题左滑出 → 选项左滑入；左右边缘虚化
+// =====================================================================
+
 @Composable
 private fun InlineOptionRow(
     title: String,
@@ -662,7 +684,22 @@ private fun InlineOptionRow(
     Box(
         Modifier
             .fillMaxWidth()
-            .height(54.dp)
+            .heightIn(min = 54.dp)
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val fade = 16.dp.toPx().coerceAtMost(size.width / 2f)
+                val f = (fade / size.width).coerceIn(0f, 0.5f)
+                drawRect(
+                    brush = Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        f to Color.Black,
+                        (1f - f) to Color.Black,
+                        1f to Color.Transparent
+                    ),
+                    blendMode = BlendMode.DstIn
+                )
+            }
             .padding(horizontal = 16.dp)
     ) {
         AnimatedContent(
@@ -685,7 +722,7 @@ private fun InlineOptionRow(
         ) { isExpanded ->
             if (isExpanded) {
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().height(54.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -734,6 +771,7 @@ private fun InlineOptionRow(
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .height(54.dp)
                         .clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() }
@@ -756,6 +794,117 @@ private fun InlineOptionRow(
     SettingDivider(colors)
 }
 
+// =====================================================================
+// 开关 + 内联选项：关 = 标题+开关；开 = 选项左滑入，右侧仍保留开关用于关闭
+// =====================================================================
+
+@Composable
+private fun InlineSwitchOptionRow(
+    title: String,
+    checked: Boolean,
+    options: List<String>,
+    selectedIndex: Int,
+    colors: IrisColors,
+    optionDots: List<Pair<Color, Color>>? = null,
+    onToggle: (Boolean) -> Unit,
+    onSelect: (Int) -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 54.dp)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.weight(1f).padding(end = 12.dp)) {
+            AnimatedContent(
+                targetState = checked,
+                transitionSpec = {
+                    if (targetState) {
+                        (fadeIn(tween(240, delayMillis = 40)) +
+                            slideInHorizontally(tween(360, delayMillis = 40, easing = EaseOutCubic)) { -it / 2 }) togetherWith
+                            (fadeOut(tween(150)) +
+                                slideOutHorizontally(tween(200, easing = EaseInCubic)) { -it / 3 })
+                    } else {
+                        (fadeIn(tween(260, delayMillis = 120)) +
+                            slideInHorizontally(tween(360, delayMillis = 120, easing = EaseOutCubic)) { -it / 2 }) togetherWith
+                            (fadeOut(tween(140)) +
+                                slideOutHorizontally(tween(200, easing = EaseInCubic)) { -it / 3 })
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = "switchOption"
+            ) { isOn ->
+                if (isOn) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        options.forEachIndexed { i, opt ->
+                            val sel = i == selectedIndex
+                            Row(
+                                Modifier
+                                    .weight(1f)
+                                    .height(36.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (sel) colors.primary.copy(alpha = 0.16f)
+                                        else colors.subText.copy(alpha = 0.08f)
+                                    )
+                                    .clickable(
+                                        indication = null,
+                                        interactionSource = remember { MutableInteractionSource() }
+                                    ) {
+                                        Haptics.tap()
+                                        onSelect(i)
+                                    }
+                                    .padding(horizontal = 4.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (optionDots != null) {
+                                    val (p, s) = optionDots[i]
+                                    Box(Modifier.size(9.dp).clip(CircleShape).background(p))
+                                    Spacer(Modifier.width(2.dp))
+                                    Box(Modifier.size(9.dp).clip(CircleShape).background(s))
+                                    Spacer(Modifier.width(5.dp))
+                                }
+                                Text(
+                                    opt,
+                                    color = if (sel) colors.primary else colors.text,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        title,
+                        color = colors.text,
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+        LiquidSwitch(
+            checked = checked,
+            colors = colors,
+            onCheckedChange = { onToggle(it) }
+        )
+    }
+    SettingDivider(colors)
+}
+
+// =====================================================================
+// 内联滑块行：展开后使用圆球拉条，可配置松手生效
+// =====================================================================
+
 @Composable
 private fun InlineSliderRow(
     title: String,
@@ -763,7 +912,8 @@ private fun InlineSliderRow(
     valueRange: ClosedFloatingPointRange<Float>,
     valueFormat: (Float) -> String,
     colors: IrisColors,
-    onValueChange: (Float) -> Unit
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     Column(
@@ -774,11 +924,12 @@ private fun InlineSliderRow(
         Row(
             Modifier
                 .fillMaxWidth()
+                .heightIn(min = 54.dp)
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
                 ) { Haptics.tap(); expanded = !expanded }
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(title, color = colors.text, fontSize = 16.sp, modifier = Modifier.weight(1f))
@@ -789,23 +940,89 @@ private fun InlineSliderRow(
             enter = expandVertically(tween(280, easing = EaseOutCubic)) + fadeIn(tween(200)),
             exit = shrinkVertically(tween(240, easing = EaseInCubic)) + fadeOut(tween(160))
         ) {
-            Slider(
+            RoundSlider(
                 value = value,
-                onValueChange = onValueChange,
                 valueRange = valueRange,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = colors.primary,
-                    inactiveTrackColor = colors.subText.copy(alpha = 0.22f),
-                    activeTickColor = Color.Transparent,
-                    inactiveTickColor = Color.Transparent
-                ),
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
+                colors = colors,
+                onChange = onValueChange,
+                onFinished = { onValueChangeFinished?.invoke() },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
         SettingDivider(colors)
     }
 }
+
+@Composable
+private fun RoundSlider(
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    colors: IrisColors,
+    onChange: (Float) -> Unit,
+    onFinished: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
+    val frac = ((value - valueRange.start) / span).coerceIn(0f, 1f)
+    val thumbD = 22.dp
+    val thumbPx = with(androidx.compose.ui.platform.LocalDensity.current) { thumbD.toPx() }
+    BoxWithConstraints(
+        modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .pointerInput(valueRange) {
+                detectDragGestures(
+                    onDragEnd = { onFinished() },
+                    onDragCancel = { onFinished() }
+                ) { change, _ ->
+                    val usable = size.width - thumbPx
+                    val f = if (usable > 0f) {
+                        ((change.position.x - thumbPx / 2f) / usable).coerceIn(0f, 1f)
+                    } else 0f
+                    onChange(valueRange.start + f * span)
+                }
+            }
+            .pointerInput(valueRange) {
+                detectTapGestures { offset ->
+                    val usable = size.width - thumbPx
+                    val f = if (usable > 0f) {
+                        ((offset.x - thumbPx / 2f) / usable).coerceIn(0f, 1f)
+                    } else 0f
+                    onChange(valueRange.start + f * span)
+                    onFinished()
+                }
+            },
+        contentAlignment = Alignment.CenterStart
+    ) {
+        val usable = maxWidth - thumbD
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .clip(CircleShape)
+                .background(colors.subText.copy(alpha = 0.22f))
+        )
+        Box(
+            Modifier
+                .fillMaxWidth(frac)
+                .height(4.dp)
+                .clip(CircleShape)
+                .background(colors.primary)
+        )
+        Box(
+            Modifier
+                .offset(x = usable * frac)
+                .size(thumbD)
+                .shadow(3.dp, CircleShape)
+                .background(Color.White, CircleShape)
+                .border(0.5.dp, Color.Black.copy(alpha = 0.08f), CircleShape)
+        )
+    }
+}
+
+// =====================================================================
+// 内联自定义颜色（HSV 三滑轨，圆球把手）
+// =====================================================================
 
 @Composable
 private fun InlineColorRow(
@@ -829,11 +1046,12 @@ private fun InlineColorRow(
         Row(
             Modifier
                 .fillMaxWidth()
+                .heightIn(min = 54.dp)
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
                 ) { Haptics.tap(); expanded = !expanded }
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(title, color = colors.text, fontSize = 16.sp, modifier = Modifier.weight(1f))
@@ -874,8 +1092,7 @@ private fun InlineColorRow(
                             Color.Red, Color.Yellow, Color.Green,
                             Color.Cyan, Color.Blue, Color.Magenta, Color.Red
                         )
-                    ),
-                    colors = colors
+                    )
                 ) { v ->
                     val arr = activeHsv.copyOf(); arr[0] = v
                     if (editSecondary) secondaryHsv = arr else primaryHsv = arr
@@ -891,8 +1108,7 @@ private fun InlineColorRow(
                             Color(android.graphics.Color.HSVToColor(floatArrayOf(activeHsv[0], 0f, activeHsv[2]))),
                             Color(android.graphics.Color.HSVToColor(floatArrayOf(activeHsv[0], 1f, activeHsv[2])))
                         )
-                    ),
-                    colors = colors
+                    )
                 ) { v ->
                     val arr = activeHsv.copyOf(); arr[1] = v
                     if (editSecondary) secondaryHsv = arr else primaryHsv = arr
@@ -908,8 +1124,7 @@ private fun InlineColorRow(
                             Color(android.graphics.Color.HSVToColor(floatArrayOf(activeHsv[0], activeHsv[1], 0f))),
                             Color(android.graphics.Color.HSVToColor(floatArrayOf(activeHsv[0], activeHsv[1], 1f)))
                         )
-                    ),
-                    colors = colors
+                    )
                 ) { v ->
                     val arr = activeHsv.copyOf(); arr[2] = v
                     if (editSecondary) secondaryHsv = arr else primaryHsv = arr
@@ -956,30 +1171,36 @@ private fun GradientSlider(
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     brush: Brush,
-    colors: IrisColors,
     onChange: (Float) -> Unit
 ) {
     val span = (range.endInclusive - range.start).takeIf { it > 0f } ?: 1f
     val frac = ((value - range.start) / span).coerceIn(0f, 1f)
+    val thumbD = 22.dp
+    val thumbPx = with(androidx.compose.ui.platform.LocalDensity.current) { thumbD.toPx() }
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .height(30.dp)
+            .height(32.dp)
             .pointerInput(range) {
                 detectTapGestures { offset ->
-                    val f = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                    val usable = size.width - thumbPx
+                    val f = if (usable > 0f) {
+                        ((offset.x - thumbPx / 2f) / usable).coerceIn(0f, 1f)
+                    } else 0f
                     onChange(range.start + f * span)
                 }
             }
             .pointerInput(range) {
-                detectHorizontalDragGestures { change, _ ->
-                    val f = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
+                detectDragGestures { change, _ ->
+                    val usable = size.width - thumbPx
+                    val f = if (usable > 0f) {
+                        ((change.position.x - thumbPx / 2f) / usable).coerceIn(0f, 1f)
+                    } else 0f
                     onChange(range.start + f * span)
                 }
             },
         contentAlignment = Alignment.CenterStart
     ) {
-        val thumbD = 20.dp
         val usable = maxWidth - thumbD
         Box(
             Modifier
@@ -992,7 +1213,7 @@ private fun GradientSlider(
             Modifier
                 .offset(x = usable * frac)
                 .size(thumbD)
-                .shadow(2.dp, CircleShape)
+                .shadow(3.dp, CircleShape)
                 .background(Color.White, CircleShape)
                 .border(0.5.dp, Color.Black.copy(alpha = 0.08f), CircleShape)
         )
@@ -1007,6 +1228,10 @@ private fun hsvOf(argb: Long): FloatArray {
     android.graphics.Color.colorToHSV(argb.toInt(), out)
     return out
 }
+
+// =====================================================================
+// iOS 液态玻璃开关
+// =====================================================================
 
 @Composable
 private fun LiquidSwitch(
@@ -1023,11 +1248,7 @@ private fun LiquidSwitch(
     val trackH = 31.dp
     val thumbD = 27.dp
     val travel = trackW - thumbD - 4.dp
-    val thumbOffset by animateDpAsState(
-        targetValue = 2.dp + travel * progress,
-        animationSpec = spring(dampingRatio = 0.62f, stiffness = 520f),
-        label = "thumbOffset"
-    )
+    val thumbOffset = 2.dp + travel * progress
     val trackColor = lerp(colors.subText.copy(alpha = 0.3f), colors.primary, progress)
     Box(
         Modifier
@@ -1065,6 +1286,10 @@ private fun LiquidSwitch(
         )
     }
 }
+
+// =====================================================================
+// 悬浮歌词（固定位置 / 颜色 改为开关+内联选项）
+// =====================================================================
 
 @Composable
 private fun FloatingLyricGroup(colors: IrisColors) {
@@ -1133,50 +1358,44 @@ private fun FloatingLyricGroup(colors: IrisColors) {
         SettingSwitchRow("逐字流光", checked = karaoke, colors = colors) {
             karaoke = !karaoke; writeBool(FloatingLyric.KEY_KARAOKE, karaoke)
         }
-        SettingSwitchRow("固定位置", checked = fixed, colors = colors) {
-            fixed = !fixed; writeBool(FloatingLyric.KEY_FIXED, fixed)
-        }
 
-        if (fixed) {
-            InlineOptionRow(
-                title = "固定模式",
-                options = listOf("居中", "完全固定"),
-                selectedIndex = fixMode,
-                colors = colors
-            ) { fixMode = it; writeInt(FloatingLyric.KEY_FIX_MODE, it) }
-        }
+        InlineSwitchOptionRow(
+            title = "固定位置",
+            checked = fixed,
+            options = listOf("居中", "完全固定"),
+            selectedIndex = fixMode,
+            colors = colors,
+            onToggle = { fixed = it; writeBool(FloatingLyric.KEY_FIXED, it) },
+            onSelect = { fixMode = it; writeInt(FloatingLyric.KEY_FIX_MODE, it) }
+        )
 
-        SettingSwitchRow("悬浮歌词颜色", checked = useCustomColor, colors = colors) {
-            useCustomColor = !useCustomColor
-            writeBool(FloatingLyric.KEY_USE_CUSTOM, useCustomColor)
-        }
-
-        if (useCustomColor) {
-            val themeOptions = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
-            InlineOptionRow(
-                title = "悬浮歌词主题",
-                options = themeOptions.map { it.label },
-                selectedIndex = themeOptions.indexOf(floatTheme),
-                optionDots = themeOptions.map { it.resolvedPair(colors.isDark) },
-                colors = colors
-            ) { index ->
+        val themeOptions = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
+        InlineSwitchOptionRow(
+            title = "悬浮歌词颜色",
+            checked = useCustomColor,
+            options = themeOptions.map { it.label },
+            selectedIndex = themeOptions.indexOf(floatTheme),
+            optionDots = themeOptions.map { it.resolvedPair(colors.isDark) },
+            colors = colors,
+            onToggle = { useCustomColor = it; writeBool(FloatingLyric.KEY_USE_CUSTOM, it) },
+            onSelect = { index ->
                 floatTheme = themeOptions[index]
                 prefs.edit().putString(FloatingLyric.KEY_THEME, floatTheme.name).apply()
             }
+        )
 
-            if (floatTheme == IrisTheme.CUSTOM) {
-                InlineColorRow(
-                    title = "自定义悬浮歌词色",
-                    primaryArgb = customPrimary,
-                    secondaryArgb = customSecondary,
-                    colors = colors
-                ) { p, s ->
-                    customPrimary = p; customSecondary = s
-                    prefs.edit()
-                        .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
-                        .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
-                        .apply()
-                }
+        if (useCustomColor && floatTheme == IrisTheme.CUSTOM) {
+            InlineColorRow(
+                title = "自定义悬浮歌词色",
+                primaryArgb = customPrimary,
+                secondaryArgb = customSecondary,
+                colors = colors
+            ) { p, s ->
+                customPrimary = p; customSecondary = s
+                prefs.edit()
+                    .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
+                    .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
+                    .apply()
             }
         }
 
