@@ -9,6 +9,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.EaseInCubic
 import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -37,9 +38,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -122,7 +124,13 @@ internal fun NewSettingsPanel(
         }
     }
 
-    Column(Modifier.fillMaxWidth()) {
+    // 外层 iOS 浅灰背景
+    val panelBg = if (colors.isDark) Color(0xFF000000) else Color(0xFFF2F2F7)
+    val isLiquid = state.surfaceStyle == IrisSurfaceStyle.LIQUID
+    val isScrolled = scrollState.value > 60
+
+    BoxWithConstraints(Modifier.fillMaxWidth().background(panelBg)) {
+        val maxW = maxWidth
         Column(
             Modifier
                 .fillMaxWidth()
@@ -132,46 +140,64 @@ internal fun NewSettingsPanel(
         ) {
             SheetDragHandle(sheetDrag, onDismiss, colors.card)
             Spacer(Modifier.height(14.dp))
-            Text(
-                "设置",
-                color = colors.text,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-            )
-            Spacer(Modifier.height(18.dp))
+            
+            // 顶部占位，用来放悬浮标题
+            Box(Modifier.fillMaxWidth().height(44.dp)) {
+                // 悬浮标题
+                val targetX = if (isScrolled) 16.dp else (maxW / 2f - 32.dp)
+                val targetY = if (isScrolled) (-4).dp else 0.dp
+                val textSize = if (isScrolled) 18.sp else 24.sp
+                val textAlign = if (isScrolled) TextAlign.Start else TextAlign.Center
+
+                val animatedX by animateDpAsState(targetX, spring(dampingRatio = 0.8f, stiffness = 400f))
+                val animatedY by animateDpAsState(targetY, spring(dampingRatio = 0.8f, stiffness = 400f))
+
+                Text(
+                    "设置",
+                    color = colors.text,
+                    fontSize = textSize,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = textAlign,
+                    modifier = Modifier
+                        .offset(x = animatedX - 16.dp, y = animatedY) // 减去基础 padding
+                        .graphicsLayer {
+                            if (isScrolled) {
+                                translationX = 0f
+                            }
+                        }
+                )
+            }
+            Spacer(Modifier.height(12.dp))
 
             // ==================== 外观 ====================
-            SettingsGroup("外观", colors) {
+            SettingsGroup("外观", state.surfaceStyle, colors) {
                 InlineOptionRow(
                     title = "明暗模式",
                     options = listOf("深色", "浅色", "自动"),
                     selectedIndex = IrisMode.entries.indexOf(state.mode),
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setMode(IrisMode.entries[it]) }
 
                 SettingActionRow(
-    title = "背景图片",
-    trailingText = if (state.customBackgroundUri != null) "自定义" else "跟随封面",
-    showDivider = true,
-    colors = colors
-) { onPickBackground() }
-
-                if (state.customBackgroundUri != null) {
-                    SettingActionRow(
-                        title = "恢复封面背景",
-                        trailingText = "重置",
-                        colors = colors
-                    ) { viewModel.setCustomBackground(null) }
+                    title = "背景图片",
+                    trailingText = if (state.customBackgroundUri != null) "重置" else "自定义",
+                    showDivider = true,
+                    surfaceStyle = state.surfaceStyle,
+                    colors = colors
+                ) {
+                    if (state.customBackgroundUri != null) {
+                        viewModel.setCustomBackground(null)
+                    } else {
+                        onPickBackground()
+                    }
                 }
 
                 InlineOptionRow(
                     title = "按钮颜色",
                     options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
                     selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
-                    optionDots = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
-                        .map { it.resolvedPair(colors.isDark) },
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { index ->
                     viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
@@ -182,16 +208,19 @@ internal fun NewSettingsPanel(
                         title = "自定义按钮颜色",
                         primaryArgb = state.customPrimaryArgb,
                         secondaryArgb = state.customSecondaryArgb,
+                        surfaceStyle = state.surfaceStyle,
                         colors = colors
                     ) { p, s -> viewModel.setCustomColors(p, s) }
                 }
 
+                val allowedStyles = listOf(IrisSurfaceStyle.SOLID, IrisSurfaceStyle.LIQUID)
                 InlineOptionRow(
                     title = "材质分级",
-                    options = IrisSurfaceStyle.entries.map { it.label },
-                    selectedIndex = IrisSurfaceStyle.entries.indexOf(state.surfaceStyle),
+                    options = allowedStyles.map { it.label },
+                    selectedIndex = allowedStyles.indexOf(state.surfaceStyle).coerceAtLeast(0),
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
-                ) { viewModel.setSurfaceStyle(IrisSurfaceStyle.entries[it]) }
+                ) { viewModel.setSurfaceStyle(allowedStyles[it]) }
 
                 if (state.surfaceStyle != IrisSurfaceStyle.SOLID) {
                     val glassSpan = (GLASS_BLUR_MAX - GLASS_BLUR_MIN).takeIf { it > 0f } ?: 1f
@@ -200,6 +229,7 @@ internal fun NewSettingsPanel(
                         value = ((state.glassBlur - GLASS_BLUR_MIN) / glassSpan * 100f).coerceIn(0f, 100f),
                         valueRange = 0f..100f,
                         valueFormat = { "${it.toInt()}" },
+                        surfaceStyle = state.surfaceStyle,
                         colors = colors
                     ) { v -> viewModel.setGlassBlur(GLASS_BLUR_MIN + (v / 100f) * glassSpan) }
                 }
@@ -209,6 +239,7 @@ internal fun NewSettingsPanel(
                     value = state.bgBlur,
                     valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
                     valueFormat = { "${it.toInt()}" },
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setBgBlur(it) }
 
@@ -217,6 +248,7 @@ internal fun NewSettingsPanel(
                     value = state.cornerBase,
                     valueRange = 0f..44f,
                     valueFormat = { "${it.toInt()}" },
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setCornerBase(it) }
 
@@ -226,6 +258,7 @@ internal fun NewSettingsPanel(
                     value = pendingFontScale,
                     valueRange = 0.85f..1.30f,
                     valueFormat = { "${(it * 100).toInt()}%" },
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors,
                     onValueChange = { pendingFontScale = it },
                     onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) }
@@ -235,6 +268,7 @@ internal fun NewSettingsPanel(
                     title = "界面字体",
                     options = listOf("系统", "衬线"),
                     selectedIndex = if (state.uiFont == 0) 0 else 1,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setUiFont(it) }
 
@@ -242,28 +276,31 @@ internal fun NewSettingsPanel(
                     title = "界面排布",
                     options = IrisLayout.entries.map { it.label },
                     selectedIndex = IrisLayout.entries.indexOf(state.layout),
+                    surfaceStyle = state.surfaceStyle,
+                    showDivider = false,
                     colors = colors
                 ) { viewModel.setLayout(IrisLayout.entries[it]) }
             }
 
             // ==================== 列表 ====================
             if (!state.layout.isDeck) {
-                SettingsGroup("列表", colors) {
-                    SettingSwitchRow("搜索框常驻", checked = state.searchPersistent, colors = colors) {
+                SettingsGroup("列表", state.surfaceStyle, colors) {
+                    SettingSwitchRow("搜索框常驻", checked = state.searchPersistent, surfaceStyle = state.surfaceStyle, colors = colors) {
                         viewModel.setSearchPersistent(!state.searchPersistent)
                     }
-                    SettingSwitchRow("行显示封面", checked = state.showRowCover, colors = colors) {
+                    SettingSwitchRow("行显示封面", checked = state.showRowCover, surfaceStyle = state.surfaceStyle, colors = colors) {
                         viewModel.setShowRowCover(!state.showRowCover)
                     }
-                    SettingSwitchRow("行显示歌手", checked = state.showRowArtist, colors = colors) {
+                    SettingSwitchRow("行显示歌手", checked = state.showRowArtist, surfaceStyle = state.surfaceStyle, colors = colors) {
                         viewModel.setShowRowArtist(!state.showRowArtist)
                     }
-                    SettingSwitchRow("行显示所属歌单", checked = state.showRowPlaylist, colors = colors) {
+                    SettingSwitchRow("行显示所属歌单", checked = state.showRowPlaylist, surfaceStyle = state.surfaceStyle, colors = colors) {
                         viewModel.setShowRowPlaylist(!state.showRowPlaylist)
                     }
                     SettingSwitchRow(
                         "行显示点赞角标",
                         checked = state.showLikedBadge,
+                        surfaceStyle = state.surfaceStyle,
                         colors = colors
                     ) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
 
@@ -271,20 +308,22 @@ internal fun NewSettingsPanel(
                         title = "卡片距离",
                         options = listOf("紧凑", "标准", "宽松"),
                         selectedIndex = state.rowSize,
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = false,
                         colors = colors
                     ) { viewModel.setRowSize(it) }
                 }
             }
 
             // ==================== 播放 ====================
-            SettingsGroup("播放", colors) {
-                SettingSwitchRow("上栏静止时隐藏", checked = state.topBarAutoHide, colors = colors) {
+            SettingsGroup("播放", state.surfaceStyle, colors) {
+                SettingSwitchRow("上栏静止时隐藏", checked = state.topBarAutoHide, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setTopBarAutoHide(!state.topBarAutoHide)
                 }
-                SettingSwitchRow("无声略过", checked = state.silenceSkip, colors = colors) {
+                SettingSwitchRow("无声略过", checked = state.silenceSkip, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setSilenceSkip(!state.silenceSkip)
                 }
-                SettingSwitchRow("淡入淡出", checked = state.fadeEnabled, colors = colors) {
+                SettingSwitchRow("淡入淡出", checked = state.fadeEnabled, surfaceStyle = state.surfaceStyle, showDivider = state.fadeEnabled, colors = colors) {
                     viewModel.setFadeEnabled(!state.fadeEnabled)
                 }
                 if (state.fadeEnabled) {
@@ -293,20 +332,22 @@ internal fun NewSettingsPanel(
                         value = state.fadeMs.toFloat(),
                         valueRange = 500f..5000f,
                         valueFormat = { String.format(java.util.Locale.US, "%.1f s", it / 1000f) },
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = false,
                         colors = colors
                     ) { viewModel.setFadeMs(it.toLong()) }
                 }
             }
 
             // ==================== 歌词 ====================
-            SettingsGroup("歌词", colors) {
-                SettingSwitchRow("封面歌词", checked = state.coverLyric, colors = colors) {
+            SettingsGroup("歌词", state.surfaceStyle, colors) {
+                SettingSwitchRow("封面歌词", checked = state.coverLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setCoverLyric(!state.coverLyric)
                 }
-                SettingSwitchRow("逐字流光", checked = state.karaokeLyric, colors = colors) {
+                SettingSwitchRow("逐字流光", checked = state.karaokeLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setKaraokeLyric(!state.karaokeLyric)
                 }
-                SettingSwitchRow("歌词颜色", checked = state.lyricUseCustomColor, colors = colors) {
+                SettingSwitchRow("歌词颜色", checked = state.lyricUseCustomColor, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setLyricUseCustomColor(!state.lyricUseCustomColor)
                 }
 
@@ -315,8 +356,7 @@ internal fun NewSettingsPanel(
                         title = "歌词主题",
                         options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
                         selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.lyricTheme),
-                        optionDots = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
-                            .map { it.resolvedPair(colors.isDark) },
+                        surfaceStyle = state.surfaceStyle,
                         colors = colors
                     ) { index ->
                         viewModel.setLyricTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
@@ -326,6 +366,7 @@ internal fun NewSettingsPanel(
                             title = "自定义歌词色",
                             primaryArgb = state.lyricCustomPrimary,
                             secondaryArgb = state.lyricCustomSecondary,
+                            surfaceStyle = state.surfaceStyle,
                             colors = colors
                         ) { p, s -> viewModel.setLyricCustomColors(p, s) }
                     }
@@ -335,6 +376,7 @@ internal fun NewSettingsPanel(
                     title = "歌词对齐",
                     options = listOf("靠左", "居中", "靠右"),
                     selectedIndex = state.lyricAlign,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setLyricAlign(it) }
 
@@ -342,6 +384,7 @@ internal fun NewSettingsPanel(
                     title = "歌词字体",
                     options = listOf("系统", "衬线"),
                     selectedIndex = if (state.lyricFont == 0) 0 else 1,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setLyricFont(it) }
 
@@ -350,31 +393,35 @@ internal fun NewSettingsPanel(
                     value = state.lyricFontSize,
                     valueRange = 14f..32f,
                     valueFormat = { "${it.toInt()}" },
+                    surfaceStyle = state.surfaceStyle,
+                    showDivider = false,
                     colors = colors
                 ) { viewModel.setLyricFontSize(it) }
             }
 
             // ==================== 悬浮歌词 ====================
-            SettingsGroup("悬浮歌词", colors) {
-                FloatingLyricGroup(colors)
+            SettingsGroup("悬浮歌词", state.surfaceStyle, colors) {
+                FloatingLyricGroup(colors, state.surfaceStyle)
             }
 
             // ==================== 动效与反馈 ====================
-            SettingsGroup("动效与反馈", colors) {
-                SettingSwitchRow("触感反馈", checked = state.hapticsEnabled, colors = colors) {
+            SettingsGroup("动效与反馈", state.surfaceStyle, colors) {
+                SettingSwitchRow("触感反馈", checked = state.hapticsEnabled, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setHapticsEnabled(!state.hapticsEnabled)
                 }
                 SettingSwitchRow(
                     "物理动效",
                     checked = state.tiltSpectrum || state.coverShake,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setPhysicsFx(!(state.tiltSpectrum || state.coverShake)) }
-                SettingSwitchRow("灵动动效", checked = state.jellyAnim, colors = colors) {
+                SettingSwitchRow("灵动动效", checked = state.jellyAnim, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setJellyAnim(!state.jellyAnim)
                 }
                 SettingSwitchRow(
                     "低音马达震动",
                     checked = state.bassHaptics,
+                    surfaceStyle = state.surfaceStyle,
                     showDivider = state.bassHaptics,
                     colors = colors
                 ) { viewModel.setBassHaptics(!state.bassHaptics) }
@@ -384,6 +431,7 @@ internal fun NewSettingsPanel(
                         title = "震动强度",
                         options = listOf("轻点", "标准", "重击"),
                         selectedIndex = state.bassHapticsIntensity,
+                        surfaceStyle = state.surfaceStyle,
                         colors = colors
                     ) { viewModel.setBassHapticsIntensity(it) }
 
@@ -392,35 +440,40 @@ internal fun NewSettingsPanel(
                         value = state.bassHapticsLowCutoff.toFloat(),
                         valueRange = 120f..320f,
                         valueFormat = { "${it.toInt()} Hz" },
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = false,
                         colors = colors
                     ) { viewModel.setBassHapticsLowCutoff(it.toInt()) }
                 }
             }
 
             // ==================== 推荐 ====================
-            SettingsGroup("推荐", colors) {
+            SettingsGroup("推荐", state.surfaceStyle, colors) {
                 InlineSliderRow(
                     title = "探索度",
                     value = state.exploration,
                     valueRange = 0f..1f,
                     valueFormat = { "${(it * 100).toInt()}%" },
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setExploration(it) }
 
                 SettingSwitchRow(
                     "歌单页显示推荐区",
                     checked = state.showRecommendations,
+                    surfaceStyle = state.surfaceStyle,
                     showDivider = false,
                     colors = colors
                 ) { viewModel.setShowRecommendations(!state.showRecommendations) }
             }
 
             // ==================== 数据 ====================
-            SettingsGroup("数据", colors) {
+            SettingsGroup("数据", state.surfaceStyle, colors) {
                 SettingActionRow(
                     title = "扫描文件夹",
                     trailingText = if (state.scanRoot != null) "已指定" else "全部音乐",
                     showDivider = true,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { folderPickerLauncher.launch(null) }
 
@@ -428,6 +481,7 @@ internal fun NewSettingsPanel(
                     SettingActionRow(
                         title = "恢复全部文件夹",
                         trailingText = "重置",
+                        surfaceStyle = state.surfaceStyle,
                         colors = colors
                     ) { viewModel.setScanRoot(null) }
                 }
@@ -471,6 +525,7 @@ internal fun NewSettingsPanel(
                 SettingSwitchRow(
                     "上栏显示排序",
                     checked = state.showSortBar,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { viewModel.setShowSortBar(!state.showSortBar) }
 
@@ -478,6 +533,7 @@ internal fun NewSettingsPanel(
                     title = "导出数据",
                     trailingText = if (transferBusy) "请稍候" else null,
                     enabled = !transferBusy,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { exportLauncher.launch(DataTransfer.SUGGESTED_FILE_NAME) }
 
@@ -485,6 +541,7 @@ internal fun NewSettingsPanel(
                     title = "导入数据",
                     enabled = !transferBusy,
                     showDivider = false,
+                    surfaceStyle = state.surfaceStyle,
                     colors = colors
                 ) { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
             }
@@ -503,8 +560,8 @@ internal fun NewSettingsPanel(
             }
 
             // ==================== 动画 ====================
-            SettingsGroup("动画", colors) {
-                SettingSwitchRow("启动动画", checked = state.splashEnabled, colors = colors) {
+            SettingsGroup("动画", state.surfaceStyle, colors) {
+                SettingSwitchRow("启动动画", checked = state.splashEnabled, surfaceStyle = state.surfaceStyle, showDivider = state.splashEnabled, colors = colors) {
                     viewModel.setSplashEnabled(!state.splashEnabled)
                 }
                 if (state.splashEnabled) {
@@ -512,17 +569,20 @@ internal fun NewSettingsPanel(
                         title = "动画风格",
                         options = listOf("简约", "温柔", "细腻"),
                         selectedIndex = state.splashStyle,
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = false,
                         colors = colors
                     ) { viewModel.setSplashStyle(it) }
                 }
             }
 
             // ==================== 设置样式 ====================
-            SettingsGroup("设置样式", colors) {
+            SettingsGroup("设置样式", state.surfaceStyle, colors) {
                 SettingSwitchRow(
                     "切换回经典设置面板",
                     subtitle = "关闭后使用经典列表样式",
                     checked = !state.useNewSettingsStyle,
+                    surfaceStyle = state.surfaceStyle,
                     showDivider = false,
                     colors = colors
                 ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
@@ -531,6 +591,7 @@ internal fun NewSettingsPanel(
             Spacer(Modifier.height(8.dp))
         }
 
+        // 底部完成按钮
         Spacer(Modifier.height(10.dp))
         Box(
             Modifier
@@ -552,17 +613,24 @@ internal fun NewSettingsPanel(
         Spacer(Modifier.height(18.dp))
     }
 }
-// =====================================================================
-// 分组卡片 & 基础行（统一行高 54dp，内容垂直居中，分割线左右内缩）
-// =====================================================================
 
 @Composable
 private fun SettingsGroup(
     title: String,
+    surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val groupBg = if (colors.isDark) Color.White.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.72f)
+    val isLiquid = surfaceStyle == IrisSurfaceStyle.LIQUID
+    // 液态玻璃：半透明。实色：纯白卡片，与外层灰形成色差
+    val groupModifier = if (isLiquid) {
+        Modifier.irisSurface(GlassLevel.CARD, colors, RoundedCornerShape(20.dp))
+    } else {
+        Modifier
+            .shadow(1.dp, RoundedCornerShape(20.dp))
+            .background(if (colors.isDark) Color(0xFF1C1C1E) else Color.White, RoundedCornerShape(20.dp))
+    }
+
     Column(Modifier.fillMaxWidth().padding(bottom = 22.dp)) {
         Text(
             title,
@@ -575,7 +643,7 @@ private fun SettingsGroup(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(20.dp))
-                .background(groupBg)
+                .then(groupModifier)
                 .padding(vertical = 2.dp),
             content = content
         )
@@ -598,6 +666,7 @@ private fun SettingSwitchRow(
     title: String,
     subtitle: String? = null,
     checked: Boolean,
+    surfaceStyle: IrisSurfaceStyle,
     showDivider: Boolean = true,
     colors: IrisColors,
     onToggle: () -> Unit
@@ -637,6 +706,7 @@ private fun SettingActionRow(
     trailingText: String? = null,
     enabled: Boolean = true,
     showDivider: Boolean = true,
+    surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
     onClick: () -> Unit
 ) {
@@ -667,17 +737,14 @@ private fun SettingActionRow(
     }
 }
 
-// =====================================================================
-// 内联选项行：标题左滑出 → 选项左滑入；左右边缘虚化
-// =====================================================================
-
 @Composable
 private fun InlineOptionRow(
     title: String,
     options: List<String>,
     selectedIndex: Int,
+    surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
-    optionDots: List<Pair<Color, Color>>? = null,
+    showDivider: Boolean = true,
     onSelect: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -728,15 +795,28 @@ private fun InlineOptionRow(
                 ) {
                     options.forEachIndexed { i, opt ->
                         val sel = i == selectedIndex
+                        val isLiquid = surfaceStyle == IrisSurfaceStyle.LIQUID
+                        val btnBg = if (sel) {
+                            colors.primary.copy(alpha = 0.16f)
+                        } else {
+                            if (isLiquid) colors.subText.copy(alpha = 0.08f) else Color.White
+                        }
+                        // 按钮立体效果
+                        val btnModifier = if (isLiquid) {
+                            Modifier.irisSurface(GlassLevel.CHIP, colors, RoundedCornerShape(10.dp), solid = btnBg)
+                        } else {
+                            Modifier
+                                .shadow(1.5.dp, RoundedCornerShape(10.dp))
+                                .background(btnBg, RoundedCornerShape(10.dp))
+                                .border(0.5.dp, colors.subText.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
+                        }
+
                         Row(
                             Modifier
                                 .weight(1f)
                                 .height(36.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    if (sel) colors.primary.copy(alpha = 0.16f)
-                                    else colors.subText.copy(alpha = 0.08f)
-                                )
+                                .then(btnModifier)
                                 .clickable(
                                     indication = null,
                                     interactionSource = remember { MutableInteractionSource() }
@@ -749,17 +829,12 @@ private fun InlineOptionRow(
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (optionDots != null) {
-                                val (p, s) = optionDots[i]
-                                Box(Modifier.size(9.dp).clip(CircleShape).background(p))
-                                Spacer(Modifier.width(2.dp))
-                                Box(Modifier.size(9.dp).clip(CircleShape).background(s))
-                                Spacer(Modifier.width(5.dp))
-                            }
+                            // 文字自动缩放以防溢出
+                            val autoSize = if (opt.length > 3) 10.sp else 12.sp
                             Text(
                                 opt,
                                 color = if (sel) colors.primary else colors.text,
-                                fontSize = 12.sp,
+                                fontSize = autoSize,
                                 fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -791,12 +866,8 @@ private fun InlineOptionRow(
             }
         }
     }
-    SettingDivider(colors)
+    if (showDivider) SettingDivider(colors)
 }
-
-// =====================================================================
-// 开关 + 内联选项：关 = 标题+开关；开 = 选项左滑入，右侧仍保留开关用于关闭
-// =====================================================================
 
 @Composable
 private fun InlineSwitchOptionRow(
@@ -804,8 +875,9 @@ private fun InlineSwitchOptionRow(
     checked: Boolean,
     options: List<String>,
     selectedIndex: Int,
+    surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
-    optionDots: List<Pair<Color, Color>>? = null,
+    showDivider: Boolean = true,
     onToggle: (Boolean) -> Unit,
     onSelect: (Int) -> Unit
 ) {
@@ -843,15 +915,27 @@ private fun InlineSwitchOptionRow(
                     ) {
                         options.forEachIndexed { i, opt ->
                             val sel = i == selectedIndex
+                            val isLiquid = surfaceStyle == IrisSurfaceStyle.LIQUID
+                            val btnBg = if (sel) {
+                                colors.primary.copy(alpha = 0.16f)
+                            } else {
+                                if (isLiquid) colors.subText.copy(alpha = 0.08f) else Color.White
+                            }
+                            val btnModifier = if (isLiquid) {
+                                Modifier.irisSurface(GlassLevel.CHIP, colors, RoundedCornerShape(10.dp), solid = btnBg)
+                            } else {
+                                Modifier
+                                    .shadow(1.5.dp, RoundedCornerShape(10.dp))
+                                    .background(btnBg, RoundedCornerShape(10.dp))
+                                    .border(0.5.dp, colors.subText.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
+                            }
+
                             Row(
                                 Modifier
                                     .weight(1f)
                                     .height(36.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (sel) colors.primary.copy(alpha = 0.16f)
-                                        else colors.subText.copy(alpha = 0.08f)
-                                    )
+                                    .then(btnModifier)
                                     .clickable(
                                         indication = null,
                                         interactionSource = remember { MutableInteractionSource() }
@@ -863,17 +947,11 @@ private fun InlineSwitchOptionRow(
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (optionDots != null) {
-                                    val (p, s) = optionDots[i]
-                                    Box(Modifier.size(9.dp).clip(CircleShape).background(p))
-                                    Spacer(Modifier.width(2.dp))
-                                    Box(Modifier.size(9.dp).clip(CircleShape).background(s))
-                                    Spacer(Modifier.width(5.dp))
-                                }
+                                val autoSize = if (opt.length > 3) 10.sp else 12.sp
                                 Text(
                                     opt,
                                     color = if (sel) colors.primary else colors.text,
-                                    fontSize = 12.sp,
+                                    fontSize = autoSize,
                                     fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -892,18 +970,10 @@ private fun InlineSwitchOptionRow(
                 }
             }
         }
-        LiquidSwitch(
-            checked = checked,
-            colors = colors,
-            onCheckedChange = { onToggle(it) }
-        )
+        LiquidSwitch(checked = checked, colors = colors, onCheckedChange = { onToggle(it) })
     }
-    SettingDivider(colors)
+    if (showDivider) SettingDivider(colors)
 }
-
-// =====================================================================
-// 内联滑块行：展开后使用圆球拉条，可配置松手生效
-// =====================================================================
 
 @Composable
 private fun InlineSliderRow(
@@ -911,7 +981,9 @@ private fun InlineSliderRow(
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     valueFormat: (Float) -> String,
+    surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
+    showDivider: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
     onValueChange: (Float) -> Unit
 ) {
@@ -949,9 +1021,10 @@ private fun InlineSliderRow(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
-        SettingDivider(colors)
+        if (showDivider) SettingDivider(colors)
     }
 }
+
 @Composable
 private fun RoundSlider(
     value: Float,
@@ -964,7 +1037,7 @@ private fun RoundSlider(
     val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
     val frac = ((value - valueRange.start) / span).coerceIn(0f, 1f)
     val thumbD = 22.dp
-    val thumbPx = with(androidx.compose.ui.platform.LocalDensity.current) { thumbD.toPx() }
+    val thumbPx = with(LocalDensity.current) { thumbD.toPx() }
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
@@ -1019,16 +1092,14 @@ private fun RoundSlider(
     }
 }
 
-// =====================================================================
-// 内联自定义颜色（HSV 三滑轨，圆球把手）
-// =====================================================================
-
 @Composable
 private fun InlineColorRow(
     title: String,
     primaryArgb: Long,
     secondaryArgb: Long,
+    surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
+    showDivider: Boolean = true,
     onColorsChange: (Long, Long) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -1098,7 +1169,6 @@ private fun InlineColorRow(
                     onColorsChange(argbOf(primaryHsv), argbOf(secondaryHsv))
                 }
                 Spacer(Modifier.height(8.dp))
-
                 GradientSlider(
                     value = activeHsv[1],
                     range = 0f..1f,
@@ -1114,7 +1184,6 @@ private fun InlineColorRow(
                     onColorsChange(argbOf(primaryHsv), argbOf(secondaryHsv))
                 }
                 Spacer(Modifier.height(8.dp))
-
                 GradientSlider(
                     value = activeHsv[2],
                     range = 0f..1f,
@@ -1132,7 +1201,7 @@ private fun InlineColorRow(
                 Spacer(Modifier.height(6.dp))
             }
         }
-        SettingDivider(colors)
+        if (showDivider) SettingDivider(colors)
     }
 }
 
@@ -1175,7 +1244,7 @@ private fun GradientSlider(
     val span = (range.endInclusive - range.start).takeIf { it > 0f } ?: 1f
     val frac = ((value - range.start) / span).coerceIn(0f, 1f)
     val thumbD = 22.dp
-    val thumbPx = with(androidx.compose.ui.platform.LocalDensity.current) { thumbD.toPx() }
+    val thumbPx = with(LocalDensity.current) { thumbD.toPx() }
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -1227,10 +1296,6 @@ private fun hsvOf(argb: Long): FloatArray {
     android.graphics.Color.colorToHSV(argb.toInt(), out)
     return out
 }
-
-// =====================================================================
-// iOS 液态玻璃开关
-// =====================================================================
 
 @Composable
 private fun LiquidSwitch(
@@ -1286,12 +1351,8 @@ private fun LiquidSwitch(
     }
 }
 
-// =====================================================================
-// 悬浮歌词（固定位置 / 颜色 改为开关+内联选项）
-// =====================================================================
-
 @Composable
-private fun FloatingLyricGroup(colors: IrisColors) {
+private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyle) {
     val ctx = LocalContext.current
     val prefs = ctx.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
 
@@ -1337,6 +1398,7 @@ private fun FloatingLyricGroup(colors: IrisColors) {
     SettingSwitchRow(
         "桌面悬浮歌词",
         checked = enabled,
+        surfaceStyle = surfaceStyle,
         showDivider = true,
         colors = colors
     ) {
@@ -1350,11 +1412,12 @@ private fun FloatingLyricGroup(colors: IrisColors) {
             SettingActionRow(
                 title = "授予悬浮窗权限",
                 trailingText = "去授权",
+                surfaceStyle = surfaceStyle,
                 colors = colors
             ) { FloatingLyric.requestPermission(ctx) }
         }
 
-        SettingSwitchRow("逐字流光", checked = karaoke, colors = colors) {
+        SettingSwitchRow("逐字流光", checked = karaoke, surfaceStyle = surfaceStyle, colors = colors) {
             karaoke = !karaoke; writeBool(FloatingLyric.KEY_KARAOKE, karaoke)
         }
 
@@ -1363,6 +1426,7 @@ private fun FloatingLyricGroup(colors: IrisColors) {
             checked = fixed,
             options = listOf("居中", "完全固定"),
             selectedIndex = fixMode,
+            surfaceStyle = surfaceStyle,
             colors = colors,
             onToggle = { fixed = it; writeBool(FloatingLyric.KEY_FIXED, it) },
             onSelect = { fixMode = it; writeInt(FloatingLyric.KEY_FIX_MODE, it) }
@@ -1374,7 +1438,8 @@ private fun FloatingLyricGroup(colors: IrisColors) {
             checked = useCustomColor,
             options = themeOptions.map { it.label },
             selectedIndex = themeOptions.indexOf(floatTheme),
-            optionDots = themeOptions.map { it.resolvedPair(colors.isDark) },
+            surfaceStyle = surfaceStyle,
+            showDivider = !(useCustomColor && floatTheme == IrisTheme.CUSTOM),
             colors = colors,
             onToggle = { useCustomColor = it; writeBool(FloatingLyric.KEY_USE_CUSTOM, it) },
             onSelect = { index ->
@@ -1388,14 +1453,16 @@ private fun FloatingLyricGroup(colors: IrisColors) {
                 title = "自定义悬浮歌词色",
                 primaryArgb = customPrimary,
                 secondaryArgb = customSecondary,
-                colors = colors
-            ) { p, s ->
-                customPrimary = p; customSecondary = s
-                prefs.edit()
-                    .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
-                    .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
-                    .apply()
-            }
+                surfaceStyle = surfaceStyle,
+                colors = colors,
+                onColorsChange = { p, s ->
+                    customPrimary = p; customSecondary = s
+                    prefs.edit()
+                        .putLong(FloatingLyric.KEY_CUSTOM_PRIMARY, p)
+                        .putLong(FloatingLyric.KEY_CUSTOM_SECONDARY, s)
+                        .apply()
+                }
+            )
         }
 
         InlineSliderRow(
@@ -1403,6 +1470,7 @@ private fun FloatingLyricGroup(colors: IrisColors) {
             value = font,
             valueRange = 12f..40f,
             valueFormat = { "${it.toInt()}" },
+            surfaceStyle = surfaceStyle,
             colors = colors
         ) { font = it; writeFloat(FloatingLyric.KEY_FONT, it) }
 
@@ -1411,6 +1479,7 @@ private fun FloatingLyricGroup(colors: IrisColors) {
             value = widthFrac,
             valueRange = 0.3f..1f,
             valueFormat = { "${(it * 100).toInt()}%" },
+            surfaceStyle = surfaceStyle,
             colors = colors
         ) { widthFrac = it; writeFloat(FloatingLyric.KEY_WIDTH, it) }
 
@@ -1419,6 +1488,8 @@ private fun FloatingLyricGroup(colors: IrisColors) {
             value = bg,
             valueRange = 0f..1f,
             valueFormat = { "${(it * 100).toInt()}%" },
+            surfaceStyle = surfaceStyle,
+            showDivider = false,
             colors = colors
         ) { bg = it; writeFloat(FloatingLyric.KEY_BG, it) }
     }
