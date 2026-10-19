@@ -138,12 +138,28 @@ internal fun SettingsPanel(
 
                 AnimatedVisibility(visible = state.surfaceStyle != IrisSurfaceStyle.SOLID) {
                     Column(Modifier.padding(top = 12.dp)) {
-                        CompactSlider(value = state.glassBlur, onValueChange = { viewModel.setGlassBlur(it) }, valueRange = GLASS_BLUR_MIN..GLASS_BLUR_MAX, activeColor = colors.primary, inactiveColor = colors.surface)
+                        SettingsSliderWithLabel(
+                            label = "玻璃模糊度",
+                            value = state.glassBlur,
+                            valueRange = GLASS_BLUR_MIN..GLASS_BLUR_MAX,
+                            valueText = "${state.glassBlur.toInt()}",
+                            activeColor = colors.primary,
+                            inactiveColor = colors.surface,
+                            onValueChange = { viewModel.setGlassBlur(it) }
+                        )
                     }
                 }
 
                 Column(Modifier.padding(top = 14.dp)) {
-                    CompactSlider(value = state.bgBlur, onValueChange = { viewModel.setBgBlur(it) }, valueRange = BG_BLUR_MIN..BG_BLUR_MAX, activeColor = colors.primary, inactiveColor = colors.surface)
+                    SettingsSliderWithLabel(
+                        label = "背景模糊度",
+                        value = state.bgBlur,
+                        valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
+                        valueText = "${state.bgBlur.toInt()}",
+                        activeColor = colors.primary,
+                        inactiveColor = colors.surface,
+                        onValueChange = { viewModel.setBgBlur(it) }
+                    )
                 }
 
                 Spacer(Modifier.height(14.dp))
@@ -165,11 +181,28 @@ internal fun SettingsPanel(
                 }
 
                 Spacer(Modifier.height(14.dp))
-                CompactSlider(value = state.cornerBase, onValueChange = { viewModel.setCornerBase(it) }, valueRange = 0f..44f, activeColor = colors.primary, inactiveColor = colors.surface)
+                SettingsSliderWithLabel(
+                    label = "界面圆角大小",
+                    value = state.cornerBase,
+                    valueRange = 0f..44f,
+                    valueText = "${state.cornerBase.toInt()} dp",
+                    activeColor = colors.primary,
+                    inactiveColor = colors.surface,
+                    onValueChange = { viewModel.setCornerBase(it) }
+                )
 
                 Spacer(Modifier.height(14.dp))
                 var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
-                CompactSlider(value = pendingFontScale, onValueChange = { pendingFontScale = it }, onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) }, valueRange = 0.85f..1.30f, activeColor = colors.primary, inactiveColor = colors.surface)
+                SettingsSliderWithLabel(
+                    label = "全局字体缩放",
+                    value = pendingFontScale,
+                    valueRange = 0.85f..1.30f,
+                    valueText = "${(pendingFontScale * 100).toInt()}%",
+                    activeColor = colors.primary,
+                    inactiveColor = colors.surface,
+                    onValueChange = { pendingFontScale = it },
+                    onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) }
+                )
 
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -212,7 +245,15 @@ internal fun SettingsPanel(
                 SettingToggleRow("淡入淡出", checked = state.fadeEnabled, subtitle = "播放和暂停时音量平缓过渡", colors = colors) { viewModel.setFadeEnabled(!state.fadeEnabled) }
                 AnimatedVisibility(visible = state.fadeEnabled) {
                     Column(Modifier.padding(top = 8.dp)) {
-                        CompactSlider(value = state.fadeMs.toFloat(), onValueChange = { viewModel.setFadeMs(it.toLong()) }, valueRange = 500f..5000f, activeColor = colors.primary, inactiveColor = colors.surface)
+                        SettingsSliderWithLabel(
+                            label = "淡入淡出时长",
+                            value = state.fadeMs.toFloat(),
+                            valueRange = 500f..5000f,
+                            valueText = String.format(java.util.Locale.US, "%.1f s", state.fadeMs / 1000f),
+                            activeColor = colors.primary,
+                            inactiveColor = colors.surface,
+                            onValueChange = { viewModel.setFadeMs(it.toLong()) }
+                        )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -251,7 +292,15 @@ internal fun SettingsPanel(
                     ModeSwatch("衬线字体", state.lyricFont == 1, colors, Modifier.weight(1f)) { viewModel.setLyricFont(1) }
                 }
                 Spacer(Modifier.height(8.dp))
-                CompactSlider(value = state.lyricFontSize, onValueChange = { viewModel.setLyricFontSize(it) }, valueRange = 14f..32f, activeColor = colors.primary, inactiveColor = colors.surface)
+                SettingsSliderWithLabel(
+                    label = "歌词字体大小",
+                    value = state.lyricFontSize,
+                    valueRange = 14f..32f,
+                    valueText = "${state.lyricFontSize.toInt()}",
+                    activeColor = colors.primary,
+                    inactiveColor = colors.surface,
+                    onValueChange = { viewModel.setLyricFontSize(it) }
+                )
                 Spacer(Modifier.height(8.dp))
                 FloatingLyricSection(colors, headerColor)
             }
@@ -270,14 +319,30 @@ internal fun SettingsPanel(
                             ModeSwatch("重击", state.bassHapticsIntensity == 2, colors, Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(2) }
                         }
                         Spacer(Modifier.height(8.dp))
-                        CompactSlider(value = (state.bassHapticsLowCutoff - 120) / 200f, onValueChange = { val hz = (120 + (it * 200f)).toInt().let { v -> (v / 10) * 10 }.coerceIn(120, 320); viewModel.setBassHapticsLowCutoff(hz) }, valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
+                        SettingsSliderWithLabel(
+                            label = "低频截止频率",
+                            value = (state.bassHapticsLowCutoff - 120) / 200f,
+                            valueRange = 0f..1f,
+                            valueText = "${state.bassHapticsLowCutoff} Hz",
+                            activeColor = colors.primary,
+                            inactiveColor = colors.surface,
+                            onValueChange = { val hz = (120 + (it * 200f)).toInt().let { v -> (v / 10) * 10 }.coerceIn(120, 320); viewModel.setBassHapticsLowCutoff(hz) }
+                        )
                     }
                 }
             }
 
             // ==================== 推荐 ====================
             CollapsibleSection("推荐", colors, isExpanded = expandedSection == "推荐", onToggle = { expandedSection = if (expandedSection == "推荐") null else "推荐" }) {
-                CompactSlider(value = state.exploration, onValueChange = { viewModel.setExploration(it) }, valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
+                SettingsSliderWithLabel(
+                    label = "推荐探索度",
+                    value = state.exploration,
+                    valueRange = 0f..1f,
+                    valueText = "${(state.exploration * 100).toInt()}%",
+                    activeColor = colors.primary,
+                    inactiveColor = colors.surface,
+                    onValueChange = { viewModel.setExploration(it) }
+                )
                 Spacer(Modifier.height(8.dp))
                 SettingToggleRow("歌单页显示推荐区", checked = state.showRecommendations, subtitle = "在歌曲列表顶部显示系统推荐的歌曲", colors = colors) { viewModel.setShowRecommendations(!state.showRecommendations) }
             }
@@ -344,6 +409,38 @@ internal fun SettingsPanel(
             Text("完成", color = colors.primary.readableTextOn(), fontSize = 15.sp, fontWeight = FontWeight.Black)
         }
         Spacer(Modifier.height(18.dp))
+    }
+}
+
+// ==================== 新增：带有标签和数值的滑条 ====================
+@Composable
+private fun SettingsSliderWithLabel(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    valueText: String,
+    activeColor: Color,
+    inactiveColor: Color,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: (() -> Unit)? = null
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, color = inactiveColor.copy(alpha = 0.7f), fontSize = 11.sp)
+            Text(valueText, color = inactiveColor.copy(alpha = 0.7f), fontSize = 11.sp)
+        }
+        CompactSlider(
+            value = value,
+            onValueChange = onValueChange,
+            onValueChangeFinished = onValueChangeFinished,
+            valueRange = valueRange,
+            activeColor = activeColor,
+            inactiveColor = inactiveColor
+        )
     }
 }
 
@@ -511,11 +608,35 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(8.dp))
-            CompactSlider(value = font, onValueChange = { font = it; writeFloat(FloatingLyric.KEY_FONT, it) }, valueRange = 12f..40f, activeColor = colors.primary, inactiveColor = colors.surface)
+            SettingsSliderWithLabel(
+                label = "悬浮歌词字号",
+                value = font,
+                valueRange = 12f..40f,
+                valueText = "${font.toInt()}",
+                activeColor = colors.primary,
+                inactiveColor = colors.surface,
+                onValueChange = { font = it; writeFloat(FloatingLyric.KEY_FONT, it) }
+            )
             Spacer(Modifier.height(8.dp))
-            CompactSlider(value = widthFrac, onValueChange = { widthFrac = it; writeFloat(FloatingLyric.KEY_WIDTH, it) }, valueRange = 0.3f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
+            SettingsSliderWithLabel(
+                label = "悬浮歌词宽度",
+                value = widthFrac,
+                valueRange = 0.3f..1f,
+                valueText = "${(widthFrac * 100).toInt()}%",
+                activeColor = colors.primary,
+                inactiveColor = colors.surface,
+                onValueChange = { widthFrac = it; writeFloat(FloatingLyric.KEY_WIDTH, it) }
+            )
             Spacer(Modifier.height(8.dp))
-            CompactSlider(value = bg, onValueChange = { bg = it; writeFloat(FloatingLyric.KEY_BG, it) }, valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
+            SettingsSliderWithLabel(
+                label = "背景透明度",
+                value = bg,
+                valueRange = 0f..1f,
+                valueText = "${(bg * 100).toInt()}%",
+                activeColor = colors.primary,
+                inactiveColor = colors.surface,
+                onValueChange = { bg = it; writeFloat(FloatingLyric.KEY_BG, it) }
+            )
         }
     }
 }
@@ -610,11 +731,35 @@ private fun CustomColorSection(primaryArgb: Long, secondaryArgb: Long, colors: I
         ColorPreviewBox(argbOf(secondaryHsv), "次色", editSecondary, colors, Modifier.weight(1f)) { editSecondary = true }
     }
     Spacer(Modifier.height(12.dp))
-    CompactSlider(value = activeHsv[0], onValueChange = { onSlider(0, it) }, valueRange = 0f..360f, activeColor = colors.primary, inactiveColor = colors.surface)
+    SettingsSliderWithLabel(
+        label = "色相",
+        value = activeHsv[0],
+        valueRange = 0f..360f,
+        valueText = "${activeHsv[0].toInt()}°",
+        activeColor = colors.primary,
+        inactiveColor = colors.surface,
+        onValueChange = { onSlider(0, it) }
+    )
     Spacer(Modifier.height(8.dp))
-    CompactSlider(value = activeHsv[1], onValueChange = { onSlider(1, it) }, valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
+    SettingsSliderWithLabel(
+        label = "饱和度",
+        value = activeHsv[1],
+        valueRange = 0f..1f,
+        valueText = "${(activeHsv[1] * 100).toInt()}%",
+        activeColor = colors.primary,
+        inactiveColor = colors.surface,
+        onValueChange = { onSlider(1, it) }
+    )
     Spacer(Modifier.height(8.dp))
-    CompactSlider(value = activeHsv[2], onValueChange = { onSlider(2, it) }, valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
+    SettingsSliderWithLabel(
+        label = "明度",
+        value = activeHsv[2],
+        valueRange = 0f..1f,
+        valueText = "${(activeHsv[2] * 100).toInt()}%",
+        activeColor = colors.primary,
+        inactiveColor = colors.surface,
+        onValueChange = { onSlider(2, it) }
+    )
 }
 
 @Composable
