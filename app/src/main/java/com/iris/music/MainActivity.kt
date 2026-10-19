@@ -11,10 +11,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
@@ -61,56 +61,71 @@ class MainActivity : ComponentActivity() {
                     fontScale = baseDensity.fontScale * state.fontScale
                 )
             ) {
-            IRISMusicTheme(
-                theme = state.theme,
-                mode = state.mode,
-                cornerBase = state.cornerBase,
-                surfaceStyle = state.surfaceStyle,
-                glassBlur = state.glassBlur,
-                uiFont = state.uiFont
-            ) {
-                var showSplash by remember { mutableStateOf(state.splashEnabled) }
-                
-                val colors = state.theme.colors(
-                    state.mode, state.systemDark,
-                    customPrimary = androidx.compose.ui.graphics.Color(state.customPrimaryArgb),
-                    customSecondary = androidx.compose.ui.graphics.Color(state.customSecondaryArgb)
-                )
-
-                Box(Modifier.fillMaxSize()) {
-                    // 主界面的入场动画参数
-                    val mainAlpha by animateFloatAsState(if (showSplash) 0f else 1f, tween(800, easing = FastOutSlowInEasing))
-                    val mainOffset by animateDpAsState(if (showSplash) 80.dp else 0.dp, tween(800, easing = FastOutSlowInEasing))
-                    val mainBlur by animateDpAsState(if (showSplash) 20.dp else 0.dp, tween(800, easing = FastOutSlowInEasing))
-
-                    MainScreen(
-                        state = state,
-                        viewModel = viewModel,
-                        onToggle = viewModel::togglePlay,
-                        onPrev = viewModel::previous,
-                        onNext = viewModel::next,
-                        onSeek = viewModel::seekTo,
-                        onSelect = viewModel::playAt,
-                        onSearch = viewModel::updateSearch,
-                        onToggleLike = viewModel::toggleLike,
-                        onCyclePlayMode = viewModel::cyclePlayMode,
-                        onToggleSettings = viewModel::toggleSettings,
-                        modifier = Modifier
-                            .graphicsLayer {
-                                alpha = mainAlpha
-                                translationY = mainOffset.toPx()
-                            }
-                            .blur(mainBlur)
+                IRISMusicTheme(
+                    theme = state.theme,
+                    mode = state.mode,
+                    cornerBase = state.cornerBase,
+                    surfaceStyle = state.surfaceStyle,
+                    glassBlur = state.glassBlur,
+                    uiFont = state.uiFont
+                ) {
+                    var showSplash by remember { mutableStateOf(state.splashEnabled) }
+                    
+                    val colors = state.theme.colors(
+                        state.mode, state.systemDark,
+                        customPrimary = androidx.compose.ui.graphics.Color(state.customPrimaryArgb),
+                        customSecondary = androidx.compose.ui.graphics.Color(state.customSecondaryArgb)
                     )
-                    if (showSplash) {
-                        SplashScreen(
-                            style = state.splashStyle,
-                            isDark = colors.isDark,
-                            onFinished = { showSplash = false }
+
+                    Box(Modifier.fillMaxSize()) {
+                        // 主界面的入场动画参数
+                        val mainAlpha by animateFloatAsState(
+                            targetValue = if (showSplash) 0f else 1f,
+                            animationSpec = tween(600, easing = FastOutSlowInEasing),
+                            label = "mainAlpha"
                         )
+                        // 从下方 80dp 快速向上滑动，结束时停留在 0
+                        val mainOffset by animateDpAsState(
+                            targetValue = if (showSplash) 80.dp else 0.dp,
+                            animationSpec = tween(600, easing = FastOutSlowInEasing),
+                            label = "mainOffset"
+                        )
+                        // 滑动时带有轻微的模糊淡入效果
+                        val mainBlur by animateDpAsState(
+                            targetValue = if (showSplash) 15.dp else 0.dp,
+                            animationSpec = tween(600, easing = FastOutSlowInEasing),
+                            label = "mainBlur"
+                        )
+
+                        MainScreen(
+                            state = state,
+                            viewModel = viewModel,
+                            onToggle = viewModel::togglePlay,
+                            onPrev = viewModel::previous,
+                            onNext = viewModel::next,
+                            onSeek = viewModel::seekTo,
+                            onSelect = viewModel::playAt,
+                            onSearch = viewModel::updateSearch,
+                            onToggleLike = viewModel::toggleLike,
+                            onCyclePlayMode = viewModel::cyclePlayMode,
+                            onToggleSettings = viewModel::toggleSettings,
+                            modifier = Modifier
+                                .graphicsLayer {
+                                    alpha = mainAlpha
+                                    translationY = mainOffset.toPx()
+                                }
+                                .blur(mainBlur)
+                        )
+
+                        if (showSplash) {
+                            SplashScreen(
+                                style = state.splashStyle,
+                                isDark = colors.isDark,
+                                onFinished = { showSplash = false }
+                            )
+                        }
                     }
                 }
-            }
             }
         }
     }
