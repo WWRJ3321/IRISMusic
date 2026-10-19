@@ -370,6 +370,8 @@ fun SongDeck(
                 lyricCustomPrimary = state.lyricCustomPrimary,
                 lyricCustomSecondary = state.lyricCustomSecondary,
                 onDismiss = { showLyrics = false }
+                showTranslation = state.showTranslationLyric,
+                songId = state.currentSong?.id ?: 0L
             )
         }
     }
