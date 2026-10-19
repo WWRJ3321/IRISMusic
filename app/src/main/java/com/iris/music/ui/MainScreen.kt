@@ -214,7 +214,14 @@ fun MainScreen(
                                 onSettings = { onToggleSettings(true) }, onReport = { viewModel.toggleReport(true) }, onReload = { viewModel.reloadLibrary() },
                                 onCycleLayout = { viewModel.setLayout(state.layout.next) }, onOpenPlaylists = { showPlaylists = true },
                                 onSortOrder = viewModel::setSortOrder, onSortDirection = viewModel::setSortDirection,
-                                onAddToPlaylist = { song -> pendingAddSong = song }, scrollerDragging = scrollerDragging, showCount = showCountLabel
+                                onAddToPlaylist = { song -> 
+                                    if (state.isOnlineMode) {
+                                        viewModel.removeOnlineSong(song.id) // 在线模式长按删除
+                                    } else {
+                                        pendingAddSong = song // 本地模式长按加歌单
+                                    }
+                                }, 
+                                scrollerDragging = scrollerDragging, showCount = showCountLabel
                             )
                             1 -> PlayerPage(
                                 state = state, colors = colors, viewModel = viewModel, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek,
@@ -435,34 +442,75 @@ private fun LibraryPage(
 
     Box(Modifier.fillMaxSize().pointerInput(searchFocused) { if (!searchFocused) return@pointerInput; awaitEachGesture { val down = awaitFirstDown(requireUnconsumed = false); if (!searchBounds.value.contains(down.position)) focusManager.clearFocus() } }) {
         val recPool = remember(state.allSongs, state.selectedFolders) { val sel = state.selectedFolders; if (sel.isEmpty()) state.allSongs else state.allSongs.filter { it.folderPath in sel } }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize().then(if (glass) Modifier.irisBackdropSource(listBackdrop) else if (frosted) Modifier.haze(state = hazeState, style = HazeStyle(blurRadius = frostedBlur)) else Modifier).graphicsLayer { translationY = refreshOffset }.nestedScroll(scrollConnection),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = with(density) { statusBarHeightDp.toDp() + barTopGap + barHeight.value.toDp() + 8.dp }, bottom = 50.dp)
-        ) {
-            if (recPool.isNotEmpty() && state.searchQuery.isBlank() && state.showRecommendations) {
-                item {
-                    Crossfade(targetState = state.recommendationsVersion to state.recommendations, animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut), label = "recommendationFade") { (_, recs) ->
-                        if (recs.isNotEmpty()) {
-                            // === 恢复为你原本的高级横滑组件 ===
-                            RecommendationSection(
-                                recommendations = recs, 
-                                colors = colors, 
-                                showArtist = state.showRowArtist, 
-                                onSelect = onPlaySong
-                            )
-                        } else { Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) { Text("推荐中…", color = colors.subText, fontSize = 12.sp) } }
+        
+        // === 核心改动：在线 vs 本地列表 ===
+        val displayList = if (state.isOnlineMode) {
+            if (state.searchQuery.isNotBlank()) state.onlineSearchResults else state.queue
+        } else {
+            state.queue
+        }
+
+        if (state.isOnlineMode && displayList.isEmpty() && state.searchQuery.isBlank()) {
+            // 在线模式下的空页面
+            Box(Modifier.fillMaxSize().padding(top = 120.dp), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("搜索全网音乐", color = colors.subText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Text("在上方搜索框中输入歌名或歌手", color = colors.subText.copy(alpha = 0.7f), fontSize = 12.sp)
+                    if (state.onlineSearchLoading) {
+                        Spacer(Modifier.height(16.dp))
+                        CircularProgressIndicator(color = colors.primary, modifier = Modifier.size(24.dp))
                     }
                 }
             }
-            itemsIndexed(state.queue, key = { _, song -> "song-${song.id}" }) { index, song ->
-                SongRow(
-                    song = song, active = index == state.currentIndex, colors = colors, rowSize = state.rowSize, showCover = state.showRowCover, showArtist = state.showRowArtist, showPlaylist = state.showRowPlaylist, showLikedBadge = state.showLikedBadge, liked = song.id in state.likedSongIds, playlistNames = Playlists.playlistsOfSong(song.id),
-                    onClick = { onSelect(index) }, onLongPress = { onAddToPlaylist(song) }
-                )
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize()
+                    .then(if (glass) Modifier.irisBackdropSource(listBackdrop) else if (frosted) Modifier.haze(state = hazeState, style = HazeStyle(blurRadius = frostedBlur)) else Modifier)
+                    .graphicsLayer { translationY = refreshOffset }
+                    .nestedScroll(scrollConnection),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = with(density) { statusBarHeightDp.toDp() + barTopGap + barHeight.value.toDp() + 8.dp }, bottom = 50.dp)
+            ) {
+                // 1. 推荐区（本地和在线都会显示）
+                if (state.searchQuery.isBlank() && state.showRecommendations && state.recommendations.isNotEmpty()) {
+                    item {
+                        Crossfade(targetState = state.recommendationsVersion to state.recommendations, animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut), label = "recommendationFade") { (_, recs) ->
+                            if (recs.isNotEmpty()) {
+                                RecommendationSection(recommendations = recs, colors = colors, showArtist = state.showRowArtist, onSelect = onPlaySong)
+                            }
+                        }
+                    }
+                }
+                
+                // 2. 列表区
+                itemsIndexed(displayList, key = { _, song -> "song-${song.id}" }) { index, song ->
+                    SongRow(
+                        song = song, 
+                        active = index == state.currentIndex, 
+                        colors = colors, 
+                        rowSize = state.rowSize, 
+                        showCover = state.showRowCover, 
+                        showArtist = state.showRowArtist, 
+                        showPlaylist = state.showRowPlaylist, 
+                        showLikedBadge = state.showLikedBadge, 
+                        liked = song.id in state.likedSongIds, 
+                        playlistNames = Playlists.playlistsOfSong(song.id),
+                        onClick = { 
+                            if (state.isOnlineMode && state.searchQuery.isNotBlank()) {
+                                // 在线搜索结果点击播放
+                                onPlaySong(song)
+                            } else {
+                                onSelect(index) 
+                            }
+                        }, 
+                        onLongPress = { onAddToPlaylist(song) }
+                    )
+                }
             }
         }
+
         val refreshProgress = (refreshOffset / refreshTriggerPx).coerceIn(0f, 1f)
         if (refreshOffset > 0.5f) {
             val spin by rememberInfiniteTransition(label = "pullSpin").animateFloat(initialValue = 0f, targetValue = 360f, animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)), label = "pullSpinValue")
