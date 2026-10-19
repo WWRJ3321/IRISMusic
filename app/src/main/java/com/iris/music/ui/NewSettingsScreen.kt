@@ -78,11 +78,9 @@ internal fun NewSettingsPanel(
     var transferStatus by remember { mutableStateOf("") }
     var transferBusy by remember { mutableStateOf(false) }
 
-    // === 手风琴展开状态 ===
     var expandedKey by remember { mutableStateOf<String?>(null) }
 
-    // === 滚动边界震动反馈 ===
-    var lastEdgeState by remember { mutableStateOf(0) } // 0 none, 1 top, 2 bottom
+    var lastEdgeState by remember { mutableStateOf(0) }
     LaunchedEffect(scrollState.value, scrollState.maxValue) {
         if (scrollState.maxValue > 0) {
             if (scrollState.value == 0 && lastEdgeState != 1) {
@@ -622,12 +620,21 @@ internal fun NewSettingsPanel(
                     subtitle = "关闭后使用经典列表样式",
                     checked = !state.useNewSettingsStyle,
                     surfaceStyle = state.surfaceStyle,
-                    showDivider = false,
+                    showDivider = true,
                     colors = colors
                 ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
+                
+                // ===== 新增：切换服务器音乐 =====
+                SettingSwitchRow(
+                    "切换服务器音乐",
+                    subtitle = "开启后清空本地列表，搜索全网音乐",
+                    checked = state.isOnlineMode,
+                    surfaceStyle = state.surfaceStyle,
+                    showDivider = false,
+                    colors = colors
+                ) { viewModel.setOnlineMode(!state.isOnlineMode) }
             }
 
-            // 底部留白极小，让内容贴底
             Spacer(Modifier.height(30.dp)) 
         }
 
