@@ -21,10 +21,9 @@ import com.iris.music.playback.SleepTimer
 import com.iris.music.ui.ArtworkLoader
 import com.iris.music.ui.Haptics
 import com.iris.music.ui.theme.*
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import java.net.URL
 import java.net.URLEncoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -152,7 +151,24 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val httpClient = OkHttpClient()
+
+    // 原生网络请求工具，替代 OkHttp，免加依赖
+    private fun fetchUrl(urlStr: String): String? {
+        return try {
+            val url = URL(urlStr)
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            val inputStream = conn.inputStream
+            val result = inputStream.bufferedReader().use { it.readText() }
+            conn.disconnect()
+            result
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
 
     private val _state = MutableStateFlow(
         PlayerUiState(
@@ -347,8 +363,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         try {
             val encoded = URLEncoder.encode(keyword, "UTF-8")
             val url = "$API_BASE_URL/search?keywords=$encoded"
-            val response = httpClient.newCall(Request.Builder().url(url).build()).execute()
-            val jsonString = response.body?.string() ?: return@withContext emptyList()
+            val jsonString = fetchUrl(url) ?: return@withContext emptyList()
             val jsonObject = JSONObject(jsonString)
             val resultObj = jsonObject.optJSONObject("result")
             val songsArray = resultObj?.optJSONArray("songs")
@@ -374,10 +389,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadOnlineRecommendations() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 网易云热歌榜 ID: 3778678
                 val url = "$API_BASE_URL/playlist/detail?id=3778678"
-                val response = httpClient.newCall(Request.Builder().url(url).build()).execute()
-                val jsonString = response.body?.string() ?: return@launch
+                val jsonString = fetchUrl(url) ?: return@launch
                 val jsonObject = JSONObject(jsonString)
                 val playlist = jsonObject.optJSONObject("playlist")
                 val tracks = playlist?.optJSONArray("tracks")
@@ -407,8 +420,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 // 1. 获取播放链接
                 val url = "$API_BASE_URL/song/url?id=${song.id}"
-                val response = httpClient.newCall(Request.Builder().url(url).build()).execute()
-                val jsonString = response.body?.string() ?: return@launch
+                val jsonString = fetchUrl(url) ?: return@launch
                 val jsonObject = JSONObject(jsonString)
                 val dataArray = jsonObject.optJSONArray("data")
                 val audioUrl = dataArray?.optJSONObject(0)?.optString("url")
@@ -418,19 +430,21 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     var finalFilePath = song.filePath
                     try {
                         val lyricUrl = "$API_BASE_URL/lyric?id=${song.id}"
-                        val lyricRes = httpClient.newCall(Request.Builder().url(lyricUrl).build()).execute()
-                        val lyricJson = JSONObject(lyricRes.body?.string() ?: "")
-                        val lrcObj = lyricJson.optJSONObject("lrc")
-                        val lyricText = lrcObj?.optString("lyric")
-                        
-                        if (!lyricText.isNullOrEmpty()) {
-                            val cacheDir = File(getApplication<Application>().cacheDir, "online_lyrics")
-                            if (!cacheDir.exists()) cacheDir.mkdirs()
-                            val lyricFile = File(cacheDir, "online_${song.id}.lrc")
-                            lyricFile.writeText(lyricText)
+                        val lyricJsonString = fetchUrl(lyricUrl)
+                        if (lyricJsonString != null) {
+                            val lyricJson = JSONObject(lyricJsonString)
+                            val lrcObj = lyricJson.optJSONObject("lrc")
+                            val lyricText = lrcObj?.optString("lyric")
                             
-                            // 把歌词的绝对路径替换给 filePath
-                            finalFilePath = lyricFile.absolutePath
+                            if (!lyricText.isNullOrEmpty()) {
+                                val cacheDir = File(getApplication<Application>().cacheDir, "online_lyrics")
+                                if (!cacheDir.exists()) cacheDir.mkdirs()
+                                val lyricFile = File(cacheDir, "online_${song.id}.lrc")
+                                lyricFile.writeText(lyricText)
+                                
+                                // 把歌词的绝对路径替换给 filePath
+                                finalFilePath = lyricFile.absolutePath
+                            }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace() // 歌词下载失败不影响播放
@@ -453,10 +467,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         _state.value = _state.value.copy(queue = currentQueue)
                         
-                        // 5. 播放 (修复了 setUri 的类型报错)
+                        // 5. 播放
                         val mediaItem = MediaItem.Builder()
                             .setMediaId(playSong.id.toString())
-                            .setUri(android.net.Uri.parse(audioUrl)) // 类型强转
+                            .setUri(android.net.Uri.parse(audioUrl))
                             .setMediaMetadata(
                                 MediaMetadata.Builder()
                                     .setTitle(playSong.title)
