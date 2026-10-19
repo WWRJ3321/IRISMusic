@@ -9,7 +9,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.focus.FocusRequester
@@ -17,25 +16,19 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -45,7 +38,6 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
@@ -66,7 +58,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.draw.drawWithContent
@@ -78,9 +69,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,22 +76,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
-import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
-import com.iris.music.data.MusicFolder
 import com.iris.music.data.LyricLine
 import com.iris.music.data.LyricParser
 import com.iris.music.data.RepeatMode
-import com.iris.music.data.Playlist
 import com.iris.music.data.Playlists
 import com.iris.music.data.Song
 import com.iris.music.data.SortDirection
 import com.iris.music.data.SortOrder
 import com.iris.music.data.formatLabel
-import com.iris.music.player.MusicComment
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
-import com.iris.music.player.TopListInfo
 import com.iris.music.ui.theme.*
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
@@ -116,7 +99,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     state: PlayerUiState,
@@ -164,7 +147,6 @@ fun MainScreen(
     var showPlaylists by remember { mutableStateOf(false) }
     var pendingAddSong by remember { mutableStateOf<Song?>(null) }
     
-    // ===== 新增：弹窗状态 =====
     var showTopListSheet by remember { mutableStateOf(false) }
     var showCommentsSheet by remember { mutableStateOf(false) }
 
@@ -228,7 +210,6 @@ fun MainScreen(
                                 onCycleLayout = { viewModel.setLayout(state.layout.next) }, onOpenPlaylists = { showPlaylists = true },
                                 onSortOrder = viewModel::setSortOrder, onSortDirection = viewModel::setSortDirection,
                                 onAddToPlaylist = { song -> 
-                                    // 在线模式长按删除，本地模式长按加歌单
                                     if (state.isOnlineMode) viewModel.removeOnlineSong(song.id) else pendingAddSong = song
                                 }, 
                                 onOpenTopLists = { showTopListSheet = true },
@@ -577,7 +558,6 @@ private fun LibraryPage(
                                 Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                // ===== 网络模式下的排行榜按钮 =====
                                 if (state.isOnlineMode) {
                                     Box(Modifier.size(34.dp).clip(IrisShape.chip).background(colors.primary.copy(alpha=0.15f)).clickable { onOpenTopLists() }, contentAlignment = Alignment.Center) {
                                         Text("榜", color = colors.primary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
@@ -623,6 +603,7 @@ private fun LibraryPage(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerPage(
     state: PlayerUiState, colors: IrisColors, viewModel: PlayerViewModel, onToggle: () -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onSeek: (Float) -> Unit, 
@@ -657,13 +638,13 @@ private fun PlayerPage(
                 artist = state.currentSong?.artist ?: "", 
                 positionMs = state.positionMs, durationMs = state.durationMs, shuffle = state.shuffle, repeatMode = state.repeatMode, 
                 artworkPath = state.currentSong?.filePath, 
-                artworkUri = state.currentSong?.albumArtUri, // 传入网络封面
+                artworkUri = state.currentSong?.albumArtUri, 
                 progress = state.progress, isPlaying = state.isPlaying, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek, onCyclePlayMode = onCyclePlayMode, 
                 onToggleLike = { state.currentSong?.let { onToggleLike(it.id) } }, liked = state.currentSong?.id in state.likedSongIds, onClickArtwork = onClickArtwork, colors = colors, modifier = Modifier, 
                 sleepTimerMs = state.sleepTimerMs, sleepTimerEndMs = state.sleepTimerEndMs, onOpenSleepTimer = onOpenSleepTimer, onOpenEqualizer = onOpenEqualizer, eqActive = eqActive, 
                 audioFormat = state.currentSong?.formatLabel ?: "", visualizerEnabled = state.visualizerEnabled, tiltSpectrum = state.tiltSpectrum, coverShakeEnabled = state.coverShake, coverLyricEnabled = state.coverLyric, 
                 onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
-                onOpenComments = onOpenComments // 传入评论事件
+                onOpenComments = onOpenComments 
             )
         }
         if (showLyrics) {
@@ -672,15 +653,11 @@ private fun PlayerPage(
                 lyricAlign = state.lyricAlign, lyricFont = state.lyricFont, lyricFontSize = state.lyricFontSize, karaoke = state.karaokeLyric, lyricUseCustomColor = state.lyricUseCustomColor, lyricTheme = state.lyricTheme, lyricCustomPrimary = state.lyricCustomPrimary, lyricCustomSecondary = state.lyricCustomSecondary, 
                 onDismiss = { showLyrics = false },
                 showTranslation = state.showTranslationLyric,
-                songId = state.currentSong?.id ?: 0L // 供解析器寻找翻译
+                songId = state.currentSong?.id ?: 0L 
             )
         }
     }
 }
-
-// =========================================================================
-// 内部的 PlayerCard 和 LyricsOverlay 实现
-// =========================================================================
 
 @Composable
 internal fun PlayerCard(
@@ -702,7 +679,6 @@ internal fun PlayerCard(
             .padding(24.dp)
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            // 封面
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -724,7 +700,6 @@ internal fun PlayerCard(
 
             Spacer(Modifier.height(24.dp))
 
-            // 信息
             Text(title, color = colors.text, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
             Text(artist, color = colors.subText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -738,7 +713,6 @@ internal fun PlayerCard(
 
             Spacer(Modifier.height(24.dp))
 
-            // 进度条
             Slider(
                 value = progress,
                 onValueChange = onSeek,
@@ -756,7 +730,6 @@ internal fun PlayerCard(
 
             Spacer(Modifier.height(16.dp))
 
-            // 播放控制
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onCyclePlayMode) {
                     val iconText = when (repeatMode) {
@@ -787,7 +760,6 @@ internal fun PlayerCard(
             HorizontalDivider(color = colors.subText.copy(alpha = 0.1f))
             Spacer(Modifier.height(16.dp))
 
-            // 功能栏
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 IconButton(onClick = onOpenComments) { Text("💬", fontSize = 20.sp) }
                 IconButton(onClick = onOpenSleepTimer) { Text(if (sleepTimerMs > 0) "⏱️" else "⏳", fontSize = 20.sp) }
@@ -923,4 +895,86 @@ private fun KaraokeLine(
         Brush.horizontalGradient(colorStops = stops)
     }
     Text(text, textAlign = textAlign, modifier = modifier, style = androidx.compose.ui.text.TextStyle(brush = finalBrush, fontFamily = fontFamily, fontSize = fontSize.sp, fontWeight = FontWeight.Bold, textAlign = textAlign))
+}
+
+// ===== 修复缺失的组件 =====
+
+@Composable
+internal fun SettingsButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
+    Box(Modifier.size(34.dp).then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip)).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(18.dp)) { val c = colors.primary; drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.3f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.3f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.7f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.7f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.5f, size.height * 0.5f)) }
+    }
+}
+
+@Composable
+internal fun PlaylistButton(onClick: () -> Unit, colors: IrisColors, active: Boolean = false) {
+    Box(Modifier.size(34.dp).irisSurface(GlassLevel.CHIP, colors, IrisShape.chip).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(17.dp)) { val c = if (active) colors.primary else colors.subText; val lw = size.minDimension * 0.14f; drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.2f)); drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.5f)); drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.8f)); (0..2).forEach { i -> val y = size.height * (0.2f + i * 0.3f); drawLine(color = c, start = Offset(size.width * 0.34f, y), end = Offset(size.width * 0.94f, y), strokeWidth = lw, cap = androidx.compose.ui.graphics.StrokeCap.Round) } }
+    }
+}
+
+@Composable
+internal fun ReportButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
+    Box(Modifier.size(34.dp).then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip)).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(17.dp)) { val c = colors.primary; val w = size.width * 0.17f; val heights = floatArrayOf(0.45f, 1f, 0.7f); heights.forEachIndexed { i, h -> val x = size.width * (0.2f + i * 0.3f); val barH = size.height * 0.78f * h; drawLine(color = c, start = Offset(x, size.height * 0.88f), end = Offset(x, size.height * 0.88f - barH), strokeWidth = w, cap = androidx.compose.ui.graphics.StrokeCap.Round) } }
+    }
+}
+
+@Composable
+internal fun LayoutButton(onClick: () -> Unit, colors: IrisColors) {
+    Box(Modifier.size(34.dp).irisSurface(GlassLevel.CHIP, colors, IrisShape.chip).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(18.dp)) {
+            val c = colors.primary
+            val w = size.width
+            val h = size.height
+            drawRoundRect(c, topLeft = Offset(w * 0.1f, h * 0.1f), size = Size(w * 0.8f, h * 0.2f), cornerRadius = CornerRadius(2f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
+            drawRoundRect(c, topLeft = Offset(w * 0.1f, h * 0.4f), size = Size(w * 0.8f, h * 0.2f), cornerRadius = CornerRadius(2f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
+            drawRoundRect(c, topLeft = Offset(w * 0.1f, h * 0.7f), size = Size(w * 0.8f, h * 0.2f), cornerRadius = CornerRadius(2f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun SongRow(song: Song, active: Boolean, colors: IrisColors, rowSize: Int, showCover: Boolean = false, showArtist: Boolean = true, showPlaylist: Boolean = true, showLikedBadge: Boolean = false, liked: Boolean = false, playlistNames: List<String> = emptyList(), onClick: () -> Unit, onLongPress: () -> Unit) {
+    val barH by animateDpAsState(if (active) 22.dp else 0.dp, IrisMotion.moveDp(), label = "cursorBar")
+    val activeT by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = IrisMotion.move(), label = "rowActive")
+    val activeBg = lerp(colors.row, colors.secondary.copy(alpha = 0.12f), activeT)
+    val vPad = if (rowSize == 0) 5.dp else if (rowSize == 1) 10.dp else 15.dp
+    val titleSize = if (rowSize == 0) 12.sp else if (rowSize == 1) 13.sp else 14.sp
+    val subSize = if (rowSize == 0) 10.sp else if (rowSize == 1) 11.sp else 12.sp
+    val coverSize = if (rowSize == 0) 34.dp else if (rowSize == 1) 44.dp else 50.dp
+    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = activeBg, accent = if (activeT > 0.5f) colors.secondary else null).combinedClickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = { Haptics.tap(); onClick() }, onLongClick = { Haptics.click(); onLongPress() }).padding(start = 14.dp, end = 14.dp, top = vPad, bottom = vPad), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(4.dp).height(barH).clip(RoundedCornerShape(2.dp)).background(colors.primary))
+        Spacer(Modifier.width(10.dp))
+        if (showCover) { 
+            if (song.albumArtUri != null) {
+                AsyncImage(model = song.albumArtUri, contentDescription = null, modifier = Modifier.size(coverSize).clip(IrisShape.item), contentScale = ContentScale.Crop)
+            } else {
+                SongArtwork(filePath = song.filePath, seedId = song.id, artworkSize = coverSize, isDark = colors.isDark)
+            }
+            Spacer(Modifier.width(12.dp)) 
+        }
+        Column(Modifier.weight(1f)) {
+            Text(song.title, color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), activeT), fontSize = titleSize, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (showArtist) { Text(song.artist, color = colors.subText, fontSize = subSize, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(formatDuration(song.durationMs), color = colors.subText, fontSize = subSize, fontWeight = FontWeight.Medium)
+            if (showPlaylist && playlistNames.isNotEmpty()) { Spacer(Modifier.height(2.dp)); Text(playlistNames.joinToString(" / "), color = colors.primary.readableOn(colors.row, 3.0f), fontSize = if (rowSize == 0) 9.sp else 10.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            val badgeT by animateFloatAsState(targetValue = if (liked) 1f else 0f, animationSpec = if (IrisMotion.jelly) IrisMotion.pressScale() else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), label = "likedBadge")
+            if (showLikedBadge && badgeT > 0.01f) { Spacer(Modifier.height(2.dp)); Text("♥", color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.graphicsLayer { alpha = badgeT; scaleX = badgeT; scaleY = badgeT }) }
+        }
+    }
+}
+
+@Composable
+internal fun FolderRow(name: String, count: String, active: Boolean, colors: IrisColors, onClick: () -> Unit) {
+    val t by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = tween(240), label = "folderActive")
+    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = lerp(colors.row, colors.primary.copy(alpha = 0.12f), t), accent = if (t > 0.5f) colors.primary else null).clickable { Haptics.tap(); onClick() }.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(18.dp).clip(IrisShape.chip).background(lerp(colors.card, colors.primary, t)))
+        Spacer(Modifier.width(12.dp))
+        Text(name, Modifier.weight(1f), color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), t), fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(count, color = colors.subText, fontSize = 11.sp)
+    }
 }
