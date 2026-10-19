@@ -114,6 +114,17 @@ internal fun NewSettingsPanel(
         }
     }
 
+    // === 新增：默认封面图选择器（SAF）===
+    // 设置页「设置默认封面图」触发。选好图后交给 ViewModel 持久化 URI，
+    // ViewModel 内部会 takePersistableUriPermission，重启应用仍可读这张图。
+    val defaultCoverPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.setDefaultCoverUri(uri)
+        }
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -145,7 +156,7 @@ internal fun NewSettingsPanel(
 
     BoxWithConstraints(Modifier.fillMaxWidth().background(panelBg)) {
         val maxW = maxWidth
-        
+
         Column(
             Modifier
                 .fillMaxWidth()
@@ -353,7 +364,7 @@ internal fun NewSettingsPanel(
                 SettingSwitchRow("逐字流光", checked = state.karaokeLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
                     viewModel.setKaraokeLyric(!state.karaokeLyric)
                 }
-                
+
                 // === 新增：双语歌词开关 ===
                 SettingSwitchRow(
                     "显示翻译歌词与罗马音",
@@ -631,19 +642,36 @@ internal fun NewSettingsPanel(
                     showDivider = true,
                     colors = colors
                 ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
-                
-                // === 新增：切换服务器音乐 ===
+
+                // 切换服务器音乐：on 时清空本地列表、搜索全网音乐
                 SettingSwitchRow(
                     "切换服务器音乐",
                     subtitle = "开启后清空本地列表，搜索全网音乐",
                     checked = state.isOnlineMode,
                     surfaceStyle = state.surfaceStyle,
-                    showDivider = false,
+                    showDivider = true,   // 下方新增「设置默认封面图」，需要分隔线
                     colors = colors
                 ) { viewModel.setOnlineMode(!state.isOnlineMode) }
+
+                // === 新增：设置默认封面图 ===
+                // 在线音乐封面加载失败 / 超过 3 秒超时时使用这张图。
+                // 与「背景图片」同款交互：已设置 → 显示"重置"，未设置 → 显示"自定义"。
+                SettingActionRow(
+                    title = "设置默认封面图",
+                    trailingText = if (state.defaultCoverUri != null) "重置" else "自定义",
+                    showDivider = false,
+                    surfaceStyle = state.surfaceStyle,
+                    colors = colors
+                ) {
+                    if (state.defaultCoverUri != null) {
+                        viewModel.setDefaultCoverUri(null)
+                    } else {
+                        defaultCoverPickerLauncher.launch(arrayOf("image/*"))
+                    }
+                }
             }
 
-            Spacer(Modifier.height(30.dp)) 
+            Spacer(Modifier.height(30.dp))
         }
 
         // ==================== 顶部渐变遮罩 ====================
@@ -1035,7 +1063,7 @@ private fun InlineSwitchOptionRow(
             if (!checked) {
                 LiquidSwitch(checked = false, colors = colors, onCheckedChange = { onToggle(true); onToggleExpand() })
             } else {
-                LiquidSwitch(checked = true, colors = colors, onCheckedChange = { 
+                LiquidSwitch(checked = true, colors = colors, onCheckedChange = {
                     onToggle(false)
                     if (isExpanded) onToggleExpand()
                 })
@@ -1088,7 +1116,7 @@ private fun InlineSliderRow(
                 valueRange = valueRange,
                 colors = colors,
                 onChange = onValueChange,
-                onFinished = { 
+                onFinished = {
                     onValueChangeFinished?.invoke()
                 },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
@@ -1387,7 +1415,7 @@ private fun LiquidSwitch(
     val thumbD = 27.dp
     val travel = trackW - thumbD - 4.dp
     val thumbOffset = 2.dp + travel * progress
-    
+
     val iosGreen = Color(0xFF34C759)
     val trackColor = lerp(colors.subText.copy(alpha = 0.3f), iosGreen, progress)
     Box(
@@ -1429,7 +1457,7 @@ private fun LiquidSwitch(
 
 @Composable
 private fun FloatingLyricGroup(
-    colors: IrisColors, 
+    colors: IrisColors,
     surfaceStyle: IrisSurfaceStyle,
     expandedKey: String?,
     onToggleExpand: (String?) -> Unit
