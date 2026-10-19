@@ -8,19 +8,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.iris.music.data.Song
 import com.iris.music.ui.theme.IrisColors
-import kotlin.math.roundToInt
+import androidx.compose.ui.draw.clipToBounds
 
 @Composable
 fun MaterialCarouselView(
@@ -31,131 +30,110 @@ fun MaterialCarouselView(
     val scrollState = rememberScrollState()
     val density = LocalDensity.current
 
-    // 严格按照 SwiftUI 源码中的数值进行 1:1 换算
+    // SwiftUI 的基础数值换算
     val baseWidthPx = with(density) { 180.dp.toPx() }
     val spacingPx = with(density) { 10.dp.toPx() }
     val spaceWidthPx = with(density) { 130.dp.toPx() }
-    val divisor = 190f // SwiftUI 原代码的除数
+    val divisor = 190f
 
-    Layout(
-        content = {
-            recommendations.forEach { song ->
-                CarouselCardContent(song, colors) { onSelect(song) }
-            }
-        },
+    // 使用 Row 替代自定义 Layout，固定每个卡片的占位，避免引起滚动死循环
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(200.dp)
-            .padding(horizontal = 15.dp) // 对应 SwiftUI 的 .padding(.horizontal, 15)
             .horizontalScroll(scrollState)
-    ) { measurables, constraints ->
-        val count = measurables.size
-        val placeables = arrayOfNulls<Placeable>(count)
-        val assignedXs = FloatArray(count)
-        val finalOffsets = FloatArray(count)
+            .padding(horizontal = 15.dp), // 左右边距
+        horizontalArrangement = Arrangement.spacedBy(10.dp) // 卡片间距 10dp
+    ) {
+        recommendations.forEachIndexed { index, song ->
+            // 计算当前卡片的 minX（相对于屏幕左侧的位置）
+            val minX = index * (baseWidthPx + spacingPx) - scrollState.value
 
-        // 1. 测量并计算每张卡片的真实宽度与物理起始位置
-        var currentX = -scrollState.value.toFloat()
-
-        for (i in 0 until count) {
-            val minX = currentX
-            
-            // SwiftUI 核心逻辑：
+            // 1. 计算压缩/拉伸后的宽度
             val reducingWidth = (minX / divisor) * spaceWidthPx
             val cappedWidth = minOf(reducingWidth, spaceWidthPx)
-            
             val frameWidth = baseWidthPx - (if (minX > 0) cappedWidth else -cappedWidth)
-            val safeWidth = maxOf(frameWidth, 1f).roundToInt() // 防止宽度变成负数或0导致崩溃
-            
-            assignedXs[i] = currentX
-            
-            val placeable = measurables[i].measure(
-                Constraints(
-                    minWidth = safeWidth,
-                    maxWidth = safeWidth,
-                    // 这里为了防止父布局高度无限大导致崩溃，给一个兜底高度
-                    minHeight = if (constraints.hasBoundedHeight) constraints.maxHeight else 200.dp.roundToPx(),
-                    maxHeight = if (constraints.hasBoundedHeight) constraints.maxHeight else 200.dp.roundToPx()
-                )
-            )
-            placeables[i] = placeable
-            
-            currentX += safeWidth + spacingPx
-        }
+            val finalWidth = maxOf(frameWidth, 1f) // 防止宽度为0崩溃
 
-        // 2. 计算前驱影响并放置
-        var previousOffset = 0f
+            // 2. 计算自身偏移量
+            val baseOffsetX = if (minX > 0) 0f else -cappedWidth
 
-        for (i in 0 until count) {
-            val minX = assignedXs[i]
-            val baseOffset = if (minX > 0) 0f else -minOf((minX / divisor) * spaceWidthPx, spaceWidthPx)
-            
-            // 最终绘制位置 = 物理起始位置 + 自身视差偏移 - 被前一张卡片的挤压偏移
-            finalOffsets[i] = assignedXs[i] + baseOffset - previousOffset
-            
-            // 为下一张卡片计算 previousOffset
-            val reducingWidth = (minX / divisor) * spaceWidthPx
-            previousOffset = if (minX < 0f) 0f else reducingWidth
-        }
+            // 3. 计算前一张卡片带来的挤压影响（让后面的卡片向左补位）
+            var previousOffset = 0f
+            if (index > 0) {
+                val prevMinX = (index - 1) * (baseWidthPx + spacingPx) - scrollState.value
+                val prevReducingWidth = (prevMinX / divisor) * spaceWidthPx
+                previousOffset = if (prevMinX < 0) 0f else prevReducingWidth
+            }
 
-        // 计算总宽度以支持完整滚动
-        // 必须使用 currentX.toInt()，不能使用 constraints.maxWidth，因为外层 horizontalScroll 会给出 Infinity
-        val totalWidth = maxOf(currentX.toInt(), 1)
+            // 最终绘制的 X 偏移量
+            val finalOffsetX = baseOffsetX - previousOffset
 
-        layout(totalWidth, constraints.maxHeight) {
-            // 倒序绘制，让前面的卡片盖住后面的卡片（对应 SwiftUI 默认层级）
-            for (i in count - 1 downTo 0) {
-                placeables[i]?.placeRelative(finalOffsets[i].roundToInt(), 0)
+            // 外层固定占位 180x200，防止滚动条抖动，并设置 zIndex 保证左侧盖住右侧
+            Box(
+                modifier = Modifier
+                    .width(180.dp)
+                    .height(200.dp)
+                    .zIndex((recommendations.size - index).toFloat()),
+                contentAlignment = Alignment.TopStart // 必须靠左对齐，宽度缩小时才能留出右边的间距
+            ) {
+                // 内层动态改变宽度、偏移和裁剪
+                Box(
+                    modifier = Modifier
+                        .width(with(density) { finalWidth.toDp() })
+                        .height(200.dp)
+                        .offset(x = with(density) { finalOffsetX.toDp() })
+                        .clipToBounds() // 确保内容不会溢出这个被压缩的盒子
+                        .clip(RoundedCornerShape(25.dp))
+                        .background(colors.surface)
+                        .clickable { onSelect(song) }
+                ) {
+                    CarouselCardInnerContent(song, colors)
+                }
             }
         }
+
+        // 尾部留白，让最后一张卡片也能滑到最左侧
+        Spacer(Modifier.width(50.dp))
     }
 }
 
 @Composable
-private fun CarouselCardContent(song: Song, colors: IrisColors, onClick: () -> Unit) {
-    // 完全根据你的截图样式设计的卡片内部
-    Box(
-        Modifier
-            .fillMaxSize()
-            .clip(RoundedCornerShape(25.dp)) // SwiftUI 原代码: cornerRadius: 25
-            .background(colors.surface) // 卡片底色
-            .clickable { onClick() }
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            // 图片部分
-            Box(Modifier.fillMaxWidth().weight(1f)) {
-                SongArtwork(
-                    filePath = song.filePath,
-                    seedId = song.id,
-                    artworkSize = 180.dp, // 占满宽度
-                    isDark = colors.isDark,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            
-            // 文字部分
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 12.dp)
-            ) {
-                Text(
-                    text = song.title,
-                    color = colors.text,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = song.artist,
-                    color = colors.subText,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+private fun CarouselCardInnerContent(song: Song, colors: IrisColors) {
+    Column(Modifier.fillMaxSize()) {
+        // 图片部分
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            SongArtwork(
+                filePath = song.filePath,
+                seedId = song.id,
+                artworkSize = 200.dp, // 传大一点让裁切填满
+                isDark = colors.isDark,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        
+        // 文字部分
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            Text(
+                text = song.title,
+                color = colors.text,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = song.artist,
+                color = colors.subText,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
