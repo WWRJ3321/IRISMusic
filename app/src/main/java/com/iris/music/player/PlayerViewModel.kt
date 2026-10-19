@@ -152,7 +152,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    // 原生网络请求工具，替代 OkHttp，免加依赖
+    // 原生网络请求工具
     private fun fetchUrl(urlStr: String): String? {
         return try {
             val url = URL(urlStr)
@@ -376,7 +376,19 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                     val artists = songObj.optJSONArray("artists")
                     val artistName = artists?.optJSONObject(0)?.optString("name") ?: "未知歌手"
                     val duration = songObj.optLong("duration")
-                    list.add(Song(id = id, title = name, artist = artistName, album = "", filePath = "online_$id", durationMs = duration, albumArtUri = null))
+                    // === 修复：补全必填参数 uri, folderPath, folderName ===
+                    list.add(Song(
+                        id = id, 
+                        title = name, 
+                        artist = artistName, 
+                        album = "", 
+                        filePath = "online_$id", 
+                        durationMs = duration, 
+                        albumArtUri = null,
+                        uri = android.net.Uri.parse(""), // 在线歌曲不需要真实文件 uri
+                        folderPath = "online",
+                        folderName = "网络音乐"
+                    ))
                 }
             }
             list
@@ -403,7 +415,19 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                         val artists = songObj.optJSONArray("ar")
                         val artistName = artists?.optJSONObject(0)?.optString("name") ?: "未知歌手"
                         val duration = songObj.optLong("dt")
-                        list.add(Song(id = id, title = name, artist = artistName, album = "", filePath = "online_$id", durationMs = duration, albumArtUri = null))
+                        // === 修复：补全必填参数 ===
+                        list.add(Song(
+                            id = id, 
+                            title = name, 
+                            artist = artistName, 
+                            album = "", 
+                            filePath = "online_$id", 
+                            durationMs = duration, 
+                            albumArtUri = null,
+                            uri = android.net.Uri.parse(""),
+                            folderPath = "online",
+                            folderName = "网络音乐"
+                        ))
                     }
                 }
                 if (list.isNotEmpty()) {
