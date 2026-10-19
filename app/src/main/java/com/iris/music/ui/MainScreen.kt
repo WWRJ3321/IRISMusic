@@ -248,7 +248,6 @@ fun MainScreen(
             AnimatedVisibility(visible = state.showSettings, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180)), modifier = Modifier.fillMaxSize()) {
                 val settingsDrag = rememberSheetDragState()
                 IrisSheet(colors = colors, onDismiss = { onToggleSettings(false) }, drag = settingsDrag, panelModifier = Modifier.heightIn(max = 720.dp)) {
-                    // === 核心切换逻辑：新旧设置面板之间平滑过渡（高度与内容都缓慢变化）===
                     AnimatedContent(
                         targetState = state.useNewSettingsStyle,
                         transitionSpec = {
@@ -375,6 +374,17 @@ private fun LibraryPage(
     LaunchedEffect(listState) { snapshotFlow { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }.distinctUntilChanged().collect { atTop -> if (atTop) settleBarTo(0f) } }
     val listScrollable = listState.canScrollForward || listState.canScrollBackward
     LaunchedEffect(listScrollable) { if (!listScrollable && barOffset.value != 0f) settleBarTo(0f) }
+
+    // === 新增：静止时自动隐藏上栏 ===
+    LaunchedEffect(state.topBarAutoHide, listState.isScrollInProgress, barOffset.value) {
+        if (state.topBarAutoHide && !listState.isScrollInProgress && barOffset.value == 0f) {
+            delay(3000) // 静止 3 秒后隐藏
+            if (!listState.isScrollInProgress && barOffset.value == 0f) {
+                settleBarTo(-hideDistanceState.value)
+            }
+        }
+    }
+
     val refreshTriggerPx = with(density) { 96.dp.toPx() }
     val maxPullPx = refreshTriggerPx * 1.7f
     val holdPullPx = refreshTriggerPx * 0.68f
