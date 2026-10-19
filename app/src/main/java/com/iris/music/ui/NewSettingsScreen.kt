@@ -79,6 +79,11 @@ internal fun NewSettingsPanel(
     var transferStatus by remember { mutableStateOf("") }
     var transferBusy by remember { mutableStateOf(false) }
 
+    // === 手风琴展开状态 ===
+    var expandedKey by remember { mutableStateOf<String?>(null) }
+    // === 沉浸式背景模糊状态 ===
+    var isScrubbingBlur by remember { mutableStateOf(false) }
+
     val folderPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -124,7 +129,6 @@ internal fun NewSettingsPanel(
         }
     }
 
-    // 外层 iOS 浅灰背景
     val panelBg = if (colors.isDark) Color(0xFF000000) else Color(0xFFF2F2F7)
     val isScrolled = scrollState.value > 50
 
@@ -140,10 +144,10 @@ internal fun NewSettingsPanel(
                     .padding(horizontal = 16.dp)
             ) {
                 SheetDragHandle(sheetDrag, onDismiss, colors.card)
-                Spacer(Modifier.height(14.dp))
-                // 顶部占位，给标题腾出空间
-                Box(Modifier.fillMaxWidth().height(88.dp))
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
+                // === 缩减顶部留白 ===
+                Box(Modifier.fillMaxWidth().height(64.dp))
+                Spacer(Modifier.height(4.dp))
 
                 // ==================== 外观 ====================
                 SettingsGroup("外观", state.surfaceStyle, colors) {
@@ -152,7 +156,9 @@ internal fun NewSettingsPanel(
                         options = listOf("深色", "浅色", "自动"),
                         selectedIndex = IrisMode.entries.indexOf(state.mode),
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "明暗模式",
+                        onToggleExpand = { expandedKey = if (expandedKey == "明暗模式") null else "明暗模式" }
                     ) { viewModel.setMode(IrisMode.entries[it]) }
 
                     SettingActionRow(
@@ -174,7 +180,9 @@ internal fun NewSettingsPanel(
                         options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
                         selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "按钮颜色",
+                        onToggleExpand = { expandedKey = if (expandedKey == "按钮颜色") null else "按钮颜色" }
                     ) { index ->
                         viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
                     }
@@ -189,7 +197,9 @@ internal fun NewSettingsPanel(
                             primaryArgb = state.customPrimaryArgb,
                             secondaryArgb = state.customSecondaryArgb,
                             surfaceStyle = state.surfaceStyle,
-                            colors = colors
+                            colors = colors,
+                            isExpanded = expandedKey == "自定义按钮颜色",
+                            onToggleExpand = { expandedKey = if (expandedKey == "自定义按钮颜色") null else "自定义按钮颜色" }
                         ) { p, s -> viewModel.setCustomColors(p, s) }
                     }
 
@@ -199,24 +209,12 @@ internal fun NewSettingsPanel(
                         options = allowedStyles.map { it.label },
                         selectedIndex = allowedStyles.indexOf(state.surfaceStyle).coerceAtLeast(0),
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "材质分级",
+                        onToggleExpand = { expandedKey = if (expandedKey == "材质分级") null else "材质分级" }
                     ) { viewModel.setSurfaceStyle(allowedStyles[it]) }
 
-                    AnimatedVisibility(
-                        visible = state.surfaceStyle != IrisSurfaceStyle.SOLID,
-                        enter = expandVertically(tween(300, easing = FastOutSlowInEasing)) + fadeIn(tween(200)),
-                        exit = shrinkVertically(tween(300, easing = FastOutSlowInEasing)) + fadeOut(tween(200))
-                    ) {
-                        val glassSpan = (GLASS_BLUR_MAX - GLASS_BLUR_MIN).takeIf { it > 0f } ?: 1f
-                        InlineSliderRow(
-                            title = "玻璃模糊",
-                            value = ((state.glassBlur - GLASS_BLUR_MIN) / glassSpan * 100f).coerceIn(0f, 100f),
-                            valueRange = 0f..100f,
-                            valueFormat = { "${it.toInt()}" },
-                            surfaceStyle = state.surfaceStyle,
-                            colors = colors
-                        ) { v -> viewModel.setGlassBlur(GLASS_BLUR_MIN + (v / 100f) * glassSpan) }
-                    }
+                    // === 移除玻璃模糊 ===
 
                     InlineSliderRow(
                         title = "背景模糊",
@@ -224,7 +222,11 @@ internal fun NewSettingsPanel(
                         valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
                         valueFormat = { "${it.toInt()}" },
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "背景模糊",
+                        onToggleExpand = { expandedKey = if (expandedKey == "背景模糊") null else "背景模糊" },
+                        onScrubStart = { isScrubbingBlur = true },
+                        onScrubEnd = { isScrubbingBlur = false }
                     ) { viewModel.setBgBlur(it) }
 
                     InlineSliderRow(
@@ -233,7 +235,9 @@ internal fun NewSettingsPanel(
                         valueRange = 0f..44f,
                         valueFormat = { "${it.toInt()}" },
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "界面圆角",
+                        onToggleExpand = { expandedKey = if (expandedKey == "界面圆角") null else "界面圆角" }
                     ) { viewModel.setCornerBase(it) }
 
                     var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
@@ -244,16 +248,19 @@ internal fun NewSettingsPanel(
                         valueFormat = { "${(it * 100).toInt()}%" },
                         surfaceStyle = state.surfaceStyle,
                         colors = colors,
-                        onValueChange = { pendingFontScale = it },
+                        isExpanded = expandedKey == "字体大小",
+                        onToggleExpand = { expandedKey = if (expandedKey == "字体大小") null else "字体大小" },
                         onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) }
-                    )
+                    ) { pendingFontScale = it }
 
                     InlineOptionRow(
                         title = "界面字体",
                         options = listOf("系统", "衬线"),
                         selectedIndex = if (state.uiFont == 0) 0 else 1,
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "界面字体",
+                        onToggleExpand = { expandedKey = if (expandedKey == "界面字体") null else "界面字体" }
                     ) { viewModel.setUiFont(it) }
 
                     InlineOptionRow(
@@ -262,7 +269,9 @@ internal fun NewSettingsPanel(
                         selectedIndex = IrisLayout.entries.indexOf(state.layout),
                         surfaceStyle = state.surfaceStyle,
                         showDivider = false,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "界面排布",
+                        onToggleExpand = { expandedKey = if (expandedKey == "界面排布") null else "界面排布" }
                     ) { viewModel.setLayout(IrisLayout.entries[it]) }
                 }
 
@@ -294,7 +303,9 @@ internal fun NewSettingsPanel(
                             selectedIndex = state.rowSize,
                             surfaceStyle = state.surfaceStyle,
                             showDivider = false,
-                            colors = colors
+                            colors = colors,
+                            isExpanded = expandedKey == "卡片距离",
+                            onToggleExpand = { expandedKey = if (expandedKey == "卡片距离") null else "卡片距离" }
                         ) { viewModel.setRowSize(it) }
                     }
                 }
@@ -322,7 +333,9 @@ internal fun NewSettingsPanel(
                             valueFormat = { String.format(java.util.Locale.US, "%.1f s", it / 1000f) },
                             surfaceStyle = state.surfaceStyle,
                             showDivider = false,
-                            colors = colors
+                            colors = colors,
+                            isExpanded = expandedKey == "淡入淡出时长",
+                            onToggleExpand = { expandedKey = if (expandedKey == "淡入淡出时长") null else "淡入淡出时长" }
                         ) { viewModel.setFadeMs(it.toLong()) }
                     }
                 }
@@ -336,7 +349,6 @@ internal fun NewSettingsPanel(
                         viewModel.setKaraokeLyric(!state.karaokeLyric)
                     }
                     
-                    // 歌词颜色改成滑动展开选项
                     val themeOptions = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
                     InlineSwitchOptionRow(
                         title = "歌词颜色",
@@ -346,6 +358,8 @@ internal fun NewSettingsPanel(
                         surfaceStyle = state.surfaceStyle,
                         showDivider = !(state.lyricUseCustomColor && state.lyricTheme == IrisTheme.CUSTOM),
                         colors = colors,
+                        isExpanded = expandedKey == "歌词颜色",
+                        onToggleExpand = { expandedKey = if (expandedKey == "歌词颜色") null else "歌词颜色" },
                         onToggle = { viewModel.setLyricUseCustomColor(it) },
                         onSelect = { index -> viewModel.setLyricTheme(themeOptions[index]) }
                     )
@@ -360,7 +374,9 @@ internal fun NewSettingsPanel(
                             primaryArgb = state.lyricCustomPrimary,
                             secondaryArgb = state.lyricCustomSecondary,
                             surfaceStyle = state.surfaceStyle,
-                            colors = colors
+                            colors = colors,
+                            isExpanded = expandedKey == "自定义歌词色",
+                            onToggleExpand = { expandedKey = if (expandedKey == "自定义歌词色") null else "自定义歌词色" }
                         ) { p, s -> viewModel.setLyricCustomColors(p, s) }
                     }
 
@@ -369,7 +385,9 @@ internal fun NewSettingsPanel(
                         options = listOf("靠左", "居中", "靠右"),
                         selectedIndex = state.lyricAlign,
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "歌词对齐",
+                        onToggleExpand = { expandedKey = if (expandedKey == "歌词对齐") null else "歌词对齐" }
                     ) { viewModel.setLyricAlign(it) }
 
                     InlineOptionRow(
@@ -377,7 +395,9 @@ internal fun NewSettingsPanel(
                         options = listOf("系统", "衬线"),
                         selectedIndex = if (state.lyricFont == 0) 0 else 1,
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "歌词字体",
+                        onToggleExpand = { expandedKey = if (expandedKey == "歌词字体") null else "歌词字体" }
                     ) { viewModel.setLyricFont(it) }
 
                     InlineSliderRow(
@@ -387,13 +407,15 @@ internal fun NewSettingsPanel(
                         valueFormat = { "${it.toInt()}" },
                         surfaceStyle = state.surfaceStyle,
                         showDivider = false,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "歌词字号",
+                        onToggleExpand = { expandedKey = if (expandedKey == "歌词字号") null else "歌词字号" }
                     ) { viewModel.setLyricFontSize(it) }
                 }
 
                 // ==================== 悬浮歌词 ====================
                 SettingsGroup("悬浮歌词", state.surfaceStyle, colors) {
-                    FloatingLyricGroup(colors, state.surfaceStyle)
+                    FloatingLyricGroup(colors, state.surfaceStyle, expandedKey, { expandedKey = it })
                 }
 
                 // ==================== 动效与反馈 ====================
@@ -429,7 +451,9 @@ internal fun NewSettingsPanel(
                                 options = listOf("轻点", "标准", "重击"),
                                 selectedIndex = state.bassHapticsIntensity,
                                 surfaceStyle = state.surfaceStyle,
-                                colors = colors
+                                colors = colors,
+                                isExpanded = expandedKey == "震动强度",
+                                onToggleExpand = { expandedKey = if (expandedKey == "震动强度") null else "震动强度" }
                             ) { viewModel.setBassHapticsIntensity(it) }
 
                             InlineSliderRow(
@@ -439,7 +463,9 @@ internal fun NewSettingsPanel(
                                 valueFormat = { "${it.toInt()} Hz" },
                                 surfaceStyle = state.surfaceStyle,
                                 showDivider = false,
-                                colors = colors
+                                colors = colors,
+                                isExpanded = expandedKey == "低频截止",
+                                onToggleExpand = { expandedKey = if (expandedKey == "低频截止") null else "低频截止" }
                             ) { viewModel.setBassHapticsLowCutoff(it.toInt()) }
                         }
                     }
@@ -453,7 +479,9 @@ internal fun NewSettingsPanel(
                         valueRange = 0f..1f,
                         valueFormat = { "${(it * 100).toInt()}%" },
                         surfaceStyle = state.surfaceStyle,
-                        colors = colors
+                        colors = colors,
+                        isExpanded = expandedKey == "探索度",
+                        onToggleExpand = { expandedKey = if (expandedKey == "探索度") null else "探索度" }
                     ) { viewModel.setExploration(it) }
 
                     SettingSwitchRow(
@@ -573,7 +601,9 @@ internal fun NewSettingsPanel(
                             selectedIndex = state.splashStyle,
                             surfaceStyle = state.surfaceStyle,
                             showDivider = false,
-                            colors = colors
+                            colors = colors,
+                            isExpanded = expandedKey == "动画风格",
+                            onToggleExpand = { expandedKey = if (expandedKey == "动画风格") null else "动画风格" }
                         ) { viewModel.setSplashStyle(it) }
                     }
                 }
@@ -590,7 +620,7 @@ internal fun NewSettingsPanel(
                     ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(30.dp))
             }
 
             // 底部完成按钮
@@ -602,7 +632,8 @@ internal fun NewSettingsPanel(
                     .clip(IrisShape.item)
                     .background(colors.primary)
                     .clickable { onDismiss() }
-                    .padding(vertical = 14.dp),
+                    .padding(vertical = 14.dp)
+                    .zIndex(5f),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -615,12 +646,12 @@ internal fun NewSettingsPanel(
             Spacer(Modifier.height(18.dp))
         }
 
-        // ==================== 顶部模糊遮罩与标题层 ====================
-        // 遮罩层：覆盖状态栏到“外观”标题上方的区域
+        // ==================== 顶部与底部渐变遮罩 ====================
+        // 顶部遮罩
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(100.dp)
+                .height(110.dp)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(panelBg, panelBg.copy(alpha = 0.95f), panelBg.copy(alpha = 0.7f), Color.Transparent)
@@ -628,10 +659,25 @@ internal fun NewSettingsPanel(
                 )
                 .zIndex(1f)
         )
+        
+        // 底部边缘虚化遮罩
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(100.dp)
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, panelBg.copy(alpha = 0.7f), panelBg.copy(alpha = 0.95f), panelBg)
+                    )
+                )
+                .zIndex(1f)
+        )
 
+        // 顶部折叠标题
         val targetX = if (isScrolled) 20.dp else (maxW / 2f - 32.dp)
-        // 当向上滑动时，文字停留在模糊区域的偏下方边缘（贴近遮罩边缘）
-        val targetY = if (isScrolled) 52.dp else 64.dp
+        // 根据修改后的留白，调整 targetY
+        val targetY = if (isScrolled) 46.dp else 54.dp
         val targetSize = if (isScrolled) 18f else 24f
 
         val animatedX by animateDpAsState(targetX, spring(dampingRatio = 0.8f, stiffness = 400f))
@@ -646,10 +692,39 @@ internal fun NewSettingsPanel(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .offset(x = animatedX, y = animatedY)
-                .zIndex(2f) // 放在遮罩层上面
+                .zIndex(2f)
         )
+
+        // ==================== 沉浸式背景模糊浮层 ====================
+        if (isScrubbingBlur) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(panelBg.copy(alpha = 0.95f))
+                    .zIndex(10f)
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}, // 拦截点击
+                contentAlignment = Alignment.Center
+            ) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("背景模糊", color = colors.text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(10.dp))
+                    Text("${state.bgBlur.toInt()}", color = colors.primary, fontSize = 48.sp, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.height(30.dp))
+                    RoundSlider(
+                        value = state.bgBlur,
+                        valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
+                        colors = colors,
+                        onChange = { viewModel.setBgBlur(it) },
+                        onFinished = { isScrubbingBlur = false }, // 松开恢复
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
     }
 }
+
+// ==================== 组件区（受控版） ====================
 
 @Composable
 private fun SettingsGroup(
@@ -780,10 +855,11 @@ private fun InlineOptionRow(
     selectedIndex: Int,
     surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
     showDivider: Boolean = true,
     onSelect: (Int) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
     Box(
         Modifier
             .fillMaxWidth()
@@ -806,7 +882,7 @@ private fun InlineOptionRow(
             .padding(horizontal = 16.dp)
     ) {
         AnimatedContent(
-            targetState = expanded,
+            targetState = isExpanded,
             transitionSpec = {
                 if (targetState) {
                     (fadeIn(tween(240, delayMillis = 40)) +
@@ -822,8 +898,8 @@ private fun InlineOptionRow(
             },
             modifier = Modifier.fillMaxWidth(),
             label = "inlineOption"
-        ) { isExpanded ->
-            if (isExpanded) {
+        ) { expanded ->
+            if (expanded) {
                 Row(
                     Modifier.fillMaxWidth().height(54.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -837,7 +913,6 @@ private fun InlineOptionRow(
                         } else {
                             if (isLiquid) colors.subText.copy(alpha = 0.08f) else Color.White
                         }
-                        // 平面按钮逻辑
                         val btnModifier = if (isLiquid) {
                             Modifier.irisSurface(GlassLevel.CHIP, colors, RoundedCornerShape(10.dp), solid = btnBg)
                         } else {
@@ -856,7 +931,7 @@ private fun InlineOptionRow(
                                 ) {
                                     Haptics.tap()
                                     onSelect(i)
-                                    expanded = false
+                                    onToggleExpand() // 选完收回
                                 }
                                 .padding(horizontal = 4.dp),
                             horizontalArrangement = Arrangement.Center,
@@ -884,7 +959,7 @@ private fun InlineOptionRow(
                             interactionSource = remember { MutableInteractionSource() }
                         ) {
                             Haptics.tap()
-                            expanded = true
+                            onToggleExpand() // 展开
                         },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -909,6 +984,8 @@ private fun InlineSwitchOptionRow(
     selectedIndex: Int,
     surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
     showDivider: Boolean = true,
     onToggle: (Boolean) -> Unit,
     onSelect: (Int) -> Unit
@@ -922,7 +999,7 @@ private fun InlineSwitchOptionRow(
     ) {
         Box(Modifier.weight(1f).padding(end = 12.dp)) {
             AnimatedContent(
-                targetState = checked,
+                targetState = isExpanded,
                 transitionSpec = {
                     if (targetState) {
                         (fadeIn(tween(240, delayMillis = 40)) +
@@ -938,8 +1015,8 @@ private fun InlineSwitchOptionRow(
                 },
                 modifier = Modifier.fillMaxWidth(),
                 label = "switchOption"
-            ) { isOn ->
-                if (isOn) {
+            ) { expanded ->
+                if (expanded) {
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -999,7 +1076,18 @@ private fun InlineSwitchOptionRow(
                 }
             }
         }
-        LiquidSwitch(checked = checked, colors = colors, onCheckedChange = { onToggle(it) })
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!checked) {
+                // 未开启时显示开关
+                LiquidSwitch(checked = false, colors = colors, onCheckedChange = { onToggle(true); onToggleExpand() })
+            } else {
+                // 开启时显示收回按钮或直接用开关控制
+                LiquidSwitch(checked = true, colors = colors, onCheckedChange = { 
+                    onToggle(false)
+                    if (isExpanded) onToggleExpand()
+                })
+            }
+        }
     }
     if (showDivider) SettingDivider(colors)
 }
@@ -1012,11 +1100,14 @@ private fun InlineSliderRow(
     valueFormat: (Float) -> String,
     surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
     showDivider: Boolean = true,
     onValueChangeFinished: (() -> Unit)? = null,
+    onScrubStart: (() -> Unit)? = null,
+    onScrubEnd: (() -> Unit)? = null,
     onValueChange: (Float) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -1029,7 +1120,7 @@ private fun InlineSliderRow(
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
-                ) { Haptics.tap(); expanded = !expanded }
+                ) { Haptics.tap(); onToggleExpand() }
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1037,7 +1128,7 @@ private fun InlineSliderRow(
             Text(valueFormat(value), color = colors.subText, fontSize = 14.sp)
         }
         AnimatedVisibility(
-            visible = expanded,
+            visible = isExpanded,
             enter = expandVertically(tween(280, easing = EaseOutCubic)) + fadeIn(tween(200)),
             exit = shrinkVertically(tween(240, easing = EaseInCubic)) + fadeOut(tween(160))
         ) {
@@ -1046,7 +1137,11 @@ private fun InlineSliderRow(
                 valueRange = valueRange,
                 colors = colors,
                 onChange = onValueChange,
-                onFinished = { onValueChangeFinished?.invoke() },
+                onFinished = { 
+                    onValueChangeFinished?.invoke()
+                    onScrubEnd?.invoke()
+                },
+                onStart = { onScrubStart?.invoke() },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
@@ -1061,6 +1156,7 @@ private fun RoundSlider(
     colors: IrisColors,
     onChange: (Float) -> Unit,
     onFinished: () -> Unit,
+    onStart: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
@@ -1073,6 +1169,7 @@ private fun RoundSlider(
             .height(32.dp)
             .pointerInput(valueRange) {
                 detectDragGestures(
+                    onDragStart = { onStart?.invoke() },
                     onDragEnd = { onFinished() },
                     onDragCancel = { onFinished() }
                 ) { change, _ ->
@@ -1128,10 +1225,11 @@ private fun InlineColorRow(
     secondaryArgb: Long,
     surfaceStyle: IrisSurfaceStyle,
     colors: IrisColors,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
     showDivider: Boolean = true,
     onColorsChange: (Long, Long) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
     var editSecondary by remember { mutableStateOf(false) }
     var primaryHsv by remember { mutableStateOf(hsvOf(primaryArgb)) }
     var secondaryHsv by remember { mutableStateOf(hsvOf(secondaryArgb)) }
@@ -1149,7 +1247,7 @@ private fun InlineColorRow(
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() }
-                ) { Haptics.tap(); expanded = !expanded }
+                ) { Haptics.tap(); onToggleExpand() }
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1160,7 +1258,7 @@ private fun InlineColorRow(
             }
         }
         AnimatedVisibility(
-            visible = expanded,
+            visible = isExpanded,
             enter = expandVertically(tween(280, easing = EaseOutCubic)) + fadeIn(tween(200)),
             exit = shrinkVertically(tween(240, easing = EaseInCubic)) + fadeOut(tween(160))
         ) {
@@ -1343,7 +1441,6 @@ private fun LiquidSwitch(
     val travel = trackW - thumbD - 4.dp
     val thumbOffset = 2.dp + travel * progress
     
-    // 开启后变为 iOS 绿色
     val iosGreen = Color(0xFF34C759)
     val trackColor = lerp(colors.subText.copy(alpha = 0.3f), iosGreen, progress)
     Box(
@@ -1384,7 +1481,12 @@ private fun LiquidSwitch(
 }
 
 @Composable
-private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyle) {
+private fun FloatingLyricGroup(
+    colors: IrisColors, 
+    surfaceStyle: IrisSurfaceStyle,
+    expandedKey: String?,
+    onToggleExpand: (String?) -> Unit
+) {
     val ctx = LocalContext.current
     val prefs = ctx.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
 
@@ -1465,6 +1567,8 @@ private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyl
                 selectedIndex = fixMode,
                 surfaceStyle = surfaceStyle,
                 colors = colors,
+                isExpanded = expandedKey == "固定位置",
+                onToggleExpand = { onToggleExpand(if (expandedKey == "固定位置") null else "固定位置") },
                 onToggle = { fixed = it; writeBool(FloatingLyric.KEY_FIXED, it) },
                 onSelect = { fixMode = it; writeInt(FloatingLyric.KEY_FIX_MODE, it) }
             )
@@ -1478,6 +1582,8 @@ private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyl
                 surfaceStyle = surfaceStyle,
                 showDivider = !(useCustomColor && floatTheme == IrisTheme.CUSTOM),
                 colors = colors,
+                isExpanded = expandedKey == "悬浮歌词颜色",
+                onToggleExpand = { onToggleExpand(if (expandedKey == "悬浮歌词颜色") null else "悬浮歌词颜色") },
                 onToggle = { useCustomColor = it; writeBool(FloatingLyric.KEY_USE_CUSTOM, it) },
                 onSelect = { index ->
                     floatTheme = themeOptions[index]
@@ -1496,6 +1602,8 @@ private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyl
                     secondaryArgb = customSecondary,
                     surfaceStyle = surfaceStyle,
                     colors = colors,
+                    isExpanded = expandedKey == "自定义悬浮歌词色",
+                    onToggleExpand = { onToggleExpand(if (expandedKey == "自定义悬浮歌词色") null else "自定义悬浮歌词色") },
                     onColorsChange = { p, s ->
                         customPrimary = p; customSecondary = s
                         prefs.edit()
@@ -1512,7 +1620,9 @@ private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyl
                 valueRange = 12f..40f,
                 valueFormat = { "${it.toInt()}" },
                 surfaceStyle = surfaceStyle,
-                colors = colors
+                colors = colors,
+                isExpanded = expandedKey == "字号",
+                onToggleExpand = { onToggleExpand(if (expandedKey == "字号") null else "字号") }
             ) { font = it; writeFloat(FloatingLyric.KEY_FONT, it) }
 
             InlineSliderRow(
@@ -1521,7 +1631,9 @@ private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyl
                 valueRange = 0.3f..1f,
                 valueFormat = { "${(it * 100).toInt()}%" },
                 surfaceStyle = surfaceStyle,
-                colors = colors
+                colors = colors,
+                isExpanded = expandedKey == "宽度",
+                onToggleExpand = { onToggleExpand(if (expandedKey == "宽度") null else "宽度") }
             ) { widthFrac = it; writeFloat(FloatingLyric.KEY_WIDTH, it) }
 
             InlineSliderRow(
@@ -1531,7 +1643,9 @@ private fun FloatingLyricGroup(colors: IrisColors, surfaceStyle: IrisSurfaceStyl
                 valueFormat = { "${(it * 100).toInt()}%" },
                 surfaceStyle = surfaceStyle,
                 showDivider = false,
-                colors = colors
+                colors = colors,
+                isExpanded = expandedKey == "背景透明度",
+                onToggleExpand = { onToggleExpand(if (expandedKey == "背景透明度") null else "背景透明度") }
             ) { bg = it; writeFloat(FloatingLyric.KEY_BG, it) }
         }
     }
