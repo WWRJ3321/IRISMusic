@@ -20,12 +20,13 @@
 
     <!-- 与"数据只留在本机"的承诺一致：关闭系统备份/设备迁移，
              避免听歌统计、播放历史经 Google 云备份离开本机 -->
-        <application
+    <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.IRISMusic">
 
         <activity
