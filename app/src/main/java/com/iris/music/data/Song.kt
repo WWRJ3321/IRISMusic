@@ -15,7 +15,12 @@ data class Song(
     /** 所在文件夹绝对路径，例如 /storage/emulated/0/Music/Anime */
     val folderPath: String,
     /** 文件夹显示名 */
-    val folderName: String
+    val folderName: String,
+    
+    // ===== 新增的网络音乐专属字段（给默认值，不影响本地音乐） =====
+    val popularity: Int = 0,
+    val publishTime: Long = 0L,
+    val artistAvatarUrl: String? = null
 )
 
 data class MusicFolder(
@@ -44,6 +49,8 @@ enum class SortDirection(val label: String) {
  */
 val Song.formatLabel: String
     get() {
+        // 如果是网络歌曲，直接返回网络标识
+        if (filePath.startsWith("http") || filePath.startsWith("online_")) return "ONLINE"
         val ext = filePath.substringAfterLast('.', "").trim()
         if (ext.isEmpty() || ext.length > 5 || ext.contains('/')) return "AUDIO"
         return when (val u = ext.uppercase()) {
