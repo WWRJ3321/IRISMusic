@@ -123,7 +123,8 @@ fun MainScreen(
     onSearch: (String) -> Unit,
     onToggleLike: (Long) -> Unit,
     onCyclePlayMode: () -> Unit,
-    onToggleSettings: (Boolean) -> Unit
+    onToggleSettings: (Boolean) -> Unit,
+    modifier: Modifier = Modifier // <-- 新增 modifier
 ) {
     val bgPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -177,7 +178,7 @@ fun MainScreen(
     var showCountLabel by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) { delay(4000); showCountLabel = false }
 
-    Box(Modifier.fillMaxSize().background(colors.background)) {
+    Box(modifier.fillMaxSize().background(colors.background)) { // <-- 使用 modifier
         AuroraBackground(
             state.currentSong?.filePath,
             isDark = colors.isDark,
