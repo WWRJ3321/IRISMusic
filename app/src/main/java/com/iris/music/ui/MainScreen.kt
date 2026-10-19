@@ -23,6 +23,7 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
@@ -32,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
@@ -56,6 +58,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import android.content.res.Configuration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.geometry.Rect
@@ -84,6 +87,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import coil.compose.AsyncImage
 import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
 import com.iris.music.data.MusicFolder
@@ -96,8 +100,10 @@ import com.iris.music.data.Song
 import com.iris.music.data.SortDirection
 import com.iris.music.data.SortOrder
 import com.iris.music.data.formatLabel
+import com.iris.music.player.MusicComment
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
+import com.iris.music.player.TopListInfo
 import com.iris.music.ui.theme.*
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
@@ -157,11 +163,18 @@ fun MainScreen(
     var showSleepTimer by remember { mutableStateOf(false) }
     var showPlaylists by remember { mutableStateOf(false) }
     var pendingAddSong by remember { mutableStateOf<Song?>(null) }
+    
+    // ===== 新增：弹窗状态 =====
+    var showTopListSheet by remember { mutableStateOf(false) }
+    var showCommentsSheet by remember { mutableStateOf(false) }
+
     val onPlayerPage by remember { derivedStateOf { pagerState.currentPage == 1 } }
-    val hasOverlay = pendingAddSong != null || showPlaylists || showEqualizer || showSleepTimer || state.showReport || state.showSettings
+    val hasOverlay = pendingAddSong != null || showPlaylists || showEqualizer || showSleepTimer || state.showReport || state.showSettings || showTopListSheet || showCommentsSheet
 
     BackHandler(enabled = hasOverlay) {
         when {
+            showCommentsSheet -> showCommentsSheet = false
+            showTopListSheet -> showTopListSheet = false
             pendingAddSong != null -> pendingAddSong = null
             showPlaylists -> showPlaylists = false
             showEqualizer -> showEqualizer = false
@@ -215,17 +228,17 @@ fun MainScreen(
                                 onCycleLayout = { viewModel.setLayout(state.layout.next) }, onOpenPlaylists = { showPlaylists = true },
                                 onSortOrder = viewModel::setSortOrder, onSortDirection = viewModel::setSortDirection,
                                 onAddToPlaylist = { song -> 
-                                    if (state.isOnlineMode) {
-                                        viewModel.removeOnlineSong(song.id) // 在线模式长按删除
-                                    } else {
-                                        pendingAddSong = song // 本地模式长按加歌单
-                                    }
+                                    // 在线模式长按删除，本地模式长按加歌单
+                                    if (state.isOnlineMode) viewModel.removeOnlineSong(song.id) else pendingAddSong = song
                                 }, 
+                                onOpenTopLists = { showTopListSheet = true },
                                 scrollerDragging = scrollerDragging, showCount = showCountLabel
                             )
                             1 -> PlayerPage(
                                 state = state, colors = colors, viewModel = viewModel, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek,
-                                onToggleLike = onToggleLike, onCyclePlayMode = onCyclePlayMode, onOpenEqualizer = { showEqualizer = true }, onOpenSleepTimer = { showSleepTimer = true }, eqActive = eqState.active
+                                onToggleLike = onToggleLike, onCyclePlayMode = onCyclePlayMode, onOpenEqualizer = { showEqualizer = true }, onOpenSleepTimer = { showSleepTimer = true }, 
+                                eqActive = eqState.active, 
+                                onOpenComments = { showCommentsSheet = true }
                             )
                         }
                     }
@@ -259,36 +272,15 @@ fun MainScreen(
                     AnimatedContent(
                         targetState = state.useNewSettingsStyle,
                         transitionSpec = {
-                            ((fadeIn(tween(360, delayMillis = 70)) +
-                                slideInVertically(tween(500, easing = EaseOutCubic)) { it / 8 }) togetherWith
-                                (fadeOut(tween(220)) +
-                                    slideOutVertically(tween(240, easing = EaseInCubic)) { -it / 12 }))
-                                .using(
-                                    SizeTransform(clip = false) { _, _ ->
-                                        tween(durationMillis = 500, easing = FastOutSlowInEasing)
-                                    }
-                                )
+                            ((fadeIn(tween(360, delayMillis = 70)) + slideInVertically(tween(500, easing = EaseOutCubic)) { it / 8 }) togetherWith (fadeOut(tween(220)) + slideOutVertically(tween(240, easing = EaseInCubic)) { -it / 12 }))
+                                .using(SizeTransform(clip = false) { _, _ -> tween(durationMillis = 500, easing = FastOutSlowInEasing) })
                         },
                         label = "settingsStyleSwap"
                     ) { useNew ->
                         if (useNew) {
-                            NewSettingsPanel(
-                                state = state,
-                                colors = colors,
-                                viewModel = viewModel,
-                                onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
-                                sheetDrag = settingsDrag,
-                                onDismiss = { onToggleSettings(false) }
-                            )
+                            NewSettingsPanel(state, colors, viewModel, { bgPickerLauncher.launch(arrayOf("image/*")) }, settingsDrag) { onToggleSettings(false) }
                         } else {
-                            SettingsPanel(
-                                state = state,
-                                colors = colors,
-                                viewModel = viewModel,
-                                onPickBackground = { bgPickerLauncher.launch(arrayOf("image/*")) },
-                                sheetDrag = settingsDrag,
-                                onDismiss = { onToggleSettings(false) }
-                            )
+                            SettingsPanel(state, colors, viewModel, { bgPickerLauncher.launch(arrayOf("image/*")) }, settingsDrag) { onToggleSettings(false) }
                         }
                     }
                 }
@@ -320,6 +312,59 @@ fun MainScreen(
             AnimatedVisibility(visible = state.showReport, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180))) {
                 ListenReportSheet(report = state.report, onDismiss = { viewModel.toggleReport(false) }, onRangeChange = viewModel::setReportRange, onPlaySong = { id -> viewModel.playSongById(id); viewModel.toggleReport(false) }, colors = colors)
             }
+            
+            // ===== 排行榜弹窗 =====
+            if (showTopListSheet) {
+                ModalBottomSheet(onDismissRequest = { showTopListSheet = false }, containerColor = colors.background, contentColor = colors.text, scrimColor = Color.Black.copy(alpha = 0.5f)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("官方排行榜", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(state.topLists.size) { index ->
+                                val topList = state.topLists[index]
+                                Row(Modifier.fillMaxWidth().clickable { viewModel.playTopList(topList.id); showTopListSheet = false }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    AsyncImage(model = topList.coverImgUrl, contentDescription = null, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                                    Spacer(Modifier.width(16.dp))
+                                    Column {
+                                        Text(topList.name, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                        Text(topList.updateFrequency, fontSize = 12.sp, color = colors.subText)
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(32.dp))
+                    }
+                }
+            }
+
+            // ===== 评论区弹窗 =====
+            if (showCommentsSheet) {
+                ModalBottomSheet(onDismissRequest = { showCommentsSheet = false }, containerColor = colors.background, contentColor = colors.text, scrimColor = Color.Black.copy(alpha = 0.5f)) {
+                    Column(Modifier.padding(16.dp).fillMaxHeight(0.8f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("评论 (${state.currentCommentCount})", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.weight(1f))
+                            if (state.isCommentsLoading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            items(state.currentComments.size) { index ->
+                                val comment = state.currentComments[index]
+                                Row {
+                                    AsyncImage(model = comment.avatarUrl, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape).background(colors.subText), contentScale = ContentScale.Crop)
+                                    Spacer(Modifier.width(12.dp))
+                                    Column {
+                                        Text(comment.nickname, fontSize = 14.sp, color = colors.subText)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(comment.content, fontSize = 15.sp)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text("❤️ ${comment.likedCount}", fontSize = 12.sp, color = colors.subText)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -343,7 +388,8 @@ private fun LibrarySortBar(order: SortOrder, direction: SortDirection, colors: I
 private fun LibraryPage(
     state: PlayerUiState, colors: IrisColors, listState: androidx.compose.foundation.lazy.LazyListState, scrollerDragging: MutableState<Boolean>,
     onSelect: (Int) -> Unit, onPlaySong: (Song) -> Unit, onSearch: (String) -> Unit, onSettings: () -> Unit, onReport: () -> Unit, onReload: () -> Unit,
-    onCycleLayout: () -> Unit, onOpenPlaylists: () -> Unit, onSortOrder: (SortOrder) -> Unit, onSortDirection: (SortDirection) -> Unit, onAddToPlaylist: (Song) -> Unit, showCount: Boolean = true
+    onCycleLayout: () -> Unit, onOpenPlaylists: () -> Unit, onSortOrder: (SortOrder) -> Unit, onSortDirection: (SortDirection) -> Unit, onAddToPlaylist: (Song) -> Unit, 
+    onOpenTopLists: () -> Unit, showCount: Boolean = true
 ) {
     val density = LocalDensity.current
     val statusBarHeightDp = WindowInsets.statusBars.getTop(density)
@@ -383,13 +429,10 @@ private fun LibraryPage(
     val listScrollable = listState.canScrollForward || listState.canScrollBackward
     LaunchedEffect(listScrollable) { if (!listScrollable && barOffset.value != 0f) settleBarTo(0f) }
 
-    // === 新增：静止时自动隐藏上栏 ===
     LaunchedEffect(state.topBarAutoHide, listState.isScrollInProgress, barOffset.value) {
         if (state.topBarAutoHide && !listState.isScrollInProgress && barOffset.value == 0f) {
-            delay(3000) // 静止 3 秒后隐藏
-            if (!listState.isScrollInProgress && barOffset.value == 0f) {
-                settleBarTo(-hideDistanceState.value)
-            }
+            delay(3000)
+            if (!listState.isScrollInProgress && barOffset.value == 0f) settleBarTo(-hideDistanceState.value)
         }
     }
 
@@ -441,9 +484,6 @@ private fun LibraryPage(
     }
 
     Box(Modifier.fillMaxSize().pointerInput(searchFocused) { if (!searchFocused) return@pointerInput; awaitEachGesture { val down = awaitFirstDown(requireUnconsumed = false); if (!searchBounds.value.contains(down.position)) focusManager.clearFocus() } }) {
-        val recPool = remember(state.allSongs, state.selectedFolders) { val sel = state.selectedFolders; if (sel.isEmpty()) state.allSongs else state.allSongs.filter { it.folderPath in sel } }
-        
-        // === 核心改动：在线 vs 本地列表 ===
         val displayList = if (state.isOnlineMode) {
             if (state.searchQuery.isNotBlank()) state.onlineSearchResults else state.queue
         } else {
@@ -451,7 +491,6 @@ private fun LibraryPage(
         }
 
         if (state.isOnlineMode && displayList.isEmpty()) {
-            // 在线模式下没数据时的页面（加载中、报错、或提示）
             Box(Modifier.fillMaxSize().padding(top = 120.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (state.onlineSearchLoading) {
@@ -479,8 +518,7 @@ private fun LibraryPage(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = with(density) { statusBarHeightDp.toDp() + barTopGap + barHeight.value.toDp() + 8.dp }, bottom = 50.dp)
             ) {
-                // 1. 推荐区（本地和在线都会显示）
-                if (state.searchQuery.isBlank() && state.showRecommendations && state.recommendations.isNotEmpty()) {
+                if (state.showRecommendations && state.recommendations.isNotEmpty()) {
                     item {
                         Crossfade(targetState = state.recommendationsVersion to state.recommendations, animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut), label = "recommendationFade") { (_, recs) ->
                             if (recs.isNotEmpty()) {
@@ -490,11 +528,10 @@ private fun LibraryPage(
                     }
                 }
                 
-                // 2. 列表区
                 itemsIndexed(displayList, key = { _, song -> "song-${song.id}" }) { index, song ->
                     SongRow(
                         song = song, 
-                        active = index == state.currentIndex, 
+                        active = if (state.isOnlineMode) state.currentSong?.id == song.id else index == state.currentIndex, 
                         colors = colors, 
                         rowSize = state.rowSize, 
                         showCover = state.showRowCover, 
@@ -503,13 +540,7 @@ private fun LibraryPage(
                         showLikedBadge = state.showLikedBadge, 
                         liked = song.id in state.likedSongIds, 
                         playlistNames = Playlists.playlistsOfSong(song.id),
-                        onClick = { 
-                            if (state.isOnlineMode && state.searchQuery.isNotBlank()) {
-                                onPlaySong(song)
-                            } else {
-                                onSelect(index) 
-                            }
-                        }, 
+                        onClick = { if (state.isOnlineMode && state.searchQuery.isNotBlank()) onPlaySong(song) else onSelect(index) }, 
                         onLongPress = { onAddToPlaylist(song) }
                     )
                 }
@@ -546,6 +577,13 @@ private fun LibraryPage(
                                 Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                // ===== 网络模式下的排行榜按钮 =====
+                                if (state.isOnlineMode) {
+                                    Box(Modifier.size(34.dp).clip(IrisShape.chip).background(colors.primary.copy(alpha=0.15f)).clickable { onOpenTopLists() }, contentAlignment = Alignment.Center) {
+                                        Text("榜", color = colors.primary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                }
                                 PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = state.activePlaylistId != null)
                                 Spacer(Modifier.width(8.dp)); LayoutButton(onClick = onCycleLayout, colors = colors)
                                 Spacer(Modifier.width(8.dp)); ReportButton(onClick = onReport, colors = colors)
@@ -586,7 +624,11 @@ private fun LibraryPage(
 }
 
 @Composable
-private fun PlayerPage(state: PlayerUiState, colors: IrisColors, viewModel: PlayerViewModel, onToggle: () -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onSeek: (Float) -> Unit, onToggleLike: (Long) -> Unit, onCyclePlayMode: () -> Unit, onOpenEqualizer: () -> Unit, onOpenSleepTimer: () -> Unit, eqActive: Boolean) {
+private fun PlayerPage(
+    state: PlayerUiState, colors: IrisColors, viewModel: PlayerViewModel, onToggle: () -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onSeek: (Float) -> Unit, 
+    onToggleLike: (Long) -> Unit, onCyclePlayMode: () -> Unit, onOpenEqualizer: () -> Unit, onOpenSleepTimer: () -> Unit, eqActive: Boolean,
+    onOpenComments: () -> Unit
+) {
     var showLyrics by remember { mutableStateOf(false) }
     var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricLoading by remember { mutableStateOf(false) }
@@ -610,104 +652,255 @@ private fun PlayerPage(state: PlayerUiState, colors: IrisColors, viewModel: Play
     }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 26.dp).then(if (glass) Modifier.irisBackdropSource(cardBackdrop) else if (frosted) Modifier.haze(state = lyricsHazeState, style = HazeStyle(blurRadius = frostedBlur)) else Modifier), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            PlayerCard(title = state.currentSong?.title ?: "未选择", artist = state.currentSong?.artist ?: "", positionMs = state.positionMs, durationMs = state.durationMs, shuffle = state.shuffle, repeatMode = state.repeatMode, artworkPath = state.currentSong?.filePath, progress = state.progress, isPlaying = state.isPlaying, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek, onCyclePlayMode = onCyclePlayMode, onToggleLike = { state.currentSong?.let { onToggleLike(it.id) } }, liked = state.currentSong?.id in state.likedSongIds, onClickArtwork = onClickArtwork, colors = colors, modifier = Modifier, sleepTimerMs = state.sleepTimerMs, sleepTimerEndMs = state.sleepTimerEndMs, onOpenSleepTimer = onOpenSleepTimer, onOpenEqualizer = onOpenEqualizer, eqActive = eqActive, audioFormat = state.currentSong?.formatLabel ?: "", visualizerEnabled = state.visualizerEnabled, tiltSpectrum = state.tiltSpectrum, coverShakeEnabled = state.coverShake, coverLyricEnabled = state.coverLyric, onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) })
+            PlayerCard(
+                title = state.currentSong?.title ?: "未选择", 
+                artist = state.currentSong?.artist ?: "", 
+                positionMs = state.positionMs, durationMs = state.durationMs, shuffle = state.shuffle, repeatMode = state.repeatMode, 
+                artworkPath = state.currentSong?.filePath, 
+                artworkUri = state.currentSong?.albumArtUri, // 传入网络封面
+                progress = state.progress, isPlaying = state.isPlaying, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek, onCyclePlayMode = onCyclePlayMode, 
+                onToggleLike = { state.currentSong?.let { onToggleLike(it.id) } }, liked = state.currentSong?.id in state.likedSongIds, onClickArtwork = onClickArtwork, colors = colors, modifier = Modifier, 
+                sleepTimerMs = state.sleepTimerMs, sleepTimerEndMs = state.sleepTimerEndMs, onOpenSleepTimer = onOpenSleepTimer, onOpenEqualizer = onOpenEqualizer, eqActive = eqActive, 
+                audioFormat = state.currentSong?.formatLabel ?: "", visualizerEnabled = state.visualizerEnabled, tiltSpectrum = state.tiltSpectrum, coverShakeEnabled = state.coverShake, coverLyricEnabled = state.coverLyric, 
+                onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
+                onOpenComments = onOpenComments // 传入评论事件
+            )
         }
         if (showLyrics) {
-            LyricsOverlay(lines = lyricLines, loading = lyricLoading, positionMs = state.positionMs, durationMs = state.durationMs, title = state.currentSong?.title ?: "", artist = state.currentSong?.artist ?: "", colors = colors, hazeState = lyricsHazeState, backdrops = lyricsBackdrops, onSeek = onSeek, lyricAlign = state.lyricAlign, lyricFont = state.lyricFont, lyricFontSize = state.lyricFontSize, karaoke = state.karaokeLyric, lyricUseCustomColor = state.lyricUseCustomColor, lyricTheme = state.lyricTheme, lyricCustomPrimary = state.lyricCustomPrimary, lyricCustomSecondary = state.lyricCustomSecondary, onDismiss = { showLyrics = false })
+            LyricsOverlay(
+                lines = lyricLines, loading = lyricLoading, positionMs = state.positionMs, durationMs = state.durationMs, title = state.currentSong?.title ?: "", artist = state.currentSong?.artist ?: "", colors = colors, hazeState = lyricsHazeState, backdrops = lyricsBackdrops, onSeek = onSeek, 
+                lyricAlign = state.lyricAlign, lyricFont = state.lyricFont, lyricFontSize = state.lyricFontSize, karaoke = state.karaokeLyric, lyricUseCustomColor = state.lyricUseCustomColor, lyricTheme = state.lyricTheme, lyricCustomPrimary = state.lyricCustomPrimary, lyricCustomSecondary = state.lyricCustomSecondary, 
+                onDismiss = { showLyrics = false },
+                showTranslation = state.showTranslationLyric,
+                songId = state.currentSong?.id ?: 0L // 供解析器寻找翻译
+            )
         }
     }
 }
 
-private val LyricEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
-private const val LYRIC_ANIM_MS = 620
+// =========================================================================
+// 内部的 PlayerCard 和 LyricsOverlay 实现
+// =========================================================================
 
 @Composable
-internal fun LyricsOverlay(lines: List<LyricLine>, loading: Boolean, positionMs: Long, durationMs: Long, title: String, artist: String, colors: IrisColors, hazeState: HazeState, backdrops: List<IrisBackdrop>, onSeek: (Float) -> Unit, lyricAlign: Int = 1, lyricFont: Int = 0, lyricFontSize: Float = 20f, karaoke: Boolean = true, lyricUseCustomColor: Boolean = false, lyricTheme: IrisTheme = IrisTheme.MONO, lyricCustomPrimary: Long = 0xFF00F0FFL, lyricCustomSecondary: Long = 0xFFFF2E97L, onDismiss: () -> Unit) {
-    val listState = rememberLazyListState()
-    val current = LyricParser.currentIndex(lines, positionMs)
-    val boxAlign = when (lyricAlign) { 0 -> Alignment.CenterStart; 2 -> Alignment.CenterEnd; else -> Alignment.Center }
-    val textAlign = when (lyricAlign) { 0 -> TextAlign.Start; 2 -> TextAlign.End; else -> TextAlign.Center }
-    val lyricFamily = when (lyricFont) { 1 -> FontFamily.Serif; else -> FontFamily.SansSerif }
-    val isLand = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val onCard = if (colors.isDark) Color.White else Color.Black
+internal fun PlayerCard(
+    title: String, artist: String, positionMs: Long, durationMs: Long, shuffle: Boolean, repeatMode: RepeatMode, artworkPath: String?, 
+    artworkUri: android.net.Uri?, 
+    progress: Float, isPlaying: Boolean, onToggle: () -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onSeek: (Float) -> Unit, onCyclePlayMode: () -> Unit, 
+    onToggleLike: () -> Unit, liked: Boolean, onClickArtwork: () -> Unit, colors: IrisColors, modifier: Modifier, sleepTimerMs: Long, sleepTimerEndMs: Long, onOpenSleepTimer: () -> Unit, onOpenEqualizer: () -> Unit, eqActive: Boolean, 
+    audioFormat: String, visualizerEnabled: Boolean, tiltSpectrum: Boolean, coverShakeEnabled: Boolean, coverLyricEnabled: Boolean, onToggleVisualizer: () -> Unit,
+    onOpenComments: () -> Unit
+) {
     val glass = isLiquidGlass
-    val frosted = isFrostedGlass
-    val frostedBlur = frostedBlurRadius
-    val scrim = if (glass) { if (colors.isDark) Color(0x8C121218) else Color(0xA6F4F4F8) } else { if (colors.isDark) Color(0xB3121218) else Color(0xCCF4F4F8) }
-    val (lPrimary, lSecondary) = remember(lyricTheme, colors.isDark, lyricCustomPrimary, lyricCustomSecondary) { when (lyricTheme) { IrisTheme.MONO -> if (colors.isDark) Color.White to Color.Black else Color.Black to Color.White; IrisTheme.OCEAN -> IrisPalette.NeonBlue to IrisPalette.NeonCyan; IrisTheme.GRASS -> IrisPalette.NeonGreen to IrisPalette.NeonLime; IrisTheme.CUSTOM -> Color(lyricCustomPrimary) to Color(lyricCustomSecondary); else -> Color.White to Color.Gray } }
-    val lyricBrush = remember(lPrimary, lSecondary) { Brush.horizontalGradient(listOf(lPrimary, lSecondary)) }
-    val unsungColor = if (colors.isDark) Color.White.copy(alpha = 0.4f) else Color.Black.copy(alpha = 0.4f)
-    val lyricsGlass = if (glass) { Modifier.glassSurface(spec = GlassLevel.SHEET.currentSpec(colors), shape = RectangleShape, backdrops = backdrops) } else Modifier
-    val scrubScope = rememberCoroutineScope()
-    var scrubHideJob by remember { mutableStateOf<Job?>(null) }
-    var showTimeTag by remember { mutableStateOf(false) }
-    val focusIndex by remember { derivedStateOf { val info = listState.layoutInfo; val vis = info.visibleItemsInfo; if (vis.isEmpty()) return@derivedStateOf -1; val focusFrac = if (isLand) 0.42f else 0.38f; val focusPx = info.viewportStartOffset + (info.viewportEndOffset - info.viewportStartOffset) * focusFrac; vis.minByOrNull { kotlin.math.abs((it.offset + it.size / 2f) - focusPx) }?.index ?: -1 } }
-    val scrolling = listState.interactionSource.collectIsDraggedAsState().value
-    LaunchedEffect(scrolling) { if (scrolling) { scrubHideJob?.cancel(); showTimeTag = true } else { scrubHideJob?.cancel(); scrubHideJob = scrubScope.launch { delay(900); showTimeTag = false } } }
-    LaunchedEffect(current) { if (current < 0) return@LaunchedEffect; val scrollSpec = tween<Float>(durationMillis = LYRIC_ANIM_MS, easing = LyricEase); val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == current }; if (visible == null) { listState.scrollToItem(current) }; val info = listState.layoutInfo; val vpStart = info.viewportStartOffset; val vpEnd = info.viewportEndOffset; val focusFrac = if (isLand) 0.42f else 0.38f; val focusLine = vpStart + (vpEnd - vpStart) * focusFrac; val t = info.visibleItemsInfo.firstOrNull { it.index == current }; if (t != null) { listState.animateScrollBy(t.offset + t.size / 2f - focusLine, scrollSpec) } }
-    Box(Modifier.fillMaxSize().then(if (glass) { lyricsGlass } else if (frosted) { Modifier.hazeChild(state = hazeState, style = HazeStyle(blurRadius = frostedBlur, tint = scrim), shape = IrisShape.item) } else { Modifier.background(scrim) }).clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onDismiss() }.statusBarsPadding().navigationBarsPadding()) {
-        val tagAlpha by animateFloatAsState(if (showTimeTag && focusIndex in lines.indices) 1f else 0f, animationSpec = tween(180), label = "timeTagAlpha")
-        if (focusIndex in lines.indices) {
-            val focusFrac = if (isLand) 0.42f else 0.38f
-            val onRight = lyricAlign != 2
-            val animMs by animateFloatAsState(targetValue = lines[focusIndex].timeMs.toFloat(), animationSpec = tween(durationMillis = 260, easing = LyricEase), label = "timeTagMs")
-            val tagText = formatDuration(animMs.toLong())
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val tagY = maxHeight * focusFrac
-                Row(Modifier.align(if (onRight) Alignment.TopEnd else Alignment.TopStart).padding(top = tagY - 7.dp, start = if (onRight) 0.dp else 12.dp, end = if (onRight) 12.dp else 0.dp).alpha(tagAlpha), verticalAlignment = Alignment.CenterVertically) {
-                    if (onRight) { Box(Modifier.width(10.dp).height(2.dp).background(colors.primary)); Spacer(Modifier.width(5.dp)); Text(tagText, color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold) } else { Text(tagText, color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.width(5.dp)); Box(Modifier.width(10.dp).height(2.dp).background(colors.primary)) }
+    val isOnline = artworkUri != null
+    
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(32.dp))
+            .then(if (glass) Modifier.irisSurface(GlassLevel.SHEET, colors, RoundedCornerShape(32.dp)) else Modifier.background(colors.card))
+            .padding(24.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+            // 封面
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .clickable { onClickArtwork() },
+                contentAlignment = Alignment.Center
+            ) {
+                if (isOnline && artworkUri != null) {
+                    AsyncImage(model = artworkUri, contentDescription = "Cover", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                } else if (!artworkPath.isNullOrBlank()) {
+                    SongArtwork(filePath = artworkPath, seedId = title.hashCode().toLong(), artworkSize = 300.dp, isDark = colors.isDark, modifier = Modifier.fillMaxSize())
+                } else {
+                    Box(Modifier.fillMaxSize().background(colors.surface), contentAlignment = Alignment.Center) {
+                        Text("Vv MUSIC", color = colors.subText, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
-        }
-        GlassContent {
-            Column(Modifier.fillMaxSize().padding(horizontal = 28.dp).padding(top = 16.dp, bottom = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, color = onCard, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (artist.isNotBlank()) { Text("  \u00b7  $artist", color = colors.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+
+            Spacer(Modifier.height(24.dp))
+
+            // 信息
+            Text(title, color = colors.text, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(4.dp))
+            Text(artist, color = colors.subText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            
+            if (isOnline && audioFormat.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.clip(RoundedCornerShape(4.dp)).background(colors.primary.copy(alpha = 0.15f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                    Text(audioFormat, color = colors.primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
-                Spacer(Modifier.height(6.dp))
-                when {
-                    loading -> Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { Text("\u52a0\u8f7d\u6b4c\u8bcd\u2026", color = colors.subText, fontSize = 14.sp) }
-                    lines.isEmpty() -> Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { Text("\u672a\u627e\u5230\u6b4c\u8bcd\n\uff08\u6b4c\u66f2\u5185\u5d4c\u6b4c\u8bcd\u6216\u540c\u76ee\u5f55\u540c\u540d .lrc\uff09", color = colors.subText, fontSize = 14.sp, textAlign = TextAlign.Center) }
-                    else -> LazyColumn(
-                        state = listState,
-                        modifier = Modifier.weight(1f).fillMaxWidth().padding(start = if (lyricAlign == 0) (if (isLand) 52.dp else 10.dp) else 0.dp, end = if (lyricAlign == 2) (if (isLand) 52.dp else 10.dp) else 0.dp).graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithContent {
-                            drawContent()
-                            val fade = 56.dp.toPx()
-                            drawRect(brush = Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black, startY = 0f, endY = fade), blendMode = BlendMode.DstIn)
-                            drawRect(brush = Brush.verticalGradient(0f to Color.Black, 1f to Color.Transparent, startY = size.height - fade, endY = size.height), blendMode = BlendMode.DstIn)
-                        },
-                        verticalArrangement = Arrangement.spacedBy(if (isLand) 14.dp else 18.dp),
-                        contentPadding = PaddingValues(vertical = if (isLand) 56.dp else 120.dp)
-                    ) {
-                        itemsIndexed(lines, key = { index, _ -> "lyric-$index" }) { index, line ->
-                            val isCurrent = index == current
-                            val dist = if (current < 0) 0 else kotlin.math.abs(index - current)
-                            val stagger = (dist.coerceAtMost(6)) * 22
-                            val scale by animateFloatAsState(targetValue = if (isCurrent) 1f else (0.9f - (dist - 1).coerceAtLeast(0) * 0.015f).coerceAtLeast(0.86f), animationSpec = tween(durationMillis = LYRIC_ANIM_MS, delayMillis = stagger, easing = LyricEase), label = "lyricScale")
-                            val rowAlpha by animateFloatAsState(targetValue = if (isCurrent) 1f else (0.66f - (dist - 1).coerceAtLeast(0) * 0.12f).coerceAtLeast(0.26f), animationSpec = tween(durationMillis = LYRIC_ANIM_MS, delayMillis = stagger, easing = LyricEase), label = "lyricAlpha")
-                            Box(Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale; alpha = rowAlpha; transformOrigin = when (lyricAlign) { 0 -> androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f); 2 -> androidx.compose.ui.graphics.TransformOrigin(1f, 0.5f); else -> androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f) } }.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onDismiss() }.padding(vertical = if (isCurrent) 6.dp else 0.dp), contentAlignment = boxAlign) {
-                                val seekModifier = Modifier.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { if (durationMs > 0L) { onSeek((line.timeMs.toFloat() / durationMs).coerceIn(0f, 1f)) } }
-                                val lineColor by animateColorAsState(targetValue = if (isCurrent) colors.primary else onCard, animationSpec = tween(durationMillis = LYRIC_ANIM_MS, easing = LyricEase), label = "lyricColor")
-                                if (isCurrent && karaoke) {
-                                    KaraokeLine(line = line, positionMs = positionMs, lineEndMs = lines.getOrNull(index + 1)?.timeMs ?: (if (durationMs > 0) durationMs else line.timeMs + 4000), lyricUseCustomColor = lyricUseCustomColor, themePrimary = lPrimary, themeSecondary = lSecondary, originalColor = onCard, unsungColor = unsungColor, textAlign = textAlign, fontFamily = lyricFamily, fontSize = lyricFontSize, modifier = seekModifier)
-                                } else {
-                                    val useBrush = if (lyricUseCustomColor) lyricBrush else SolidColor(lineColor)
-                                    Text(line.text, style = androidx.compose.ui.text.TextStyle(brush = useBrush, fontSize = lyricFontSize.sp, fontFamily = lyricFamily, fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium, textAlign = textAlign), modifier = seekModifier)
-                                }
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            // 进度条
+            Slider(
+                value = progress,
+                onValueChange = onSeek,
+                colors = SliderDefaults.colors(
+                    thumbColor = colors.primary,
+                    activeTrackColor = colors.primary,
+                    inactiveTrackColor = colors.subText.copy(alpha = 0.2f)
+                ),
+                modifier = Modifier.fillMaxWidth().height(30.dp)
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatDuration(positionMs), color = colors.subText, fontSize = 11.sp)
+                Text(formatDuration(durationMs), color = colors.subText, fontSize = 11.sp)
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // 播放控制
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onCyclePlayMode) {
+                    val iconText = when (repeatMode) {
+                        RepeatMode.ONE -> "🔂"
+                        RepeatMode.ALL -> "🔁"
+                        RepeatMode.OFF -> if (shuffle) "🔀" else "➡️"
+                    }
+                    Text(iconText, fontSize = 20.sp)
+                }
+                
+                IconButton(onClick = onPrev) { Text("⏮️", fontSize = 28.sp) }
+                
+                Box(
+                    Modifier.size(64.dp).clip(CircleShape).background(colors.primary).clickable { onToggle() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(if (isPlaying) "⏸️" else "▶️", fontSize = 28.sp, color = colors.primary.readableTextOn())
+                }
+                
+                IconButton(onClick = onNext) { Text("⏭️", fontSize = 28.sp) }
+                
+                IconButton(onClick = onToggleLike) {
+                    Text(if (liked) "❤️" else "🤍", fontSize = 20.sp)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = colors.subText.copy(alpha = 0.1f))
+            Spacer(Modifier.height(16.dp))
+
+            // 功能栏
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                IconButton(onClick = onOpenComments) { Text("💬", fontSize = 20.sp) }
+                IconButton(onClick = onOpenSleepTimer) { Text(if (sleepTimerMs > 0) "⏱️" else "⏳", fontSize = 20.sp) }
+                IconButton(onClick = onOpenEqualizer) { Text("🎛️", fontSize = 20.sp) }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun LyricsOverlay(
+    lines: List<LyricLine>, loading: Boolean, positionMs: Long, durationMs: Long, title: String, artist: String, colors: IrisColors, hazeState: HazeState, backdrops: List<IrisBackdrop>, onSeek: (Float) -> Unit, 
+    lyricAlign: Int = 1, lyricFont: Int = 0, lyricFontSize: Float = 20f, karaoke: Boolean = true, lyricUseCustomColor: Boolean = false, lyricTheme: IrisTheme = IrisTheme.MONO, lyricCustomPrimary: Long = 0xFF00F0FFL, lyricCustomSecondary: Long = 0xFFFF2E97L, onDismiss: () -> Unit,
+    showTranslation: Boolean, songId: Long 
+) {
+    val listState = rememberLazyListState()
+    val current = LyricParser.currentIndex(lines, positionMs)
+    
+    var translationLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
+    val context = LocalContext.current
+    
+    LaunchedEffect(songId, showTranslation) {
+        if (showTranslation && songId > 0) {
+            val tFile = java.io.File(context.cacheDir, "online_lyrics/online_${songId}_t.lrc")
+            if (tFile.exists()) {
+                translationLines = withContext(Dispatchers.IO) { 
+                    LyricParser.loadLyrics(tFile.absolutePath, durationMs) ?: emptyList() 
+                }
+            } else {
+                translationLines = emptyList()
+            }
+        } else {
+            translationLines = emptyList()
+        }
+    }
+
+    val boxAlign = when (lyricAlign) { 0 -> Alignment.CenterStart; 2 -> Alignment.CenterEnd; else -> Alignment.Center }
+    val textAlign = when (lyricAlign) { 0 -> TextAlign.Start; 2 -> TextAlign.End; else -> TextAlign.Center }
+    
+    LaunchedEffect(current) { 
+        if (current >= 0 && current < lines.size) {
+            listState.animateScrollToItem(current, scrollOffset = -200)
+        }
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)).clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onDismiss() }) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 28.dp)) {
+            Spacer(Modifier.height(24.dp))
+            Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            Text(artist, color = Color.Gray, fontSize = 14.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            Spacer(Modifier.height(40.dp))
+
+            if (loading) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
+            } else if (lines.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无歌词", color = Color.Gray) }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(24.dp),
+                    contentPadding = PaddingValues(bottom = 150.dp)
+                ) {
+                    itemsIndexed(lines) { index, line ->
+                        val isCurrent = index == current
+                        val alpha by animateFloatAsState(if (isCurrent) 1f else 0.4f)
+                        val scale by animateFloatAsState(if (isCurrent) 1.1f else 1f)
+                        
+                        val tLine = translationLines.find { Math.abs(it.timeMs - line.timeMs) < 200 }
+                        
+                        Column(
+                            modifier = Modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha; scaleX = scale; scaleY = scale },
+                            horizontalAlignment = if (lyricAlign == 0) Alignment.Start else if (lyricAlign == 2) Alignment.End else Alignment.CenterHorizontally
+                        ) {
+                            if (isCurrent && karaoke) {
+                                KaraokeLine(
+                                    line = line, positionMs = positionMs, lineEndMs = lines.getOrNull(index + 1)?.timeMs ?: (line.timeMs + 4000),
+                                    lyricUseCustomColor = lyricUseCustomColor, themePrimary = Color(lyricCustomPrimary), themeSecondary = Color(lyricCustomSecondary),
+                                    originalColor = Color.White, unsungColor = Color.White.copy(alpha = 0.5f), textAlign = textAlign, fontSize = lyricFontSize
+                                )
+                            } else {
+                                Text(
+                                    text = line.text,
+                                    color = Color.White,
+                                    fontSize = lyricFontSize.sp,
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                    textAlign = textAlign
+                                )
+                            }
+                            
+                            if (tLine != null && tLine.text.isNotBlank() && showTranslation) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = tLine.text,
+                                    color = if (isCurrent) Color.White.copy(alpha = 0.8f) else Color.Gray,
+                                    fontSize = (lyricFontSize - 4).sp,
+                                    fontWeight = FontWeight.Normal,
+                                    textAlign = textAlign
+                                )
                             }
                         }
                     }
                 }
-                Spacer(Modifier.height(8.dp))
-                if (!isLand) Text("\u70b9\u6b4c\u8bcd\u8df3\u8f6c\uff0c\u70b9\u7a7a\u767d\u5904\u5173\u95ed", color = colors.subText, fontSize = 11.sp)
             }
         }
     }
 }
 
 @Composable
-private fun KaraokeLine(line: LyricLine, positionMs: Long, lineEndMs: Long, lyricUseCustomColor: Boolean, themePrimary: Color, themeSecondary: Color, originalColor: Color, unsungColor: Color, textAlign: TextAlign = TextAlign.Center, fontFamily: FontFamily = FontFamily.SansSerif, fontSize: Float = 20f, modifier: Modifier = Modifier) {
+private fun KaraokeLine(
+    line: LyricLine, positionMs: Long, lineEndMs: Long, lyricUseCustomColor: Boolean, themePrimary: Color, themeSecondary: Color, originalColor: Color, unsungColor: Color, 
+    textAlign: TextAlign = TextAlign.Center, fontFamily: FontFamily = FontFamily.SansSerif, fontSize: Float = 20f, modifier: Modifier = Modifier
+) {
     val text = line.text
     val baseWall = remember { mutableStateOf(0L) }
     val basePos = remember { mutableStateOf(0L) }
@@ -730,79 +923,4 @@ private fun KaraokeLine(line: LyricLine, positionMs: Long, lineEndMs: Long, lyri
         Brush.horizontalGradient(colorStops = stops)
     }
     Text(text, textAlign = textAlign, modifier = modifier, style = androidx.compose.ui.text.TextStyle(brush = finalBrush, fontFamily = fontFamily, fontSize = fontSize.sp, fontWeight = FontWeight.Bold, textAlign = textAlign))
-}
-
-@Composable
-internal fun SettingsButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
-    Box(Modifier.size(34.dp).then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip)).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(18.dp)) { val c = colors.primary; drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.3f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.3f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.7f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.7f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.5f, size.height * 0.5f)) }
-    }
-}
-
-@Composable
-internal fun PlaylistButton(onClick: () -> Unit, colors: IrisColors, active: Boolean = false) {
-    Box(Modifier.size(34.dp).irisSurface(GlassLevel.CHIP, colors, IrisShape.chip).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(17.dp)) { val c = if (active) colors.primary else colors.subText; val lw = size.minDimension * 0.14f; drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.2f)); drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.5f)); drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.8f)); (0..2).forEach { i -> val y = size.height * (0.2f + i * 0.3f); drawLine(color = c, start = Offset(size.width * 0.34f, y), end = Offset(size.width * 0.94f, y), strokeWidth = lw, cap = androidx.compose.ui.graphics.StrokeCap.Round) } }
-    }
-}
-
-@Composable
-internal fun ReportButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
-    Box(Modifier.size(34.dp).then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip)).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(17.dp)) { val c = colors.primary; val w = size.width * 0.17f; val heights = floatArrayOf(0.45f, 1f, 0.7f); heights.forEachIndexed { i, h -> val x = size.width * (0.2f + i * 0.3f); val barH = size.height * 0.78f * h; drawLine(color = c, start = Offset(x, size.height * 0.88f), end = Offset(x, size.height * 0.88f - barH), strokeWidth = w, cap = androidx.compose.ui.graphics.StrokeCap.Round) } }
-    }
-}
-
-@Composable
-internal fun RefreshButton(onClick: () -> Unit, colors: IrisColors, isRefreshing: Boolean = false) {
-    val spin = remember { Animatable(0f) }
-    LaunchedEffect(isRefreshing) { if (isRefreshing) { spin.animateTo(targetValue = spin.value + 3600f, animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing))) } else if (spin.value != 0f) { val nextWhole = kotlin.math.ceil(spin.value / 360f) * 360f; spin.animateTo(nextWhole, tween(320, easing = FastOutSlowInEasing)); spin.snapTo(0f) } }
-    val rotation = spin.value
-    Box(Modifier.size(34.dp).irisSurface(GlassLevel.CHIP, colors, IrisShape.chip).irisPressable(enabled = !isRefreshing, onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(18.dp).graphicsLayer { this.rotationZ = rotation }) {
-            val c = colors.primary; val strokeW = size.minDimension * 0.11f; val r = size.minDimension / 2f - strokeW / 2f - size.minDimension * 0.04f; val inset = size.minDimension / 2f - r - strokeW / 2f
-            drawArc(color = c, startAngle = -30f, sweepAngle = 300f, useCenter = false, topLeft = Offset(inset, inset), size = Size(size.width - inset * 2, size.height - inset * 2), style = androidx.compose.ui.graphics.drawscope.Stroke(width = strokeW, cap = androidx.compose.ui.graphics.StrokeCap.Round))
-            val cx = size.width / 2f; val cy = size.height / 2f; val endRad = Math.toRadians(270.0); val ex = cx + (r * Math.cos(endRad)).toFloat(); val ey = cy + (r * Math.sin(endRad)).toFloat(); val s = size.minDimension * 0.14f; val tangent = endRad + Math.PI / 2; val half = Math.toRadians(30.0)
-            val p1 = Offset((ex + s * Math.cos(tangent - half)).toFloat(), (ey + s * Math.sin(tangent - half)).toFloat()); val p2 = Offset((ex + s * Math.cos(tangent + half)).toFloat(), (ey + s * Math.sin(tangent + half)).toFloat())
-            drawLine(c, Offset(ex, ey), p1, strokeWidth = strokeW * 0.9f, cap = androidx.compose.ui.graphics.StrokeCap.Round); drawLine(c, Offset(ex, ey), p2, strokeWidth = strokeW * 0.9f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun SongRow(song: Song, active: Boolean, colors: IrisColors, rowSize: Int, showCover: Boolean = false, showArtist: Boolean = true, showPlaylist: Boolean = true, showLikedBadge: Boolean = false, liked: Boolean = false, playlistNames: List<String> = emptyList(), onClick: () -> Unit, onLongPress: () -> Unit) {
-    val barH by animateDpAsState(if (active) 22.dp else 0.dp, IrisMotion.moveDp(), label = "cursorBar")
-    val activeT by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = IrisMotion.move(), label = "rowActive")
-    val activeBg = lerp(colors.row, colors.secondary.copy(alpha = 0.12f), activeT)
-    val vPad = if (rowSize == 0) 5.dp else if (rowSize == 1) 10.dp else 15.dp
-    val titleSize = if (rowSize == 0) 12.sp else if (rowSize == 1) 13.sp else 14.sp
-    val subSize = if (rowSize == 0) 10.sp else if (rowSize == 1) 11.sp else 12.sp
-    val coverSize = if (rowSize == 0) 34.dp else if (rowSize == 1) 44.dp else 50.dp
-    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = activeBg, accent = if (activeT > 0.5f) colors.secondary else null).combinedClickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = { Haptics.tap(); onClick() }, onLongClick = { Haptics.click(); onLongPress() }).padding(start = 14.dp, end = 14.dp, top = vPad, bottom = vPad), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(4.dp).height(barH).clip(RoundedCornerShape(2.dp)).background(colors.primary))
-        Spacer(Modifier.width(10.dp))
-        if (showCover) { SongArtwork(filePath = song.filePath, seedId = song.id, artworkSize = coverSize, isDark = colors.isDark); Spacer(Modifier.width(12.dp)) }
-        Column(Modifier.weight(1f)) {
-            Text(song.title, color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), activeT), fontSize = titleSize, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (showArtist) { Text(song.artist, color = colors.subText, fontSize = subSize, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(formatDuration(song.durationMs), color = colors.subText, fontSize = subSize, fontWeight = FontWeight.Medium)
-            if (showPlaylist && playlistNames.isNotEmpty()) { Spacer(Modifier.height(2.dp)); Text(playlistNames.joinToString(" / "), color = colors.primary.readableOn(colors.row, 3.0f), fontSize = if (rowSize == 0) 9.sp else 10.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            val badgeT by animateFloatAsState(targetValue = if (liked) 1f else 0f, animationSpec = if (IrisMotion.jelly) IrisMotion.pressScale() else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), label = "likedBadge")
-            if (showLikedBadge && badgeT > 0.01f) { Spacer(Modifier.height(2.dp)); Text("♥", color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.graphicsLayer { alpha = badgeT; scaleX = badgeT; scaleY = badgeT }) }
-        }
-    }
-}
-
-@Composable
-internal fun FolderRow(name: String, count: String, active: Boolean, colors: IrisColors, onClick: () -> Unit) {
-    val t by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = tween(240), label = "folderActive")
-    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = lerp(colors.row, colors.primary.copy(alpha = 0.12f), t), accent = if (t > 0.5f) colors.primary else null).clickable { Haptics.tap(); onClick() }.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(18.dp).clip(IrisShape.chip).background(lerp(colors.card, colors.primary, t)))
-        Spacer(Modifier.width(12.dp))
-        Text(name, Modifier.weight(1f), color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), t), fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(count, color = colors.subText, fontSize = 11.sp)
-    }
 }
