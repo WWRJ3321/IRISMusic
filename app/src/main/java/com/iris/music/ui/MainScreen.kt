@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.focus.FocusRequester
@@ -16,6 +17,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -25,10 +27,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -38,6 +44,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
@@ -48,9 +55,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import android.content.res.Configuration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.geometry.Rect
@@ -58,6 +65,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.draw.drawWithContent
@@ -69,6 +77,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,17 +87,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.request.ImageRequest
+
+import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
+import com.iris.music.data.MusicFolder
 import com.iris.music.data.LyricLine
 import com.iris.music.data.LyricParser
 import com.iris.music.data.RepeatMode
+import com.iris.music.data.Playlist
 import com.iris.music.data.Playlists
 import com.iris.music.data.Song
 import com.iris.music.data.SortDirection
 import com.iris.music.data.SortOrder
 import com.iris.music.data.formatLabel
+import com.iris.music.player.MusicComment
 import com.iris.music.player.PlayerUiState
 import com.iris.music.player.PlayerViewModel
+import com.iris.music.player.TopListInfo
 import com.iris.music.ui.theme.*
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
@@ -99,6 +118,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
+/** 主界面：列表 ↔ 播放器（左右滑动），右上角设置 */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -115,10 +135,17 @@ fun MainScreen(
     onToggleSettings: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 自定义背景图 SAF 选择器
     val bgPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri -> viewModel.setCustomBackground(uri) }
-    androidx.compose.runtime.LaunchedEffect(state.jellyAnim) { IrisMotion.jelly = state.jellyAnim }
+    // 默认封面图 SAF 选择器（供设置页「设置默认封面图」使用，见 NewSettingsScreen.kt）
+    // 这里预先定义好回调，传给 Settings 面板；Settings 面板内部触发 launcher.launch()
+    // 果冻开关同步到全局动效中心：所有组件读 IrisMotion.jelly
+    androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
+        IrisMotion.jelly = state.jellyAnim
+    }
+    // 主题色过渡：切主题/明暗时整套配色 450ms 渐变，不整屏硬闪。
     val targetColors = state.theme.colors(
         state.mode, state.systemDark,
         customPrimary = Color(state.customPrimaryArgb),
@@ -131,28 +158,52 @@ fun MainScreen(
         val to = targetColors
         if (from == to) { colorAnim.snapTo(1f); return@LaunchedEffect }
         colorAnim.snapTo(0f)
-        colorAnim.animateTo(1f, androidx.compose.animation.core.tween(450, easing = androidx.compose.animation.core.EaseInOutCubic)) { mixedColors = lerpIrisColors(from, to, value) }
+        colorAnim.animateTo(
+            1f,
+            androidx.compose.animation.core.tween(450, easing = androidx.compose.animation.core.EaseInOutCubic)
+        ) { mixedColors = lerpIrisColors(from, to, value) }
     }
     val colors = if (colorAnim.value >= 1f) targetColors else mixedColors
     val pagerState = rememberPagerState(pageCount = { 2 })
     val glass = isLiquidGlass
+
+    // 液态玻璃的取样背板：背景一层、页面内容一层。
     val bgBackdrop = rememberIrisBackdrop()
     val pageBackdrop = rememberIrisBackdrop()
-    val pageBackdrops = remember(glass, bgBackdrop) { if (glass) listOf(bgBackdrop) else emptyList() }
-    val sheetBackdrops = remember(glass, bgBackdrop, pageBackdrop) { if (glass) listOf(bgBackdrop, pageBackdrop) else emptyList() }
+    val pageBackdrops = remember(glass, bgBackdrop) {
+        if (glass) listOf(bgBackdrop) else emptyList()
+    }
+    val sheetBackdrops = remember(glass, bgBackdrop, pageBackdrop) {
+        if (glass) listOf(bgBackdrop, pageBackdrop) else emptyList()
+    }
 
+    // 均衡器弹层
     var showEqualizer by remember { mutableStateOf(false) }
     val eqState by EqualizerController.state.collectAsState()
+
+    // 睡眠定时器弹层：提到根层级，才能和设置/均衡器一样折射「背景 + 页面」两层
     var showSleepTimer by remember { mutableStateOf(false) }
+
+    // 歌单管理弹层
     var showPlaylists by remember { mutableStateOf(false) }
+
+    // 长按歌曲 → 待加入歌单的歌曲
     var pendingAddSong by remember { mutableStateOf<Song?>(null) }
-    
+
+    // 榜单弹层（IrisSheet 版本，见 TopListSheet.kt）
     var showTopListSheet by remember { mutableStateOf(false) }
+
+    // 评论弹层（IrisSheet 版本，见 CommentsSheet.kt）
     var showCommentsSheet by remember { mutableStateOf(false) }
 
     val onPlayerPage by remember { derivedStateOf { pagerState.currentPage == 1 } }
-    val hasOverlay = pendingAddSong != null || showPlaylists || showEqualizer || showSleepTimer || state.showReport || state.showSettings || showTopListSheet || showCommentsSheet
 
+    /**
+     * 返回键分级处理。判定顺序 = 视觉堆叠顺序，永远只关最上面那一层。
+     */
+    val hasOverlay = pendingAddSong != null || showPlaylists || showEqualizer ||
+        showSleepTimer || state.showReport || state.showSettings ||
+        showTopListSheet || showCommentsSheet
     BackHandler(enabled = hasOverlay) {
         when {
             showCommentsSheet -> showCommentsSheet = false
@@ -166,14 +217,26 @@ fun MainScreen(
         }
     }
 
+    // 库页 ← 播放页
     val backScope = rememberCoroutineScope()
-    BackHandler(enabled = !hasOverlay && !state.layout.isDeck && onPlayerPage) { backScope.launch { pagerState.animateScrollToPage(0) } }
+    BackHandler(enabled = !hasOverlay && !state.layout.isDeck && onPlayerPage) {
+        backScope.launch { pagerState.animateScrollToPage(0) }
+    }
+
     val libraryListState = rememberLazyListState()
     val scrollerDragging = remember { mutableStateOf(false) }
-    var showCountLabel by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) { delay(4000); showCountLabel = false }
 
-    Box(modifier.fillMaxSize().background(colors.background)) {
+    var showCountLabel by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(4000)
+        showCountLabel = false
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(colors.background)
+    ) {
         AuroraBackground(
             state.currentSong?.filePath,
             isDark = colors.isDark,
@@ -181,64 +244,121 @@ fun MainScreen(
             customUri = state.customBackgroundUri,
             modifier = if (glass) Modifier.irisBackdropSource(bgBackdrop) else Modifier
         )
+
         CompositionLocalProvider(LocalIrisBackdrops provides pageBackdrops) {
             Crossfade(
                 targetState = state.layout,
                 animationSpec = if (IrisMotion.jelly) IrisMotion.appear() else tween(420, easing = androidx.compose.animation.core.EaseInOut),
                 label = "layoutSwitch"
             ) { layout ->
-                if (layout.isDeck) {
-                    SongDeck(
-                        state = state, colors = colors,
-                        modifier = if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier,
-                        onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek, onSelect = onSelect,
-                        onToggleLike = onToggleLike, onCyclePlayMode = onCyclePlayMode, onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
-                        onOpenEqualizer = { showEqualizer = true }, onOpenSleepTimer = { showSleepTimer = true }, onOpenReport = { viewModel.toggleReport(true) },
-                        onOpenSettings = { onToggleSettings(true) }, onCycleLayout = { viewModel.setLayout(state.layout.next) }, onOpenPlaylists = { showPlaylists = true },
-                        onReload = { viewModel.reloadLibrary() }, eqActive = eqState.active
+            if (layout.isDeck) {
+                SongDeck(
+                    state = state,
+                    colors = colors,
+                    modifier = if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier,
+                    onToggle = onToggle,
+                    onPrev = onPrev,
+                    onNext = onNext,
+                    onSeek = onSeek,
+                    onSelect = onSelect,
+                    onToggleLike = onToggleLike,
+                    onCyclePlayMode = onCyclePlayMode,
+                    onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
+                    onOpenEqualizer = { showEqualizer = true },
+                    onOpenSleepTimer = { showSleepTimer = true },
+                    onOpenReport = { viewModel.toggleReport(true) },
+                    onOpenSettings = { onToggleSettings(true) },
+                    onCycleLayout = { viewModel.setLayout(state.layout.next) },
+                    onOpenPlaylists = { showPlaylists = true },
+                    onReload = { viewModel.reloadLibrary() },
+                    onOpenComments = { showCommentsSheet = true },
+                    eqActive = eqState.active
+                )
+            } else {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier)
+            ) { page ->
+                when (page) {
+                    0 -> LibraryPage(
+                        state = state,
+                        colors = colors,
+                        listState = libraryListState,
+                        onSelect = { index -> onSelect(index) },
+                        onPlaySong = viewModel::playSong,
+                        onSearch = onSearch,
+                        onSettings = { onToggleSettings(true) },
+                        onReport = { viewModel.toggleReport(true) },
+                        onReload = { viewModel.reloadLibrary() },
+                        onCycleLayout = { viewModel.setLayout(state.layout.next) },
+                        onOpenPlaylists = { showPlaylists = true },
+                        onSortOrder = viewModel::setSortOrder,
+                        onSortDirection = viewModel::setSortDirection,
+                        onAddToPlaylist = { song ->
+                            // 在线模式下长按 = 从歌单移除；本地模式 = 加入歌单
+                            if (state.isOnlineMode) viewModel.removeOnlineSong(song.id) else pendingAddSong = song
+                        },
+                        onOpenTopLists = { showTopListSheet = true },
+                        scrollerDragging = scrollerDragging,
+                        showCount = showCountLabel
                     )
-                } else {
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier.fillMaxSize().then(if (glass) Modifier.irisBackdropSource(pageBackdrop) else Modifier)
-                    ) { page ->
-                        when (page) {
-                            0 -> LibraryPage(
-                                state = state, colors = colors, listState = libraryListState,
-                                onSelect = { index -> onSelect(index) }, onPlaySong = viewModel::playSong, onSearch = onSearch,
-                                onSettings = { onToggleSettings(true) }, onReport = { viewModel.toggleReport(true) }, onReload = { viewModel.reloadLibrary() },
-                                onCycleLayout = { viewModel.setLayout(state.layout.next) }, onOpenPlaylists = { showPlaylists = true },
-                                onSortOrder = viewModel::setSortOrder, onSortDirection = viewModel::setSortDirection,
-                                onAddToPlaylist = { song -> 
-                                    if (state.isOnlineMode) viewModel.removeOnlineSong(song.id) else pendingAddSong = song
-                                }, 
-                                onOpenTopLists = { showTopListSheet = true },
-                                scrollerDragging = scrollerDragging, showCount = showCountLabel
-                            )
-                            1 -> PlayerPage(
-                                state = state, colors = colors, viewModel = viewModel, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek,
-                                onToggleLike = onToggleLike, onCyclePlayMode = onCyclePlayMode, onOpenEqualizer = { showEqualizer = true }, onOpenSleepTimer = { showSleepTimer = true }, 
-                                eqActive = eqState.active, 
-                                onOpenComments = { showCommentsSheet = true }
-                            )
-                        }
-                    }
+
+                    1 -> PlayerPage(
+                        state = state,
+                        colors = colors,
+                        viewModel = viewModel,
+                        onToggle = onToggle,
+                        onPrev = onPrev,
+                        onNext = onNext,
+                        onSeek = onSeek,
+                        onToggleLike = onToggleLike,
+                        onCyclePlayMode = onCyclePlayMode,
+                        onOpenEqualizer = { showEqualizer = true },
+                        onOpenSleepTimer = { showSleepTimer = true },
+                        onOpenComments = { showCommentsSheet = true },
+                        eqActive = eqState.active
+                    )
                 }
             }
+            }
+            } // Crossfade
         }
 
-        val scrollerVisible by remember { derivedStateOf { pagerState.currentPage == 0 && !pagerState.isScrollInProgress } }
+        // ===== 快速滚动条：挂在根层级 =====
+        val scrollerVisible by remember {
+            derivedStateOf { pagerState.currentPage == 0 && !pagerState.isScrollInProgress }
+        }
         val locateScope = rememberCoroutineScope()
         if (!state.layout.isDeck) {
-            Column(Modifier.align(Alignment.CenterEnd).fillMaxHeight()) {
+            Column(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+            ) {
                 Spacer(Modifier.weight(0.335f))
                 Box(Modifier.weight(0.385f)) {
-                    val recPoolNotEmpty = if (state.selectedFolders.isEmpty()) state.allSongs.isNotEmpty() else state.allSongs.any { it.folderPath in state.selectedFolders }
-                    val headerOffset = if (recPoolNotEmpty && state.searchQuery.isBlank() && state.showRecommendations) 1 else 0
+                    val recPoolNotEmpty = if (state.selectedFolders.isEmpty())
+                        state.allSongs.isNotEmpty()
+                    else state.allSongs.any { it.folderPath in state.selectedFolders }
+                    val headerOffset =
+                        if (recPoolNotEmpty && state.searchQuery.isBlank() && state.showRecommendations) 1 else 0
                     FastScroller(
-                        listState = libraryListState, colors = colors, topPadding = 0.dp, bottomPadding = 0.dp, visible = scrollerVisible,
-                        onClick = { Haptics.tap(); if (state.currentIndex >= 0) { locateScope.launch { libraryListState.animateScrollToItem(state.currentIndex + headerOffset) } } },
-                        labelForIndex = { i -> state.queue.getOrNull(i - headerOffset)?.title },
+                        listState = libraryListState,
+                        colors = colors,
+                        topPadding = 0.dp,
+                        bottomPadding = 0.dp,
+                        visible = scrollerVisible,
+                        onClick = {
+                            Haptics.tap()
+                            if (state.currentIndex >= 0) {
+                                locateScope.launch { libraryListState.animateScrollToItem(state.currentIndex + headerOffset) }
+                            }
+                        },
+                        labelForIndex = { i ->
+                            state.queue.getOrNull(i - headerOffset)?.title
+                        },
                         onDraggingChange = { scrollerDragging.value = it }
                     )
                 }
@@ -246,14 +366,28 @@ fun MainScreen(
             }
         }
 
+        // 设置面板 / 均衡器 / 睡眠定时 / 听歌报告 / 榜单 / 评论 都在这里
         CompositionLocalProvider(LocalIrisBackdrops provides sheetBackdrops) {
-            AnimatedVisibility(visible = state.showSettings, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180)), modifier = Modifier.fillMaxSize()) {
+            AnimatedVisibility(
+                visible = state.showSettings,
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
+                exit = fadeOut(tween(180)),
+                modifier = Modifier.fillMaxSize()
+            ) {
                 val settingsDrag = rememberSheetDragState()
-                IrisSheet(colors = colors, onDismiss = { onToggleSettings(false) }, drag = settingsDrag, panelModifier = Modifier.heightIn(max = 720.dp)) {
+                IrisSheet(
+                    colors = colors,
+                    onDismiss = { onToggleSettings(false) },
+                    drag = settingsDrag,
+                    panelModifier = Modifier.heightIn(max = 720.dp)
+                ) {
                     AnimatedContent(
                         targetState = state.useNewSettingsStyle,
                         transitionSpec = {
-                            ((fadeIn(tween(360, delayMillis = 70)) + slideInVertically(tween(500, easing = EaseOutCubic)) { it / 8 }) togetherWith (fadeOut(tween(220)) + slideOutVertically(tween(240, easing = EaseInCubic)) { -it / 12 }))
+                            ((fadeIn(tween(360, delayMillis = 70)) + slideInVertically(tween(500, easing = EaseOutCubic)) { it / 8 }) togetherWith
+                                (fadeOut(tween(220)) + slideOutVertically(tween(240, easing = EaseInCubic)) { -it / 12 }))
                                 .using(SizeTransform(clip = false) { _, _ -> tween(durationMillis = 500, easing = FastOutSlowInEasing) })
                         },
                         label = "settingsStyleSwap"
@@ -266,111 +400,282 @@ fun MainScreen(
                     }
                 }
             }
-            AnimatedVisibility(visible = showPlaylists, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180)), modifier = Modifier.fillMaxSize()) {
-                PlaylistSheet(state = state, colors = colors, onDismiss = { showPlaylists = false }, onSelect = { viewModel.selectPlaylist(it) }, onCreate = { name -> viewModel.createPlaylist(name) }, onRename = { id, name -> viewModel.renamePlaylist(id, name) }, onDelete = { viewModel.deletePlaylist(it) })
-            }
-            AnimatedVisibility(visible = pendingAddSong != null, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180))) {
-                val song = pendingAddSong
-                if (song != null) {
-                    AddToPlaylistSheet(song = song, state = state, colors = colors, onDismiss = { pendingAddSong = null }, onCreateAndAdd = { name -> val id = viewModel.createPlaylist(name); viewModel.addToPlaylist(id, song.id); pendingAddSong = null }, onAdd = { pid -> viewModel.addToPlaylist(pid, song.id) }, onRemove = { pid -> viewModel.removeFromPlaylist(pid, song.id) })
-                }
-            }
-            AnimatedVisibility(visible = showEqualizer, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180))) {
-                EqualizerSheet(
-                    state = eqState, onDismiss = { showEqualizer = false }, onSelectBoost = { EqualizerController.selectBoost(it) }, onToggleLoudness = { EqualizerController.setLoudness(it) }, onLoudnessStrengthChange = { EqualizerController.setLoudnessStrength(it) },
-                    virtualBass = state.virtualBass, virtualBassStrength = state.virtualBassStrength, onVirtualBassChange = viewModel::setVirtualBass, onVirtualBassStrengthChange = viewModel::setVirtualBassStrength,
-                    rangeEnhancer = state.rangeEnhancer, rangeEnhancerStrength = state.rangeEnhancerStrength, onRangeEnhancerChange = viewModel::setRangeEnhancer, onRangeEnhancerStrengthChange = viewModel::setRangeEnhancerStrength,
-                    virtualSurround = state.virtualSurround, virtualSurroundStrength = state.virtualSurroundStrength, onVirtualSurroundChange = viewModel::setVirtualSurround, onVirtualSurroundStrengthChange = viewModel::setVirtualSurroundStrength,
-                    spatialWide = state.spatialWide, spatialWideStrength = state.spatialWideStrength, onSpatialWideChange = viewModel::setSpatialWide, onSpatialWideStrengthChange = viewModel::setSpatialWideStrength,
-                    safeLimiter = state.safeLimiter, safeLimiterStrength = state.safeLimiterStrength, onSafeLimiterChange = viewModel::setSafeLimiter, onSafeLimiterStrengthChange = viewModel::setSafeLimiterStrength,
-                    loudnorm = state.loudnorm, loudnormStrength = state.loudnormStrength, onLoudnormChange = viewModel::setLoudnorm, onLoudnormStrengthChange = viewModel::setLoudnormStrength,
-                    onSetEditMode = { EqualizerController.setEditMode(it) }, onBandLevel = { band, level -> EqualizerController.setBandLevel(band, level) }, onMoveAnchor = { index, freq, gain -> EqualizerController.moveAnchor(index, freq, gain) }, onCommitAnchors = { EqualizerController.commitAnchors() }, onAddAnchor = { freq, gain -> EqualizerController.addAnchor(freq, gain) }, onRemoveAnchor = { EqualizerController.removeAnchor(it) }, onReset = { EqualizerController.reset() }, colors = colors
+
+            AnimatedVisibility(
+                visible = showPlaylists,
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
+                exit = fadeOut(tween(180)),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                PlaylistSheet(
+                    state = state,
+                    colors = colors,
+                    onDismiss = { showPlaylists = false },
+                    onSelect = { viewModel.selectPlaylist(it) },
+                    onCreate = { name -> viewModel.createPlaylist(name) },
+                    onRename = { id, name -> viewModel.renamePlaylist(id, name) },
+                    onDelete = { viewModel.deletePlaylist(it) }
                 )
             }
-            AnimatedVisibility(visible = showSleepTimer, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180))) {
-                SleepTimerSheet(currentMinutes = if (state.sleepTimerMs > 0) (state.sleepTimerMs / 60000).toInt() else 0, onDismiss = { showSleepTimer = false }, onSetMinutes = { minutes -> if (minutes > 0) viewModel.setSleepTimer(minutes) else viewModel.cancelSleepTimer() }, colors = colors)
+
+            AnimatedVisibility(
+                visible = pendingAddSong != null,
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
+                exit = fadeOut(tween(180))
+            ) {
+                val song = pendingAddSong
+                if (song != null) {
+                    AddToPlaylistSheet(
+                        song = song,
+                        state = state,
+                        colors = colors,
+                        onDismiss = { pendingAddSong = null },
+                        onCreateAndAdd = { name ->
+                            val id = viewModel.createPlaylist(name)
+                            viewModel.addToPlaylist(id, song.id)
+                            pendingAddSong = null
+                        },
+                        onAdd = { pid -> viewModel.addToPlaylist(pid, song.id) },
+                        onRemove = { pid -> viewModel.removeFromPlaylist(pid, song.id) }
+                    )
+                }
             }
-            AnimatedVisibility(visible = state.showReport, enter = if (IrisMotion.jelly) fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear()) else fadeIn(tween(200)), exit = fadeOut(tween(180))) {
-                ListenReportSheet(report = state.report, onDismiss = { viewModel.toggleReport(false) }, onRangeChange = viewModel::setReportRange, onPlaySong = { id -> viewModel.playSongById(id); viewModel.toggleReport(false) }, colors = colors)
+
+            AnimatedVisibility(
+                visible = showEqualizer,
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
+                exit = fadeOut(tween(180))
+            ) {
+                EqualizerSheet(
+                    state = eqState,
+                    onDismiss = { showEqualizer = false },
+                    onSelectBoost = { EqualizerController.selectBoost(it) },
+                    onToggleLoudness = { EqualizerController.setLoudness(it) },
+                    onLoudnessStrengthChange = { EqualizerController.setLoudnessStrength(it) },
+                    virtualBass = state.virtualBass,
+                    virtualBassStrength = state.virtualBassStrength,
+                    onVirtualBassChange = viewModel::setVirtualBass,
+                    onVirtualBassStrengthChange = viewModel::setVirtualBassStrength,
+                    rangeEnhancer = state.rangeEnhancer,
+                    rangeEnhancerStrength = state.rangeEnhancerStrength,
+                    onRangeEnhancerChange = viewModel::setRangeEnhancer,
+                    onRangeEnhancerStrengthChange = viewModel::setRangeEnhancerStrength,
+                    virtualSurround = state.virtualSurround,
+                    virtualSurroundStrength = state.virtualSurroundStrength,
+                    onVirtualSurroundChange = viewModel::setVirtualSurround,
+                    onVirtualSurroundStrengthChange = viewModel::setVirtualSurroundStrength,
+                    spatialWide = state.spatialWide,
+                    spatialWideStrength = state.spatialWideStrength,
+                    onSpatialWideChange = viewModel::setSpatialWide,
+                    onSpatialWideStrengthChange = viewModel::setSpatialWideStrength,
+                    safeLimiter = state.safeLimiter,
+                    safeLimiterStrength = state.safeLimiterStrength,
+                    onSafeLimiterChange = viewModel::setSafeLimiter,
+                    onSafeLimiterStrengthChange = viewModel::setSafeLimiterStrength,
+                    loudnorm = state.loudnorm,
+                    loudnormStrength = state.loudnormStrength,
+                    onLoudnormChange = viewModel::setLoudnorm,
+                    onLoudnormStrengthChange = viewModel::setLoudnormStrength,
+                    onSetEditMode = { EqualizerController.setEditMode(it) },
+                    onBandLevel = { band, level -> EqualizerController.setBandLevel(band, level) },
+                    onMoveAnchor = { index, freq, gain -> EqualizerController.moveAnchor(index, freq, gain) },
+                    onCommitAnchors = { EqualizerController.commitAnchors() },
+                    onAddAnchor = { freq, gain -> EqualizerController.addAnchor(freq, gain) },
+                    onRemoveAnchor = { EqualizerController.removeAnchor(it) },
+                    onReset = { EqualizerController.reset() },
+                    colors = colors
+                )
             }
-            
-            // ===== 排行榜弹窗 =====
+
+            AnimatedVisibility(
+                visible = showSleepTimer,
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
+                exit = fadeOut(tween(180))
+            ) {
+                SleepTimerSheet(
+                    currentMinutes = if (state.sleepTimerMs > 0) (state.sleepTimerMs / 60000).toInt() else 0,
+                    onDismiss = { showSleepTimer = false },
+                    onSetMinutes = { minutes ->
+                        if (minutes > 0) viewModel.setSleepTimer(minutes)
+                        else viewModel.cancelSleepTimer()
+                    },
+                    colors = colors
+                )
+            }
+
+            AnimatedVisibility(
+                visible = state.showReport,
+                enter = if (IrisMotion.jelly) {
+                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
+                } else fadeIn(tween(200)),
+                exit = fadeOut(tween(180))
+            ) {
+                ListenReportSheet(
+                    report = state.report,
+                    onDismiss = { viewModel.toggleReport(false) },
+                    onRangeChange = viewModel::setReportRange,
+                    onPlaySong = { id ->
+                        viewModel.playSongById(id)
+                        viewModel.toggleReport(false)
+                    },
+                    colors = colors
+                )
+            }
+
+            // ===== 排行榜弹层（IrisSheet 版本，与设置同款吸顶折叠标题）=====
             if (showTopListSheet) {
-                ModalBottomSheet(onDismissRequest = { showTopListSheet = false }, containerColor = colors.background, contentColor = colors.text, scrimColor = Color.Black.copy(alpha = 0.5f)) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("官方排行榜", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 16.dp))
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            items(state.topLists.size) { index ->
-                                val topList = state.topLists[index]
-                                Row(Modifier.fillMaxWidth().clickable { viewModel.playTopList(topList.id); showTopListSheet = false }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    AsyncImage(model = topList.coverImgUrl, contentDescription = null, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
-                                    Spacer(Modifier.width(16.dp))
-                                    Column {
-                                        Text(topList.name, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                        Text(topList.updateFrequency, fontSize = 12.sp, color = colors.subText)
-                                    }
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(32.dp))
+                TopListSheet(
+                    topLists = state.topLists,
+                    defaultCoverUri = state.defaultCoverUri,
+                    colors = colors,
+                    onDismiss = { showTopListSheet = false },
+                    onSelect = { id ->
+                        viewModel.playTopList(id)
+                        showTopListSheet = false
                     }
-                }
+                )
             }
 
-            // ===== 评论区弹窗 =====
+            // ===== 评论区弹层（IrisSheet 版本，支持分页加载）=====
             if (showCommentsSheet) {
-                ModalBottomSheet(onDismissRequest = { showCommentsSheet = false }, containerColor = colors.background, contentColor = colors.text, scrimColor = Color.Black.copy(alpha = 0.5f)) {
-                    Column(Modifier.padding(16.dp).fillMaxHeight(0.8f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("评论 (${state.currentCommentCount})", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.weight(1f))
-                            if (state.isCommentsLoading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            items(state.currentComments.size) { index ->
-                                val comment = state.currentComments[index]
-                                Row {
-                                    AsyncImage(model = comment.avatarUrl, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape).background(colors.subText), contentScale = ContentScale.Crop)
-                                    Spacer(Modifier.width(12.dp))
-                                    Column {
-                                        Text(comment.nickname, fontSize = 14.sp, color = colors.subText)
-                                        Spacer(Modifier.height(4.dp))
-                                        Text(comment.content, fontSize = 15.sp)
-                                        Spacer(Modifier.height(4.dp))
-                                        Text("❤️ ${comment.likedCount}", fontSize = 12.sp, color = colors.subText)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                CommentsSheet(
+                    songTitle = state.currentSong?.title ?: "",
+                    comments = state.currentComments,
+                    totalCount = state.currentCommentCount,
+                    isLoading = state.isCommentsLoading,
+                    hasMore = state.currentComments.size < state.currentCommentCount,
+                    defaultCoverUri = state.defaultCoverUri,
+                    colors = colors,
+                    onDismiss = { showCommentsSheet = false },
+                    onLoadMore = { viewModel.loadMoreComments() }
+                )
             }
         }
     }
 }
 
+/**
+ * 曲库排序栏：上栏卡片的扩展行（与搜索框同级）。
+ *
+ * 左胶囊点击循环排序字段，右胶囊切换正序/倒序；
+ * 在线模式下右胶囊右侧再挂一枚小"榜"胶囊（点击打开排行榜）。
+ */
 @Composable
-private fun LibrarySortBar(order: SortOrder, direction: SortDirection, colors: IrisColors, glass: Boolean, onOrderChange: (SortOrder) -> Unit, onDirectionChange: (SortDirection) -> Unit) {
+private fun LibrarySortBar(
+    order: SortOrder,
+    direction: SortDirection,
+    colors: IrisColors,
+    glass: Boolean,
+    onOrderChange: (SortOrder) -> Unit,
+    onDirectionChange: (SortDirection) -> Unit,
+    /** 在线模式：显示右侧「榜」胶囊 */
+    isOnlineMode: Boolean = false,
+    onOpenTopLists: () -> Unit = {}
+) {
     val chipHeight = 30.dp
-    val chipBg = if (glass) { if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF) } else { if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC) }
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Box(modifier = Modifier.height(chipHeight).clip(IrisShape.item).background(chipBg).clickable { Haptics.tap(); val next = SortOrder.entries[(order.ordinal + 1) % SortOrder.entries.size]; onOrderChange(next) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
-            Text(order.label, color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    val chipBg = if (glass) {
+        if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+    } else {
+        if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .height(chipHeight)
+                .clip(IrisShape.item)
+                .background(chipBg)
+                .clickable {
+                    Haptics.tap()
+                    val next = SortOrder.entries[(order.ordinal + 1) % SortOrder.entries.size]
+                    onOrderChange(next)
+                }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                order.label,
+                color = colors.text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
         }
-        Box(modifier = Modifier.height(chipHeight).clip(IrisShape.item).background(chipBg).clickable { Haptics.tap(); onDirectionChange(if (direction == SortDirection.ASCENDING) SortDirection.DESCENDING else SortDirection.ASCENDING) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
-            Text(if (direction == SortDirection.ASCENDING) "正序 ↑" else "倒序 ↓", color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Box(
+            modifier = Modifier
+                .height(chipHeight)
+                .clip(IrisShape.item)
+                .background(chipBg)
+                .clickable {
+                    Haptics.tap()
+                    onDirectionChange(
+                        if (direction == SortDirection.ASCENDING) SortDirection.DESCENDING
+                        else SortDirection.ASCENDING
+                    )
+                }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                if (direction == SortDirection.ASCENDING) "正序 ↑" else "倒序 ↓",
+                color = colors.text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        // 在线模式：「榜」小胶囊，放在正序/倒序右侧
+        if (isOnlineMode) {
+            Box(
+                modifier = Modifier
+                    .height(chipHeight)
+                    .clip(IrisShape.item)
+                    .background(colors.primary.copy(alpha = 0.18f))
+                    .clickable { Haptics.tap(); onOpenTopLists() }
+                    .padding(horizontal = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "榜",
+                    color = colors.primary.readableOn(colors.surface, 3.2f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
 
+// ==================== 列表页 ====================
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LibraryPage(
-    state: PlayerUiState, colors: IrisColors, listState: androidx.compose.foundation.lazy.LazyListState, scrollerDragging: MutableState<Boolean>,
-    onSelect: (Int) -> Unit, onPlaySong: (Song) -> Unit, onSearch: (String) -> Unit, onSettings: () -> Unit, onReport: () -> Unit, onReload: () -> Unit,
-    onCycleLayout: () -> Unit, onOpenPlaylists: () -> Unit, onSortOrder: (SortOrder) -> Unit, onSortDirection: (SortDirection) -> Unit, onAddToPlaylist: (Song) -> Unit, 
-    onOpenTopLists: () -> Unit, showCount: Boolean = true
+    state: PlayerUiState,
+    colors: IrisColors,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    scrollerDragging: MutableState<Boolean>,
+    onSelect: (Int) -> Unit,
+    onPlaySong: (Song) -> Unit,
+    onSearch: (String) -> Unit,
+    onSettings: () -> Unit,
+    onReport: () -> Unit,
+    onReload: () -> Unit,
+    onCycleLayout: () -> Unit,
+    onOpenPlaylists: () -> Unit,
+    onSortOrder: (SortOrder) -> Unit,
+    onSortDirection: (SortDirection) -> Unit,
+    onAddToPlaylist: (Song) -> Unit,
+    onOpenTopLists: () -> Unit,
+    showCount: Boolean = true
 ) {
     val density = LocalDensity.current
     val statusBarHeightDp = WindowInsets.statusBars.getTop(density)
@@ -378,6 +683,7 @@ private fun LibraryPage(
     val barSlotHeight = 84.dp
     val barHeight = remember { mutableStateOf(with(density) { barSlotHeight.toPx().toInt() }) }
     val barOffset = remember { mutableStateOf(0f) }
+
     val hazeState = remember { HazeState() }
     val focusManager = LocalFocusManager.current
     val searchInteraction = remember { MutableInteractionSource() }
@@ -386,30 +692,80 @@ private fun LibraryPage(
     var searchExpanded by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
     val showSearch = state.searchPersistent || searchExpanded
-    LaunchedEffect(searchExpanded, state.searchPersistent) { if (!state.searchPersistent) { if (searchExpanded) { delay(150); runCatching { searchFocusRequester.requestFocus() } } } }
-    LaunchedEffect(searchExpanded, searchFocused, state.searchQuery, state.searchPersistent) { if (!state.searchPersistent && searchExpanded && !searchFocused && state.searchQuery.isBlank()) { delay(4000); searchExpanded = false } }
+    LaunchedEffect(searchExpanded, state.searchPersistent) {
+        if (!state.searchPersistent) {
+            if (searchExpanded) {
+                delay(150)
+                runCatching { searchFocusRequester.requestFocus() }
+            }
+        }
+    }
+    LaunchedEffect(searchExpanded, searchFocused, state.searchQuery, state.searchPersistent) {
+        if (!state.searchPersistent && searchExpanded && !searchFocused && state.searchQuery.isBlank()) {
+            delay(4000)
+            searchExpanded = false
+        }
+    }
     val frosted = isFrostedGlass
     val frostedBlur = frostedBlurRadius
     val glass = isLiquidGlass
+
     val listBackdrop = rememberIrisBackdrop()
     val outerBackdrops = LocalIrisBackdrops.current
-    val barBackdrops = remember(glass, outerBackdrops, listBackdrop) { if (glass) outerBackdrops + listBackdrop else emptyList() }
+    val barBackdrops = remember(glass, outerBackdrops, listBackdrop) {
+        if (glass) outerBackdrops + listBackdrop else emptyList()
+    }
+
     val hideDistancePx = statusBarHeightDp + with(density) { barTopGap.toPx() } + barHeight.value
     val hideDistanceState = rememberUpdatedState(hideDistancePx)
     val barScope = rememberCoroutineScope()
-    val sortBarExposed by remember { derivedStateOf { barOffset.value > -hideDistanceState.value * 0.1f } }
+    val sortBarExposed by remember {
+        derivedStateOf { barOffset.value > -hideDistanceState.value * 0.1f }
+    }
     var sortBarDismissed by remember { mutableStateOf(false) }
     var sortInteractionTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(sortBarExposed) { if (!sortBarExposed) sortBarDismissed = false }
-    LaunchedEffect(sortInteractionTick) { if (sortInteractionTick > 0) { delay(1400); sortBarDismissed = true } }
+    LaunchedEffect(sortInteractionTick) {
+        if (sortInteractionTick > 0) {
+            delay(1400)
+            sortBarDismissed = true
+        }
+    }
     val sortBarVisible = state.showSortBar && sortBarExposed && !sortBarDismissed
     var barSettleJob by remember { mutableStateOf<Job?>(null) }
-    val settleBarTo: (Float) -> Unit = { target -> barSettleJob?.cancel(); barSettleJob = barScope.launch { Animatable(barOffset.value).animateTo(targetValue = target, animationSpec = spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)) { barOffset.value = value } } }
-    LaunchedEffect(listState, scrollerDragging.value) { if (!scrollerDragging.value) return@LaunchedEffect; snapshotFlow { listState.firstVisibleItemIndex }.distinctUntilChanged().collect { index -> barSettleJob?.cancel(); barOffset.value = if (index == 0) 0f else -hideDistanceState.value } }
-    LaunchedEffect(listState) { snapshotFlow { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }.distinctUntilChanged().collect { atTop -> if (atTop) settleBarTo(0f) } }
-    val listScrollable = listState.canScrollForward || listState.canScrollBackward
-    LaunchedEffect(listScrollable) { if (!listScrollable && barOffset.value != 0f) settleBarTo(0f) }
+    val settleBarTo: (Float) -> Unit = { target ->
+        barSettleJob?.cancel()
+        barSettleJob = barScope.launch {
+            Animatable(barOffset.value).animateTo(
+                targetValue = target,
+                animationSpec = spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)
+            ) { barOffset.value = value }
+        }
+    }
 
+    LaunchedEffect(listState, scrollerDragging.value) {
+        if (!scrollerDragging.value) return@LaunchedEffect
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .collect { index ->
+                barSettleJob?.cancel()
+                barOffset.value = if (index == 0) 0f else -hideDistanceState.value
+            }
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+        }
+            .distinctUntilChanged()
+            .collect { atTop -> if (atTop) settleBarTo(0f) }
+    }
+    val listScrollable = listState.canScrollForward || listState.canScrollBackward
+    LaunchedEffect(listScrollable) {
+        if (!listScrollable && barOffset.value != 0f) settleBarTo(0f)
+    }
+
+    // 上栏静止自动隐藏（原版特性，保留）
     LaunchedEffect(state.topBarAutoHide, listState.isScrollInProgress, barOffset.value) {
         if (state.topBarAutoHide && !listState.isScrollInProgress && barOffset.value == 0f) {
             delay(3000)
@@ -417,6 +773,7 @@ private fun LibraryPage(
         }
     }
 
+    // ===== 下拉刷新 =====
     val refreshTriggerPx = with(density) { 96.dp.toPx() }
     val maxPullPx = refreshTriggerPx * 1.7f
     val holdPullPx = refreshTriggerPx * 0.68f
@@ -425,46 +782,119 @@ private fun LibraryPage(
     val isRefreshing = state.refreshing
     val pullScope = rememberCoroutineScope()
     var settleJob by remember { mutableStateOf<Job?>(null) }
-    suspend fun springOffsetTo(target: Float) { Animatable(refreshOffset).animateTo(targetValue = target, animationSpec = spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessLow)) { refreshOffset = value } }
-    val settleTo: (Float) -> Unit = { target -> settleJob?.cancel(); settleJob = pullScope.launch { springOffsetTo(target) } }
+    suspend fun springOffsetTo(target: Float) {
+        Animatable(refreshOffset).animateTo(
+            targetValue = target,
+            animationSpec = spring(dampingRatio = 0.45f, stiffness = Spring.StiffnessLow)
+        ) { refreshOffset = value }
+    }
+    val settleTo: (Float) -> Unit = { target ->
+        settleJob?.cancel()
+        settleJob = pullScope.launch { springOffsetTo(target) }
+    }
     val refreshingState = rememberUpdatedState(state.refreshing)
     val reloadState = rememberUpdatedState(onReload)
     val heldState = rememberUpdatedState(refreshHeld)
-    val runRefresh: () -> Unit = { settleJob?.cancel(); refreshHeld = true; settleJob = pullScope.launch { reloadState.value.invoke(); springOffsetTo(holdPullPx); delay(700); snapshotFlow { refreshingState.value }.first { !it }; springOffsetTo(0f); refreshHeld = false } }
+    val runRefresh: () -> Unit = {
+        settleJob?.cancel()
+        refreshHeld = true
+        settleJob = pullScope.launch {
+            reloadState.value.invoke()
+            springOffsetTo(holdPullPx)
+            delay(700)
+            snapshotFlow { refreshingState.value }.first { !it }
+            springOffsetTo(0f)
+            refreshHeld = false
+        }
+    }
     val runRefreshState = rememberUpdatedState(runRefresh)
-    LaunchedEffect(Unit) { snapshotFlow { listState.isScrollInProgress }.distinctUntilChanged().collect { inProgress -> if (inProgress) return@collect; val off = refreshOffset; if (off > 0f && !refreshingState.value && !heldState.value) { if (off >= refreshTriggerPx) runRefreshState.value.invoke() else settleTo(0f) } } }
+    LaunchedEffect(Unit) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { inProgress ->
+                if (inProgress) return@collect
+                val off = refreshOffset
+                if (off > 0f && !refreshingState.value && !heldState.value) {
+                    if (off >= refreshTriggerPx) runRefreshState.value.invoke()
+                    else settleTo(0f)
+                }
+            }
+    }
     val scrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 val delta = available.y
                 if (delta == 0f) return Offset.Zero
                 val byFinger = source == NestedScrollSource.UserInput
-                if (byFinger && refreshOffset > 0f && delta < 0f && !heldState.value) { settleJob?.cancel(); val consumed = delta.coerceAtLeast(-refreshOffset); refreshOffset += consumed; return Offset(0f, consumed) }
+                if (byFinger && refreshOffset > 0f && delta < 0f && !heldState.value) {
+                    settleJob?.cancel()
+                    val consumed = delta.coerceAtLeast(-refreshOffset)
+                    refreshOffset += consumed
+                    return Offset(0f, consumed)
+                }
                 if (delta > 0f && !listState.canScrollBackward) {
-                    if (barOffset.value < 0f) { barSettleJob?.cancel(); val used = delta.coerceAtMost(-barOffset.value); barOffset.value += used; return Offset(0f, used) }
-                    if (byFinger && !heldState.value) { settleJob?.cancel(); val resistance = (1f - refreshOffset / maxPullPx).coerceIn(0.15f, 1f); refreshOffset = (refreshOffset + delta * resistance).coerceAtMost(maxPullPx); return Offset(0f, delta) }
+                    if (barOffset.value < 0f) {
+                        barSettleJob?.cancel()
+                        val used = delta.coerceAtMost(-barOffset.value)
+                        barOffset.value += used
+                        return Offset(0f, used)
+                    }
+                    if (byFinger && !heldState.value) {
+                        settleJob?.cancel()
+                        val resistance = (1f - refreshOffset / maxPullPx).coerceIn(0.15f, 1f)
+                        refreshOffset = (refreshOffset + delta * resistance).coerceAtMost(maxPullPx)
+                        return Offset(0f, delta)
+                    }
                 }
                 return Offset.Zero
             }
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
                 val delta = consumed.y
                 if (delta == 0f) return Offset.Zero
                 if (delta > 0f) {
                     val byFinger = source == NestedScrollSource.UserInput
-                    if (byFinger) { if (barOffset.value < 0f && barSettleJob?.isActive != true) settleBarTo(0f) }
-                    else if (listState.firstVisibleItemIndex <= 1) { barSettleJob?.cancel(); barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f) }
-                } else { barSettleJob?.cancel(); barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f) }
+                    if (byFinger) {
+                        if (barOffset.value < 0f && barSettleJob?.isActive != true) settleBarTo(0f)
+                    } else if (listState.firstVisibleItemIndex <= 1) {
+                        barSettleJob?.cancel()
+                        barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
+                    }
+                } else {
+                    barSettleJob?.cancel()
+                    barOffset.value = (barOffset.value + delta).coerceIn(-hideDistanceState.value, 0f)
+                }
                 return Offset.Zero
             }
+
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (refreshOffset <= 0f) return Velocity.Zero
-                if (refreshOffset >= refreshTriggerPx && !heldState.value) runRefreshState.value.invoke() else if (!refreshingState.value && !heldState.value) settleTo(0f)
+                if (refreshOffset >= refreshTriggerPx && !heldState.value) {
+                    runRefreshState.value.invoke()
+                } else if (!refreshingState.value && !heldState.value) {
+                    settleTo(0f)
+                }
                 return Velocity(0f, available.y)
             }
         }
     }
 
-    Box(Modifier.fillMaxSize().pointerInput(searchFocused) { if (!searchFocused) return@pointerInput; awaitEachGesture { val down = awaitFirstDown(requireUnconsumed = false); if (!searchBounds.value.contains(down.position)) focusManager.clearFocus() } }) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(searchFocused) {
+                if (!searchFocused) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (!searchBounds.value.contains(down.position)) focusManager.clearFocus()
+                }
+            }
+    ) {
+        // 在线模式：搜索结果 / 队列；本地模式：队列
         val displayList = if (state.isOnlineMode) {
             if (state.searchQuery.isNotBlank()) state.onlineSearchResults else state.queue
         } else {
@@ -472,6 +902,7 @@ private fun LibraryPage(
         }
 
         if (state.isOnlineMode && displayList.isEmpty()) {
+            // 在线模式空态：搜索中 / 错误 / 引导输入
             Box(Modifier.fillMaxSize().padding(top = 120.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (state.onlineSearchLoading) {
@@ -479,9 +910,15 @@ private fun LibraryPage(
                         Spacer(Modifier.height(16.dp))
                         Text("正在全网搜索…", color = colors.subText, fontSize = 14.sp)
                     } else if (state.onlineErrorMsg != null) {
-                        Text("请求失败", color = Color.Red, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text("请求失败", color = Color(0xFFFF4D6D), fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
-                        Text(state.onlineErrorMsg ?: "", color = colors.subText, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
+                        Text(
+                            state.onlineErrorMsg ?: "",
+                            color = colors.subText,
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
                     } else {
                         Text("搜索全网音乐", color = colors.subText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
@@ -492,489 +929,1279 @@ private fun LibraryPage(
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize()
-                    .then(if (glass) Modifier.irisBackdropSource(listBackdrop) else if (frosted) Modifier.haze(state = hazeState, style = HazeStyle(blurRadius = frostedBlur)) else Modifier)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (glass) Modifier.irisBackdropSource(listBackdrop)
+                        else if (frosted) Modifier.haze(state = hazeState, style = HazeStyle(blurRadius = frostedBlur))
+                        else Modifier
+                    )
                     .graphicsLayer { translationY = refreshOffset }
                     .nestedScroll(scrollConnection),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = with(density) { statusBarHeightDp.toDp() + barTopGap + barHeight.value.toDp() + 8.dp }, bottom = 50.dp)
+                contentPadding = PaddingValues(
+                    start = 22.dp, end = 22.dp,
+                    top = with(density) { statusBarHeightDp.toDp() + barTopGap + barHeight.value.toDp() + 8.dp },
+                    bottom = 50.dp
+                )
             ) {
-                if (state.showRecommendations && state.recommendations.isNotEmpty()) {
+                // 推荐区（仅本地模式 + 有候选 + 无搜索词）
+                val recPool = remember(state.allSongs, state.selectedFolders) {
+                    val sel = state.selectedFolders
+                    if (sel.isEmpty()) state.allSongs
+                    else state.allSongs.filter { it.folderPath in sel }
+                }
+                if (recPool.isNotEmpty() && state.searchQuery.isBlank() && state.showRecommendations && !state.isOnlineMode) {
                     item {
-                        Crossfade(targetState = state.recommendationsVersion to state.recommendations, animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut), label = "recommendationFade") { (_, recs) ->
+                        Crossfade(
+                            targetState = state.recommendationsVersion to state.recommendations,
+                            animationSpec = tween(500, easing = androidx.compose.animation.core.EaseInOut),
+                            label = "recommendationFade"
+                        ) { (_, recs) ->
                             if (recs.isNotEmpty()) {
-                                RecommendationSection(recommendations = recs, colors = colors, showArtist = state.showRowArtist, onSelect = onPlaySong)
+                                RecommendationSection(
+                                    recommendations = recs,
+                                    colors = colors,
+                                    showArtist = state.showRowArtist,
+                                    defaultCoverUri = state.defaultCoverUri,
+                                    onSelect = onPlaySong
+                                )
+                            } else {
+                                Box(
+                                    Modifier.fillMaxWidth().height(60.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("推荐中…", color = colors.subText, fontSize = 12.sp)
+                                }
                             }
                         }
                     }
                 }
-                
+
                 itemsIndexed(displayList, key = { _, song -> "song-${song.id}" }) { index, song ->
                     SongRow(
-                        song = song, 
-                        active = if (state.isOnlineMode) state.currentSong?.id == song.id else index == state.currentIndex, 
-                        colors = colors, 
-                        rowSize = state.rowSize, 
-                        showCover = state.showRowCover, 
-                        showArtist = state.showRowArtist, 
-                        showPlaylist = state.showRowPlaylist, 
-                        showLikedBadge = state.showLikedBadge, 
-                        liked = song.id in state.likedSongIds, 
+                        song = song,
+                        active = if (state.isOnlineMode) state.currentSong?.id == song.id else index == state.currentIndex,
+                        colors = colors,
+                        rowSize = state.rowSize,
+                        showCover = state.showRowCover,
+                        showArtist = state.showRowArtist,
+                        showPlaylist = state.showRowPlaylist,
+                        showLikedBadge = state.showLikedBadge,
+                        liked = song.id in state.likedSongIds,
                         playlistNames = Playlists.playlistsOfSong(song.id),
-                        onClick = { if (state.isOnlineMode && state.searchQuery.isNotBlank()) onPlaySong(song) else onSelect(index) }, 
+                        defaultCoverUri = state.defaultCoverUri,
+                        onClick = {
+                            if (state.isOnlineMode && state.searchQuery.isNotBlank()) onPlaySong(song)
+                            else onSelect(index)
+                        },
                         onLongPress = { onAddToPlaylist(song) }
                     )
                 }
             }
         }
 
+        // ===== 下拉刷新指示器 =====
         val refreshProgress = (refreshOffset / refreshTriggerPx).coerceIn(0f, 1f)
         if (refreshOffset > 0.5f) {
-            val spin by rememberInfiniteTransition(label = "pullSpin").animateFloat(initialValue = 0f, targetValue = 360f, animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)), label = "pullSpinValue")
-            Box(Modifier.align(Alignment.TopCenter).offset { val gap = statusBarHeightDp + with(density) { barTopGap.toPx() } + refreshOffset; IntOffset(0, (gap * 0.5f - with(density) { 13.dp.toPx() }).toInt()) }.graphicsLayer { alpha = refreshProgress; val s = 0.6f + 0.5f * refreshProgress; scaleX = s; scaleY = s }, contentAlignment = Alignment.Center) {
+            val spin by rememberInfiniteTransition(label = "pullSpin").animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing)),
+                label = "pullSpinValue"
+            )
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .offset {
+                        val gap = statusBarHeightDp + with(density) { barTopGap.toPx() } + refreshOffset
+                        IntOffset(0, (gap * 0.5f - with(density) { 13.dp.toPx() }).toInt())
+                    }
+                    .graphicsLayer {
+                        alpha = refreshProgress
+                        val s = 0.6f + 0.5f * refreshProgress
+                        scaleX = s; scaleY = s
+                    },
+                contentAlignment = Alignment.Center
+            ) {
                 Canvas(Modifier.size(26.dp)) {
-                    val stroke = 2.6.dp.toPx(); val inset = stroke / 2f; val arcSize = Size(size.width - stroke, size.height - stroke)
-                    drawArc(color = colors.primary.copy(alpha = 0.18f), startAngle = 0f, sweepAngle = 360f, useCenter = false, topLeft = Offset(inset, inset), size = arcSize, style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                    val stroke = 2.6.dp.toPx()
+                    val inset = stroke / 2f
+                    val arcSize = Size(size.width - stroke, size.height - stroke)
+                    drawArc(
+                        color = colors.primary.copy(alpha = 0.18f),
+                        startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = stroke,
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
                     val spinning = isRefreshing || refreshHeld
-                    drawArc(color = colors.primary, startAngle = if (spinning) spin else -90f, sweepAngle = if (spinning) 100f else 360f * refreshProgress, useCenter = false, topLeft = Offset(inset, inset), size = arcSize, style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                    drawArc(
+                        color = colors.primary,
+                        startAngle = if (spinning) spin else -90f,
+                        sweepAngle = if (spinning) 100f else 360f * refreshProgress,
+                        useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = stroke,
+                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
                 }
             }
         }
+
+        // ===== 上栏（原版 4 按钮：Playlist / Layout / Report / Settings）=====
         val barTint = if (colors.isDark) Color.Black.copy(alpha = 0.38f) else Color.White.copy(alpha = 0.5f)
-        val barGlass = if (glass) { Modifier.glassSurface(spec = GlassLevel.CARD.currentSpec(colors), shape = IrisShape.item, backdrops = barBackdrops) } else Modifier
+        val barGlass = if (glass) {
+            Modifier.glassSurface(
+                spec = GlassLevel.CARD.currentSpec(colors),
+                shape = IrisShape.item,
+                backdrops = barBackdrops
+            )
+        } else Modifier
         Column(
-            Modifier.then(if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE) Modifier.widthIn(max = LANDSCAPE_BAR_MAX_WIDTH) else Modifier)
-                .fillMaxWidth().align(Alignment.TopCenter).offset(y = with(density) { statusBarHeightDp.toDp() + barTopGap }).onSizeChanged { barHeight.value = it.height }.graphicsLayer { translationY = barOffset.value + refreshOffset * 0.55f }
+            Modifier
+                .then(
+                    if (LocalConfiguration.current.orientation ==
+                        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                    ) Modifier.widthIn(max = LANDSCAPE_BAR_MAX_WIDTH) else Modifier
+                )
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .offset(y = with(density) { statusBarHeightDp.toDp() + barTopGap })
+                .onSizeChanged { barHeight.value = it.height }
+                .graphicsLayer { translationY = barOffset.value + refreshOffset * 0.55f }
         ) {
-            Box(Modifier.fillMaxWidth().padding(horizontal = 22.dp).then(if (glass) { barGlass } else if (frosted) { Modifier.hazeChild(state = hazeState, style = HazeStyle(blurRadius = frostedBlur, tint = barTint), shape = IrisShape.item) } else { Modifier.clip(IrisShape.item).background(colors.surface) })) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 22.dp)
+                    .then(
+                        if (glass) {
+                            barGlass
+                        } else if (frosted) {
+                            Modifier.hazeChild(
+                                state = hazeState,
+                                style = HazeStyle(blurRadius = frostedBlur, tint = barTint),
+                                shape = IrisShape.item
+                            )
+                        } else {
+                            Modifier.clip(IrisShape.item).background(colors.surface)
+                        }
+                    )
+            ) {
                 GlassContent {
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clip(IrisShape.item).clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { Haptics.tap(); if (state.searchPersistent) return@clickable; if (searchExpanded) { if (state.searchQuery.isNotBlank()) onSearch(""); focusManager.clearFocus(); searchExpanded = false } else { searchExpanded = true } }) {
-                                val wordPrimary = colors.primary.readableOn(colors.surface)
-                                val wordSecondary = colors.secondary.readableOn(colors.surface)
-                                Text("Vv", color = wordPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
-                                Spacer(Modifier.width(4.dp))
-                                Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (state.isOnlineMode) {
-                                    Box(Modifier.size(34.dp).clip(IrisShape.chip).background(colors.primary.copy(alpha=0.15f)).clickable { onOpenTopLists() }, contentAlignment = Alignment.Center) {
-                                        Text("榜", color = colors.primary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    // 标题行 + 4 按钮（Playlist / Layout / Report / Settings）
+                    // 原版：无"榜"按钮，榜入口已移到 LibrarySortBar 内
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(IrisShape.item)
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) {
+                                    Haptics.tap()
+                                    if (state.searchPersistent) return@clickable
+                                    if (searchExpanded) {
+                                        if (state.searchQuery.isNotBlank()) onSearch("")
+                                        focusManager.clearFocus()
+                                        searchExpanded = false
+                                    } else {
+                                        searchExpanded = true
                                     }
-                                    Spacer(Modifier.width(8.dp))
                                 }
-                                PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = state.activePlaylistId != null)
-                                Spacer(Modifier.width(8.dp)); LayoutButton(onClick = onCycleLayout, colors = colors)
-                                Spacer(Modifier.width(8.dp)); ReportButton(onClick = onReport, colors = colors)
-                                Spacer(Modifier.width(8.dp)); SettingsButton(onClick = onSettings, colors = colors)
-                            }
+                        ) {
+                            val wordPrimary = colors.primary.readableOn(colors.surface)
+                            val wordSecondary = colors.secondary.readableOn(colors.surface)
+                            Text("Vv", color = wordPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                            Spacer(Modifier.width(4.dp))
+                            Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                         }
-                        AnimatedVisibility(visible = sortBarVisible, enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)), exit = fadeOut(tween(160)) + shrinkVertically(tween(200, easing = EaseOutCubic))) {
-                            Column { Spacer(Modifier.height(6.dp)); LibrarySortBar(order = state.sortOrder, direction = state.sortDirection, colors = colors, glass = glass, onOrderChange = { onSortOrder(it); sortInteractionTick++ }, onDirectionChange = { onSortDirection(it); sortInteractionTick++ }) }
-                        }
-                        val searchBg = if (glass) { if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF) } else { if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC) }
-                        val iconTint = colors.subText
-                        AnimatedVisibility(visible = showSearch, enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)), exit = fadeOut(tween(180)) + shrinkVertically(tween(220, easing = EaseOutCubic))) {
-                            Column {
-                                Spacer(Modifier.height(8.dp))
-                                TextField(
-                                    value = state.searchQuery, onValueChange = onSearch, singleLine = true, interactionSource = searchInteraction,
-                                    modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester).onGloballyPositioned { searchBounds.value = it.boundsInRoot() },
-                                    placeholder = { Text("搜索歌曲、艺术家…", color = colors.subText, fontSize = 12.sp) },
-                                    textStyle = TextStyle(color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                                    leadingIcon = { Canvas(Modifier.size(15.dp)) { val r = size.minDimension * 0.32f; val cx = size.width * 0.38f; val cy = size.height * 0.38f; drawCircle(color = iconTint, radius = r, center = Offset(cx, cy), style = androidx.compose.ui.graphics.drawscope.Stroke(width = size.minDimension * 0.12f)); drawLine(color = iconTint, start = Offset(cx + r * 0.7f, cy + r * 0.7f), end = Offset(size.width * 0.88f, size.height * 0.88f), strokeWidth = size.minDimension * 0.12f, cap = androidx.compose.ui.graphics.StrokeCap.Round) } },
-                                    shape = IrisShape.item,
-                                    colors = TextFieldDefaults.colors(focusedContainerColor = searchBg, unfocusedContainerColor = searchBg, disabledContainerColor = searchBg, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent, cursorColor = colors.primary, focusedTextColor = colors.text, unfocusedTextColor = colors.text)
-                                )
-                            }
-                        }
-                        AnimatedVisibility(visible = showCount, enter = fadeIn(tween(300)) + expandVertically(tween(300)), exit = fadeOut(tween(400)) + shrinkVertically(tween(400))) {
-                            Column {
-                                Spacer(Modifier.height(6.dp))
-                                val countLabel = when { state.activePlaylistId != null -> state.playlists.firstOrNull { it.id == state.activePlaylistId }?.let { "歌单「${it.name}」· ${state.queue.size} 首" } ?: "${state.queue.size} 首"; state.selectedFolders.isNotEmpty() -> "${state.queue.size} 首 · 已选 ${state.selectedFolders.size} 个文件夹"; state.onlyLiked -> "我的收藏 · ${state.queue.size} 首"; else -> "${state.queue.size} 首" }
-                                Text(countLabel, color = colors.subText, fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally))
-                            }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = state.activePlaylistId != null)
+                            Spacer(Modifier.width(8.dp))
+                            LayoutButton(onClick = onCycleLayout, colors = colors)
+                            Spacer(Modifier.width(8.dp))
+                            ReportButton(onClick = onReport, colors = colors)
+                            Spacer(Modifier.width(8.dp))
+                            SettingsButton(onClick = onSettings, colors = colors)
                         }
                     }
+
+                    // 排序行：包含排序/方向 + 在线模式下的"榜"胶囊
+                    AnimatedVisibility(
+                        visible = sortBarVisible,
+                        enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
+                        exit = fadeOut(tween(160)) + shrinkVertically(tween(200, easing = EaseOutCubic))
+                    ) {
+                        Column {
+                            Spacer(Modifier.height(6.dp))
+                            LibrarySortBar(
+                                order = state.sortOrder,
+                                direction = state.sortDirection,
+                                colors = colors,
+                                glass = glass,
+                                isOnlineMode = state.isOnlineMode,
+                                onOpenTopLists = onOpenTopLists,
+                                onOrderChange = {
+                                    onSortOrder(it)
+                                    sortInteractionTick++
+                                },
+                                onDirectionChange = {
+                                    onSortDirection(it)
+                                    sortInteractionTick++
+                                }
+                            )
+                        }
+                    }
+
+                    // 搜索框
+                    val searchBg = if (glass) {
+                        if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+                    } else {
+                        if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+                    }
+                    val iconTint = colors.subText
+                    AnimatedVisibility(
+                        visible = showSearch,
+                        enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
+                        exit = fadeOut(tween(180)) + shrinkVertically(tween(220, easing = EaseOutCubic))
+                    ) {
+                        Column {
+                            Spacer(Modifier.height(8.dp))
+                            TextField(
+                                value = state.searchQuery,
+                                onValueChange = onSearch,
+                                singleLine = true,
+                                interactionSource = searchInteraction,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(searchFocusRequester)
+                                    .onGloballyPositioned { searchBounds.value = it.boundsInRoot() },
+                                placeholder = {
+                                    Text(
+                                        if (state.isOnlineMode) "搜索全网音乐…" else "搜索歌曲、艺术家…",
+                                        color = colors.subText,
+                                        fontSize = 12.sp
+                                    )
+                                },
+                                textStyle = TextStyle(color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                                leadingIcon = {
+                                    Canvas(Modifier.size(15.dp)) {
+                                        val r = size.minDimension * 0.32f
+                                        val cx = size.width * 0.38f
+                                        val cy = size.height * 0.38f
+                                        drawCircle(
+                                            color = iconTint,
+                                            radius = r,
+                                            center = Offset(cx, cy),
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = size.minDimension * 0.12f)
+                                        )
+                                        drawLine(
+                                            color = iconTint,
+                                            start = Offset(cx + r * 0.7f, cy + r * 0.7f),
+                                            end = Offset(size.width * 0.88f, size.height * 0.88f),
+                                            strokeWidth = size.minDimension * 0.12f,
+                                            cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                        )
+                                    }
+                                },
+                                shape = IrisShape.item,
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = searchBg,
+                                    unfocusedContainerColor = searchBg,
+                                    disabledContainerColor = searchBg,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    disabledIndicatorColor = Color.Transparent,
+                                    cursorColor = colors.primary,
+                                    focusedTextColor = colors.text,
+                                    unfocusedTextColor = colors.text,
+                                )
+                            )
+                        }
+                    }
+
+                    // 计数
+                    AnimatedVisibility(
+                        visible = showCount,
+                        enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+                        exit = fadeOut(tween(400)) + shrinkVertically(tween(400))
+                    ) {
+                        Column {
+                            Spacer(Modifier.height(6.dp))
+                            val countLabel = when {
+                                state.isOnlineMode -> if (state.searchQuery.isBlank()) "全网推荐 · ${state.queue.size} 首" else "搜索结果 · ${state.onlineSearchResults.size} 首"
+                                state.activePlaylistId != null ->
+                                    state.playlists.firstOrNull { it.id == state.activePlaylistId }?.let { "歌单「${it.name}」· ${state.queue.size} 首" } ?: "${state.queue.size} 首"
+                                state.selectedFolders.isNotEmpty() -> "${state.queue.size} 首 · 已选 ${state.selectedFolders.size} 个文件夹"
+                                state.onlyLiked -> "我的收藏 · ${state.queue.size} 首"
+                                else -> "${state.queue.size} 首"
+                            }
+                            Text(
+                                countLabel,
+                                color = colors.subText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .wrapContentWidth(Alignment.CenterHorizontally)
+                            )
+                        }
+                    }
+                }
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ==================== 播放器页 ====================
+
 @Composable
 private fun PlayerPage(
-    state: PlayerUiState, colors: IrisColors, viewModel: PlayerViewModel, onToggle: () -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onSeek: (Float) -> Unit, 
-    onToggleLike: (Long) -> Unit, onCyclePlayMode: () -> Unit, onOpenEqualizer: () -> Unit, onOpenSleepTimer: () -> Unit, eqActive: Boolean,
-    onOpenComments: () -> Unit
+    state: PlayerUiState,
+    colors: IrisColors,
+    viewModel: PlayerViewModel,
+    onToggle: () -> Unit,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onToggleLike: (Long) -> Unit,
+    onCyclePlayMode: () -> Unit,
+    onOpenEqualizer: () -> Unit,
+    onOpenSleepTimer: () -> Unit,
+    onOpenComments: () -> Unit,
+    eqActive: Boolean
 ) {
     var showLyrics by remember { mutableStateOf(false) }
     var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var lyricLoading by remember { mutableStateOf(false) }
+
     BackHandler(enabled = showLyrics) { showLyrics = false }
     val scope = rememberCoroutineScope()
     var lyricPath by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(showLyrics, state.currentSong?.filePath, state.durationMs) {
         val path = state.currentSong?.filePath
-        if (showLyrics && !path.isNullOrBlank() && path != lyricPath) { lyricLines = emptyList(); lyricLoading = true; try { lyricLines = withContext(Dispatchers.IO) { LyricParser.loadLyrics(path, state.durationMs) }; lyricPath = path } catch (_: Exception) { } finally { lyricLoading = false } }
+        if (showLyrics && !path.isNullOrBlank() && path != lyricPath) {
+            lyricLines = emptyList()
+            lyricLoading = true
+            try {
+                lyricLines = withContext(Dispatchers.IO) {
+                    LyricParser.loadLyrics(path, state.durationMs)
+                }
+                lyricPath = path
+            } catch (_: Exception) {
+            } finally {
+                lyricLoading = false
+            }
+        }
     }
+
     val lyricsHazeState = remember { HazeState() }
     val glass = isLiquidGlass
     val frosted = isFrostedGlass
     val frostedBlur = frostedBlurRadius
+
     val cardBackdrop = rememberIrisBackdrop()
     val outerBackdrops = LocalIrisBackdrops.current
-    val lyricsBackdrops = remember(glass, outerBackdrops, cardBackdrop) { if (glass) outerBackdrops + cardBackdrop else emptyList() }
+    val lyricsBackdrops = remember(glass, outerBackdrops, cardBackdrop) {
+        if (glass) outerBackdrops + cardBackdrop else emptyList()
+    }
+
     val onClickArtwork: () -> Unit = {
         val song = state.currentSong
-        if (song != null && song.filePath.isNotBlank()) { scope.launch { lyricLoading = true; try { val lines = withContext(Dispatchers.IO) { LyricParser.loadLyrics(song.filePath, state.durationMs) }; lyricLines = lines; lyricPath = song.filePath; showLyrics = true } catch (_: Exception) { } finally { lyricLoading = false } } }
+        if (song != null && song.filePath.isNotBlank()) {
+            scope.launch {
+                lyricLoading = true
+                try {
+                    val lines = withContext(Dispatchers.IO) {
+                        LyricParser.loadLyrics(song.filePath, state.durationMs)
+                    }
+                    lyricLines = lines
+                    lyricPath = song.filePath
+                    showLyrics = true
+                } catch (_: Exception) {
+                } finally {
+                    lyricLoading = false
+                }
+            }
+        }
     }
+
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 26.dp).then(if (glass) Modifier.irisBackdropSource(cardBackdrop) else if (frosted) Modifier.haze(state = lyricsHazeState, style = HazeStyle(blurRadius = frostedBlur)) else Modifier), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 26.dp)
+                .then(
+                    if (glass) Modifier.irisBackdropSource(cardBackdrop)
+                    else if (frosted) Modifier.haze(state = lyricsHazeState, style = HazeStyle(blurRadius = frostedBlur))
+                    else Modifier
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
             PlayerCard(
-                title = state.currentSong?.title ?: "未选择", 
-                artist = state.currentSong?.artist ?: "", 
-                positionMs = state.positionMs, durationMs = state.durationMs, shuffle = state.shuffle, repeatMode = state.repeatMode, 
-                artworkPath = state.currentSong?.filePath, 
-                artworkUri = state.currentSong?.albumArtUri, 
-                progress = state.progress, isPlaying = state.isPlaying, onToggle = onToggle, onPrev = onPrev, onNext = onNext, onSeek = onSeek, onCyclePlayMode = onCyclePlayMode, 
-                onToggleLike = { state.currentSong?.let { onToggleLike(it.id) } }, liked = state.currentSong?.id in state.likedSongIds, onClickArtwork = onClickArtwork, colors = colors, modifier = Modifier, 
-                sleepTimerMs = state.sleepTimerMs, sleepTimerEndMs = state.sleepTimerEndMs, onOpenSleepTimer = onOpenSleepTimer, onOpenEqualizer = onOpenEqualizer, eqActive = eqActive, 
-                audioFormat = state.currentSong?.formatLabel ?: "", visualizerEnabled = state.visualizerEnabled, tiltSpectrum = state.tiltSpectrum, coverShakeEnabled = state.coverShake, coverLyricEnabled = state.coverLyric, 
-                onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
-                onOpenComments = onOpenComments 
+                title = state.currentSong?.title ?: "未选择",
+                artist = state.currentSong?.artist ?: "",
+                positionMs = state.positionMs,
+                durationMs = state.durationMs,
+                shuffle = state.shuffle,
+                repeatMode = state.repeatMode,
+                artworkPath = state.currentSong?.filePath,
+                artworkUri = state.currentSong?.albumArtUri,
+                defaultCoverUri = state.defaultCoverUri,
+                progress = state.progress,
+                isPlaying = state.isPlaying,
+                onToggle = onToggle,
+                onPrev = onPrev,
+                onNext = onNext,
+                onSeek = onSeek,
+                onCyclePlayMode = onCyclePlayMode,
+                onToggleLike = {
+                    state.currentSong?.let { onToggleLike(it.id) }
+                },
+                liked = state.currentSong?.id in state.likedSongIds,
+                onClickArtwork = onClickArtwork,
+                onOpenComments = onOpenComments,
+                colors = colors,
+                modifier = Modifier,
+                sleepTimerMs = state.sleepTimerMs,
+                sleepTimerEndMs = state.sleepTimerEndMs,
+                onOpenSleepTimer = onOpenSleepTimer,
+                onOpenEqualizer = onOpenEqualizer,
+                eqActive = eqActive,
+                audioFormat = state.currentSong?.formatLabel ?: "",
+                visualizerEnabled = state.visualizerEnabled,
+                tiltSpectrum = state.tiltSpectrum,
+                coverShakeEnabled = state.coverShake,
+                coverLyricEnabled = state.coverLyric,
+                onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) }
             )
         }
+
         if (showLyrics) {
             LyricsOverlay(
-                lines = lyricLines, loading = lyricLoading, positionMs = state.positionMs, durationMs = state.durationMs, title = state.currentSong?.title ?: "", artist = state.currentSong?.artist ?: "", colors = colors, hazeState = lyricsHazeState, backdrops = lyricsBackdrops, onSeek = onSeek, 
-                lyricAlign = state.lyricAlign, lyricFont = state.lyricFont, lyricFontSize = state.lyricFontSize, karaoke = state.karaokeLyric, lyricUseCustomColor = state.lyricUseCustomColor, lyricTheme = state.lyricTheme, lyricCustomPrimary = state.lyricCustomPrimary, lyricCustomSecondary = state.lyricCustomSecondary, 
+                lines = lyricLines,
+                loading = lyricLoading,
+                positionMs = state.positionMs,
+                durationMs = state.durationMs,
+                title = state.currentSong?.title ?: "",
+                artist = state.currentSong?.artist ?: "",
+                colors = colors,
+                hazeState = lyricsHazeState,
+                backdrops = lyricsBackdrops,
+                onSeek = onSeek,
+                lyricAlign = state.lyricAlign,
+                lyricFont = state.lyricFont,
+                lyricFontSize = state.lyricFontSize,
+                karaoke = state.karaokeLyric,
+                lyricUseCustomColor = state.lyricUseCustomColor,
+                lyricTheme = state.lyricTheme,
+                lyricCustomPrimary = state.lyricCustomPrimary,
+                lyricCustomSecondary = state.lyricCustomSecondary,
                 onDismiss = { showLyrics = false },
                 showTranslation = state.showTranslationLyric,
-                songId = state.currentSong?.id ?: 0L 
+                songId = state.currentSong?.id ?: 0L
             )
         }
     }
 }
 
-@Composable
-internal fun PlayerCard(
-    title: String, artist: String, positionMs: Long, durationMs: Long, shuffle: Boolean, repeatMode: RepeatMode, artworkPath: String?, 
-    artworkUri: android.net.Uri?, 
-    progress: Float, isPlaying: Boolean, onToggle: () -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onSeek: (Float) -> Unit, onCyclePlayMode: () -> Unit, 
-    onToggleLike: () -> Unit, liked: Boolean, onClickArtwork: () -> Unit, colors: IrisColors, modifier: Modifier, sleepTimerMs: Long, sleepTimerEndMs: Long, onOpenSleepTimer: () -> Unit, onOpenEqualizer: () -> Unit, eqActive: Boolean, 
-    audioFormat: String, visualizerEnabled: Boolean, tiltSpectrum: Boolean, coverShakeEnabled: Boolean, coverLyricEnabled: Boolean, onToggleVisualizer: () -> Unit,
-    onOpenComments: () -> Unit
-) {
-    val glass = isLiquidGlass
-    val isOnline = artworkUri != null
-    
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(32.dp))
-            .then(if (glass) Modifier.irisSurface(GlassLevel.SHEET, colors, RoundedCornerShape(32.dp)) else Modifier.background(colors.card))
-            .padding(24.dp)
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(24.dp))
-                    .clickable { onClickArtwork() },
-                contentAlignment = Alignment.Center
-            ) {
-                if (isOnline && artworkUri != null) {
-                    AsyncImage(model = artworkUri, contentDescription = "Cover", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                } else if (!artworkPath.isNullOrBlank()) {
-                    SongArtwork(filePath = artworkPath, seedId = title.hashCode().toLong(), artworkSize = 300.dp, isDark = colors.isDark, modifier = Modifier.fillMaxSize())
-                } else {
-                    Box(Modifier.fillMaxSize().background(colors.surface), contentAlignment = Alignment.Center) {
-                        Text("Vv MUSIC", color = colors.subText, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
+// ==================== LyricsOverlay 完整版（原版 + 翻译行） ====================
 
-            Spacer(Modifier.height(24.dp))
+private val LyricEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+private const val LYRIC_ANIM_MS = 620
 
-            Text(title, color = colors.text, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(4.dp))
-            Text(artist, color = colors.subText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            
-            if (isOnline && audioFormat.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Box(Modifier.clip(RoundedCornerShape(4.dp)).background(colors.primary.copy(alpha = 0.15f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                    Text(audioFormat, color = colors.primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            Slider(
-                value = progress,
-                onValueChange = onSeek,
-                colors = SliderDefaults.colors(
-                    thumbColor = colors.primary,
-                    activeTrackColor = colors.primary,
-                    inactiveTrackColor = colors.subText.copy(alpha = 0.2f)
-                ),
-                modifier = Modifier.fillMaxWidth().height(30.dp)
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatDuration(positionMs), color = colors.subText, fontSize = 11.sp)
-                Text(formatDuration(durationMs), color = colors.subText, fontSize = 11.sp)
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onCyclePlayMode) {
-                    val iconText = when (repeatMode) {
-                        RepeatMode.ONE -> "🔂"
-                        RepeatMode.ALL -> "🔁"
-                        RepeatMode.OFF -> if (shuffle) "🔀" else "➡️"
-                    }
-                    Text(iconText, fontSize = 20.sp)
-                }
-                
-                IconButton(onClick = onPrev) { Text("⏮️", fontSize = 28.sp) }
-                
-                Box(
-                    Modifier.size(64.dp).clip(CircleShape).background(colors.primary).clickable { onToggle() },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(if (isPlaying) "⏸️" else "▶️", fontSize = 28.sp, color = colors.primary.readableTextOn())
-                }
-                
-                IconButton(onClick = onNext) { Text("⏭️", fontSize = 28.sp) }
-                
-                IconButton(onClick = onToggleLike) {
-                    Text(if (liked) "❤️" else "🤍", fontSize = 20.sp)
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            HorizontalDivider(color = colors.subText.copy(alpha = 0.1f))
-            Spacer(Modifier.height(16.dp))
-
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                IconButton(onClick = onOpenComments) { Text("💬", fontSize = 20.sp) }
-                IconButton(onClick = onOpenSleepTimer) { Text(if (sleepTimerMs > 0) "⏱️" else "⏳", fontSize = 20.sp) }
-                IconButton(onClick = onOpenEqualizer) { Text("🎛️", fontSize = 20.sp) }
-            }
-        }
-    }
-}
-
+/**
+ * 全屏歌词覆盖层：毛玻璃背景，当前行高亮，随播放进度滚动。
+ * 支持双语歌词（showTranslation = true 时，在当前行下方显示翻译行）。
+ */
 @Composable
 internal fun LyricsOverlay(
-    lines: List<LyricLine>, loading: Boolean, positionMs: Long, durationMs: Long, title: String, artist: String, colors: IrisColors, hazeState: HazeState, backdrops: List<IrisBackdrop>, onSeek: (Float) -> Unit, 
-    lyricAlign: Int = 1, lyricFont: Int = 0, lyricFontSize: Float = 20f, karaoke: Boolean = true, lyricUseCustomColor: Boolean = false, lyricTheme: IrisTheme = IrisTheme.MONO, lyricCustomPrimary: Long = 0xFF00F0FFL, lyricCustomSecondary: Long = 0xFFFF2E97L, onDismiss: () -> Unit,
-    showTranslation: Boolean, songId: Long 
+    lines: List<LyricLine>,
+    loading: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    title: String,
+    artist: String,
+    colors: IrisColors,
+    hazeState: HazeState,
+    backdrops: List<IrisBackdrop>,
+    onSeek: (Float) -> Unit,
+    lyricAlign: Int = 1,
+    lyricFont: Int = 0,
+    lyricFontSize: Float = 20f,
+    karaoke: Boolean = true,
+    lyricUseCustomColor: Boolean = false,
+    lyricTheme: IrisTheme = IrisTheme.MONO,
+    lyricCustomPrimary: Long = 0xFF00F0FFL,
+    lyricCustomSecondary: Long = 0xFFFF2E97L,
+    onDismiss: () -> Unit,
+    /** 双语歌词开关：开启时在当前行下方显示翻译行（仅在线歌有翻译缓存） */
+    showTranslation: Boolean = true,
+    /** 当前歌曲 ID，用于定位翻译歌词缓存（cacheDir/online_lyrics/online_<id>_t.lrc） */
+    songId: Long = 0L
 ) {
     val listState = rememberLazyListState()
     val current = LyricParser.currentIndex(lines, positionMs)
-    
-    var translationLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
+    val colAlign = when (lyricAlign) { 0 -> Alignment.Start; 2 -> Alignment.End; else -> Alignment.CenterHorizontally }
+    val boxAlign = when (lyricAlign) { 0 -> Alignment.CenterStart; 2 -> Alignment.CenterEnd; else -> Alignment.Center }
+    val textAlign = when (lyricAlign) { 0 -> TextAlign.Start; 2 -> TextAlign.End; else -> TextAlign.Center }
+    val lyricFamily = when (lyricFont) {
+        1 -> FontFamily.Serif
+        else -> FontFamily.SansSerif
+    }
+    val isLand = LocalConfiguration.current.orientation ==
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val onCard = if (colors.isDark) Color.White else Color.Black
+    val glass = isLiquidGlass
+    val frosted = isFrostedGlass
+    val frostedBlur = frostedBlurRadius
+    val scrim = if (glass) {
+        if (colors.isDark) Color(0x8C121218) else Color(0xA6F4F4F8)
+    } else {
+        if (colors.isDark) Color(0xB3121218) else Color(0xCCF4F4F8)
+    }
+
+    // 翻译歌词：从缓存目录读取（PlayerViewModel.playOnlineSong 在切换在线歌曲时写入）
     val context = LocalContext.current
-    
+    var translationLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     LaunchedEffect(songId, showTranslation) {
         if (showTranslation && songId > 0) {
             val tFile = java.io.File(context.cacheDir, "online_lyrics/online_${songId}_t.lrc")
-            if (tFile.exists()) {
-                translationLines = withContext(Dispatchers.IO) { 
-                    LyricParser.loadLyrics(tFile.absolutePath, durationMs) ?: emptyList() 
+            translationLines = if (tFile.exists()) {
+                withContext(Dispatchers.IO) {
+                    runCatching { LyricParser.loadLyrics(tFile.absolutePath, durationMs) }
+                        .getOrDefault(emptyList())
                 }
-            } else {
-                translationLines = emptyList()
-            }
+            } else emptyList()
         } else {
             translationLines = emptyList()
         }
     }
 
-    val boxAlign = when (lyricAlign) { 0 -> Alignment.CenterStart; 2 -> Alignment.CenterEnd; else -> Alignment.Center }
-    val textAlign = when (lyricAlign) { 0 -> TextAlign.Start; 2 -> TextAlign.End; else -> TextAlign.Center }
-    
-    LaunchedEffect(current) { 
-        if (current >= 0 && current < lines.size) {
-            listState.animateScrollToItem(current, scrollOffset = -200)
+    // 全屏歌词渐变色
+    val (lPrimary, lSecondary) = remember(lyricTheme, colors.isDark, lyricCustomPrimary, lyricCustomSecondary) {
+        when (lyricTheme) {
+            IrisTheme.MONO -> if (colors.isDark) Color.White to Color.Black else Color.Black to Color.White
+            IrisTheme.OCEAN -> IrisPalette.NeonBlue to IrisPalette.NeonCyan
+            IrisTheme.GRASS -> IrisPalette.NeonGreen to IrisPalette.NeonLime
+            IrisTheme.CUSTOM -> Color(lyricCustomPrimary) to Color(lyricCustomSecondary)
+            else -> Color.White to Color.Gray
+        }
+    }
+    val lyricBrush = remember(lPrimary, lSecondary) {
+        Brush.horizontalGradient(listOf(lPrimary, lSecondary))
+    }
+    val unsungColor = if (colors.isDark) Color.White.copy(alpha = 0.4f) else Color.Black.copy(alpha = 0.4f)
+
+    val lyricsGlass = if (glass) {
+        Modifier.glassSurface(
+            spec = GlassLevel.SHEET.currentSpec(colors),
+            shape = RectangleShape,
+            backdrops = backdrops
+        )
+    } else Modifier
+
+    // 侧边时间标记
+    val scrubScope = rememberCoroutineScope()
+    var scrubHideJob by remember { mutableStateOf<Job?>(null) }
+    var showTimeTag by remember { mutableStateOf(false) }
+    val focusIndex by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val vis = info.visibleItemsInfo
+            if (vis.isEmpty()) return@derivedStateOf -1
+            val focusFrac = if (isLand) 0.42f else 0.38f
+            val focusPx = info.viewportStartOffset +
+                (info.viewportEndOffset - info.viewportStartOffset) * focusFrac
+            vis.minByOrNull { kotlin.math.abs((it.offset + it.size / 2f) - focusPx) }?.index ?: -1
+        }
+    }
+    val scrolling = listState.interactionSource.collectIsDraggedAsState().value
+    LaunchedEffect(scrolling) {
+        if (scrolling) {
+            scrubHideJob?.cancel()
+            showTimeTag = true
+        } else {
+            scrubHideJob?.cancel()
+            scrubHideJob = scrubScope.launch {
+                delay(900)
+                showTimeTag = false
+            }
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)).clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onDismiss() }) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 28.dp)) {
-            Spacer(Modifier.height(24.dp))
-            Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-            Text(artist, color = Color.Gray, fontSize = 14.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-            Spacer(Modifier.height(40.dp))
+    LaunchedEffect(current) {
+        if (current < 0) return@LaunchedEffect
+        val scrollSpec = tween<Float>(durationMillis = LYRIC_ANIM_MS, easing = LyricEase)
+        val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == current }
+        if (visible == null) {
+            listState.scrollToItem(current)
+        }
+        val info = listState.layoutInfo
+        val vpStart = info.viewportStartOffset
+        val vpEnd = info.viewportEndOffset
+        val focusFrac = if (isLand) 0.42f else 0.38f
+        val focusLine = vpStart + (vpEnd - vpStart) * focusFrac
+        val t = info.visibleItemsInfo.firstOrNull { it.index == current }
+        if (t != null) {
+            listState.animateScrollBy(t.offset + t.size / 2f - focusLine, scrollSpec)
+        }
+    }
 
-            if (loading) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
-            } else if (lines.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无歌词", color = Color.Gray) }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(24.dp),
-                    contentPadding = PaddingValues(bottom = 150.dp)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .then(
+                if (glass) {
+                    lyricsGlass
+                } else if (frosted) {
+                    Modifier.hazeChild(
+                        state = hazeState,
+                        style = HazeStyle(blurRadius = frostedBlur, tint = scrim),
+                        shape = IrisShape.item
+                    )
+                } else {
+                    Modifier.background(scrim)
+                }
+            )
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { onDismiss() }
+            .statusBarsPadding()
+            .navigationBarsPadding()
+    ) {
+        // 侧边迷你时间标记
+        val tagAlpha by animateFloatAsState(
+            if (showTimeTag && focusIndex in lines.indices) 1f else 0f,
+            animationSpec = tween(180), label = "timeTagAlpha"
+        )
+        if (focusIndex in lines.indices) {
+            val focusFrac = if (isLand) 0.42f else 0.38f
+            val onRight = lyricAlign != 2
+            val animMs by animateFloatAsState(
+                targetValue = lines[focusIndex].timeMs.toFloat(),
+                animationSpec = tween(durationMillis = 260, easing = LyricEase),
+                label = "timeTagMs"
+            )
+            val tagText = formatDuration(animMs.toLong())
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val tagY = maxHeight * focusFrac
+                Row(
+                    Modifier
+                        .align(if (onRight) Alignment.TopEnd else Alignment.TopStart)
+                        .padding(top = tagY - 7.dp, start = if (onRight) 0.dp else 12.dp, end = if (onRight) 12.dp else 0.dp)
+                        .alpha(tagAlpha),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    itemsIndexed(lines) { index, line ->
-                        val isCurrent = index == current
-                        val alpha by animateFloatAsState(if (isCurrent) 1f else 0.4f)
-                        val scale by animateFloatAsState(if (isCurrent) 1.1f else 1f)
-                        
-                        val tLine = translationLines.find { Math.abs(it.timeMs - line.timeMs) < 200 }
-                        
-                        Column(
-                            modifier = Modifier.fillMaxWidth().graphicsLayer { this.alpha = alpha; scaleX = scale; scaleY = scale },
-                            horizontalAlignment = if (lyricAlign == 0) Alignment.Start else if (lyricAlign == 2) Alignment.End else Alignment.CenterHorizontally
-                        ) {
-                            if (isCurrent && karaoke) {
-                                KaraokeLine(
-                                    line = line, positionMs = positionMs, lineEndMs = lines.getOrNull(index + 1)?.timeMs ?: (line.timeMs + 4000),
-                                    lyricUseCustomColor = lyricUseCustomColor, themePrimary = Color(lyricCustomPrimary), themeSecondary = Color(lyricCustomSecondary),
-                                    originalColor = Color.White, unsungColor = Color.White.copy(alpha = 0.5f), textAlign = textAlign, fontSize = lyricFontSize
+                    if (onRight) {
+                        Box(Modifier.width(10.dp).height(2.dp).background(colors.primary))
+                        Spacer(Modifier.width(5.dp))
+                        Text(tagText, color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        Text(tagText, color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(5.dp))
+                        Box(Modifier.width(10.dp).height(2.dp).background(colors.primary))
+                    }
+                }
+            }
+        }
+        GlassContent {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 28.dp)
+                    .padding(top = 16.dp, bottom = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        title, color = onCard, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                    if (artist.isNotBlank()) {
+                        Text(
+                            "  \u00b7  $artist", color = colors.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                when {
+                    loading -> Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        Text("加载歌词…", color = colors.subText, fontSize = 14.sp)
+                    }
+                    lines.isEmpty() -> Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        Text(
+                            "未找到歌词\n（歌曲内嵌歌词或同目录同名 .lrc）", color = colors.subText,
+                            fontSize = 14.sp, textAlign = TextAlign.Center
+                        )
+                    }
+                    else -> LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(
+                                start = if (lyricAlign == 0) (if (isLand) 52.dp else 10.dp) else 0.dp,
+                                end = if (lyricAlign == 2) (if (isLand) 52.dp else 10.dp) else 0.dp
+                            )
+                            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                            .drawWithContent {
+                                drawContent()
+                                val fade = 56.dp.toPx()
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        0f to Color.Transparent, 1f to Color.Black,
+                                        startY = 0f, endY = fade
+                                    ),
+                                    blendMode = BlendMode.DstIn
                                 )
-                            } else {
-                                Text(
-                                    text = line.text,
-                                    color = Color.White,
-                                    fontSize = lyricFontSize.sp,
-                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                    textAlign = textAlign
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        0f to Color.Black, 1f to Color.Transparent,
+                                        startY = size.height - fade, endY = size.height
+                                    ),
+                                    blendMode = BlendMode.DstIn
                                 )
-                            }
-                            
-                            if (tLine != null && tLine.text.isNotBlank() && showTranslation) {
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = tLine.text,
-                                    color = if (isCurrent) Color.White.copy(alpha = 0.8f) else Color.Gray,
-                                    fontSize = (lyricFontSize - 4).sp,
-                                    fontWeight = FontWeight.Normal,
-                                    textAlign = textAlign
+                            },
+                        verticalArrangement = Arrangement.spacedBy(if (isLand) 14.dp else 18.dp),
+                        contentPadding = PaddingValues(vertical = if (isLand) 56.dp else 120.dp)
+                    ) {
+                        itemsIndexed(lines, key = { index, _ -> "lyric-$index" }) { index, line ->
+                            val isCurrent = index == current
+                            val dist = if (current < 0) 0 else kotlin.math.abs(index - current)
+                            val stagger = (dist.coerceAtMost(6)) * 22
+                            val scale by animateFloatAsState(
+                                targetValue = if (isCurrent) 1f else (0.9f - (dist - 1).coerceAtLeast(0) * 0.015f).coerceAtLeast(0.86f),
+                                animationSpec = tween(durationMillis = LYRIC_ANIM_MS, delayMillis = stagger, easing = LyricEase),
+                                label = "lyricScale"
+                            )
+                            val rowAlpha by animateFloatAsState(
+                                targetValue = if (isCurrent) 1f else (0.66f - (dist - 1).coerceAtLeast(0) * 0.12f).coerceAtLeast(0.26f),
+                                animationSpec = tween(durationMillis = LYRIC_ANIM_MS, delayMillis = stagger, easing = LyricEase),
+                                label = "lyricAlpha"
+                            )
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .graphicsLayer {
+                                        scaleX = scale
+                                        scaleY = scale
+                                        alpha = rowAlpha
+                                        transformOrigin = when (lyricAlign) {
+                                            0 -> androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                                            2 -> androidx.compose.ui.graphics.TransformOrigin(1f, 0.5f)
+                                            else -> androidx.compose.ui.graphics.TransformOrigin(0.5f, 0.5f)
+                                        }
+                                    }
+                                    .clickable(
+                                        indication = null,
+                                        interactionSource = remember { MutableInteractionSource() }
+                                    ) { onDismiss() }
+                                    .padding(vertical = if (isCurrent) 6.dp else 0.dp),
+                                contentAlignment = boxAlign
+                            ) {
+                                val seekModifier = Modifier.clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) {
+                                    if (durationMs > 0L) {
+                                        onSeek((line.timeMs.toFloat() / durationMs).coerceIn(0f, 1f))
+                                    }
+                                }
+                                val lineColor by animateColorAsState(
+                                    targetValue = if (isCurrent) colors.primary else onCard,
+                                    animationSpec = tween(durationMillis = LYRIC_ANIM_MS, easing = LyricEase),
+                                    label = "lyricColor"
                                 )
+                                // 主行 + 翻译行：垂直叠放，共用一个 seek 点击区域
+                                Column(
+                                    horizontalAlignment = when (lyricAlign) {
+                                        0 -> Alignment.Start
+                                        2 -> Alignment.End
+                                        else -> Alignment.CenterHorizontally
+                                    },
+                                    modifier = seekModifier
+                                ) {
+                                    if (isCurrent && karaoke) {
+                                        KaraokeLine(
+                                            line = line,
+                                            positionMs = positionMs,
+                                            lineEndMs = lines.getOrNull(index + 1)?.timeMs
+                                                ?: (if (durationMs > 0) durationMs else line.timeMs + 4000),
+                                            lyricUseCustomColor = lyricUseCustomColor,
+                                            themePrimary = lPrimary,
+                                            themeSecondary = lSecondary,
+                                            originalColor = onCard,
+                                            unsungColor = unsungColor,
+                                            textAlign = textAlign,
+                                            fontFamily = lyricFamily,
+                                            fontSize = lyricFontSize
+                                        )
+                                    } else {
+                                        val useBrush = if (lyricUseCustomColor) lyricBrush else SolidColor(lineColor)
+                                        Text(
+                                            line.text,
+                                            style = androidx.compose.ui.text.TextStyle(
+                                                brush = useBrush,
+                                                fontSize = lyricFontSize.sp,
+                                                fontFamily = lyricFamily,
+                                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                                textAlign = textAlign
+                                            )
+                                        )
+                                    }
+                                    // 翻译行：匹配时间差 < 200ms 的翻译
+                                    val translationLine = translationLines.find {
+                                        kotlin.math.abs(it.timeMs - line.timeMs) < 200
+                                    }
+                                    if (showTranslation && translationLine != null && translationLine.text.isNotBlank()) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            translationLine.text,
+                                            color = if (isCurrent) colors.primary.copy(alpha = 0.85f) else onCard.copy(alpha = 0.55f),
+                                            fontSize = (lyricFontSize * 0.75f).sp,
+                                            fontFamily = lyricFamily,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            textAlign = textAlign
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                Spacer(Modifier.height(8.dp))
+                if (!isLand) Text(
+                    "点歌词跳转，点空白处关闭",
+                    color = colors.subText,
+                    fontSize = 11.sp
+                )
             }
         }
     }
 }
 
+/**
+ * 逐字点亮的当前行：支持渐变色流光。
+ */
 @Composable
 private fun KaraokeLine(
-    line: LyricLine, positionMs: Long, lineEndMs: Long, lyricUseCustomColor: Boolean, themePrimary: Color, themeSecondary: Color, originalColor: Color, unsungColor: Color, 
-    textAlign: TextAlign = TextAlign.Center, fontFamily: FontFamily = FontFamily.SansSerif, fontSize: Float = 20f, modifier: Modifier = Modifier
+    line: LyricLine,
+    positionMs: Long,
+    lineEndMs: Long,
+    lyricUseCustomColor: Boolean,
+    themePrimary: Color,
+    themeSecondary: Color,
+    originalColor: Color,
+    unsungColor: Color,
+    textAlign: TextAlign = TextAlign.Center,
+    fontFamily: FontFamily = FontFamily.SansSerif,
+    fontSize: Float = 20f,
+    modifier: Modifier = Modifier
 ) {
     val text = line.text
     val baseWall = remember { mutableStateOf(0L) }
     val basePos = remember { mutableStateOf(0L) }
-    LaunchedEffect(positionMs) { basePos.value = positionMs; baseWall.value = System.currentTimeMillis() }
+    LaunchedEffect(positionMs) {
+        basePos.value = positionMs
+        baseWall.value = System.currentTimeMillis()
+    }
     var estMs by remember { mutableStateOf(positionMs) }
-    LaunchedEffect(line) { while (true) { withFrameMillis { estMs = basePos.value + (System.currentTimeMillis() - baseWall.value) } } }
-    val charProgress = if (line.hasWords && text.isNotEmpty()) { LyricParser.wordProgressCharsF(line, estMs, lineEndMs).coerceIn(0f, text.length.toFloat()) } else { val span = (lineEndMs - line.timeMs).coerceAtLeast(1L); val est = (text.length * 300L).coerceAtLeast(600L); val singMs = minOf(est, span).coerceAtLeast((span * 0.92f).toLong()); val f = ((estMs - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f); f * text.length }
+    LaunchedEffect(line) {
+        while (true) {
+            withFrameMillis {
+                estMs = basePos.value + (System.currentTimeMillis() - baseWall.value)
+            }
+        }
+    }
+    val charProgress = if (line.hasWords && text.isNotEmpty()) {
+        LyricParser.wordProgressCharsF(line, estMs, lineEndMs).coerceIn(0f, text.length.toFloat())
+    } else {
+        val span = (lineEndMs - line.timeMs).coerceAtLeast(1L)
+        val est = (text.length * 300L).coerceAtLeast(600L)
+        val singMs = minOf(est, span).coerceAtLeast((span * 0.92f).toLong())
+        val f = ((estMs - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f)
+        f * text.length
+    }
     val frac = (charProgress / text.length.coerceAtLeast(1)).coerceIn(0f, 1f)
     val soft = 0.10f
     val half = soft / 2f
     val center = frac * (1f + soft) - half
     val start = (center - half).coerceIn(0f, 1f)
     val end = (center + half).coerceIn(0f, 1f)
-    val finalBrush: Brush = if (frac >= 0.999f) { if (lyricUseCustomColor) { Brush.horizontalGradient(listOf(themePrimary, themeSecondary)) } else { SolidColor(originalColor) } } else if (end <= start) { if (frac >= 0.5f) { if (lyricUseCustomColor) SolidColor(themePrimary) else SolidColor(originalColor) } else { SolidColor(unsungColor) } } else {
+
+    val sungCol = if (lyricUseCustomColor) themePrimary else originalColor
+    val finalBrush: Brush = if (frac >= 0.999f) {
+        if (lyricUseCustomColor) {
+            Brush.horizontalGradient(listOf(themePrimary, themeSecondary))
+        } else {
+            SolidColor(originalColor)
+        }
+    } else if (end <= start) {
+        if (frac >= 0.5f) {
+            if (lyricUseCustomColor) SolidColor(themePrimary) else SolidColor(originalColor)
+        } else {
+            SolidColor(unsungColor)
+        }
+    } else {
         val stops = buildList {
-            if (lyricUseCustomColor) { add(0f to themePrimary); if (start > 0f) { val startColor = lerp(themePrimary, themeSecondary, start); add(start to startColor) }; val endColor = lerp(themePrimary, themeSecondary, end); add(end to unsungColor) }
-            else { add(0f to originalColor); if (start > 0f) add(start to originalColor); add(end to unsungColor) }
+            if (lyricUseCustomColor) {
+                add(0f to themePrimary)
+                if (start > 0f) {
+                    val startColor = lerp(themePrimary, themeSecondary, start)
+                    add(start to startColor)
+                }
+                val endColor = lerp(themePrimary, themeSecondary, end)
+                add(end to unsungColor)
+            } else {
+                add(0f to originalColor)
+                if (start > 0f) add(start to originalColor)
+                add(end to unsungColor)
+            }
             if (end < 1f) add(1f to unsungColor)
         }.toTypedArray()
         Brush.horizontalGradient(colorStops = stops)
     }
-    Text(text, textAlign = textAlign, modifier = modifier, style = androidx.compose.ui.text.TextStyle(brush = finalBrush, fontFamily = fontFamily, fontSize = fontSize.sp, fontWeight = FontWeight.Bold, textAlign = textAlign))
+
+    Text(
+        text,
+        textAlign = textAlign,
+        modifier = modifier,
+        style = androidx.compose.ui.text.TextStyle(
+            brush = finalBrush,
+            fontFamily = fontFamily,
+            fontSize = fontSize.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = textAlign
+        )
+    )
 }
 
-// ===== 修复缺失的组件 =====
+// ==================== 顶栏按钮组件 ====================
 
 @Composable
 internal fun SettingsButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
-    Box(Modifier.size(34.dp).then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip)).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(18.dp)) { val c = colors.primary; drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.3f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.3f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.7f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.7f)); drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.5f, size.height * 0.5f)) }
+    Box(
+        Modifier
+            .size(34.dp)
+            .then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip))
+            .irisPressable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(18.dp)) {
+            val c = colors.primary
+            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.3f))
+            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.3f))
+            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.7f))
+            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.7f))
+            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.5f, size.height * 0.5f))
+        }
     }
 }
 
 @Composable
 internal fun PlaylistButton(onClick: () -> Unit, colors: IrisColors, active: Boolean = false) {
-    Box(Modifier.size(34.dp).irisSurface(GlassLevel.CHIP, colors, IrisShape.chip).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(17.dp)) { val c = if (active) colors.primary else colors.subText; val lw = size.minDimension * 0.14f; drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.2f)); drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.5f)); drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.8f)); (0..2).forEach { i -> val y = size.height * (0.2f + i * 0.3f); drawLine(color = c, start = Offset(size.width * 0.34f, y), end = Offset(size.width * 0.94f, y), strokeWidth = lw, cap = androidx.compose.ui.graphics.StrokeCap.Round) } }
+    Box(
+        Modifier
+            .size(34.dp)
+            .irisSurface(GlassLevel.CHIP, colors, IrisShape.chip)
+            .irisPressable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(17.dp)) {
+            val c = if (active) colors.primary else colors.subText
+            val lw = size.minDimension * 0.14f
+            drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.2f))
+            drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.5f))
+            drawCircle(c, radius = lw * 0.6f, center = Offset(size.width * 0.14f, size.height * 0.8f))
+            (0..2).forEach { i ->
+                val y = size.height * (0.2f + i * 0.3f)
+                drawLine(
+                    color = c,
+                    start = Offset(size.width * 0.34f, y),
+                    end = Offset(size.width * 0.94f, y),
+                    strokeWidth = lw,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+            }
+        }
     }
 }
 
 @Composable
 internal fun ReportButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
-    Box(Modifier.size(34.dp).then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip)).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(17.dp)) { val c = colors.primary; val w = size.width * 0.17f; val heights = floatArrayOf(0.45f, 1f, 0.7f); heights.forEachIndexed { i, h -> val x = size.width * (0.2f + i * 0.3f); val barH = size.height * 0.78f * h; drawLine(color = c, start = Offset(x, size.height * 0.88f), end = Offset(x, size.height * 0.88f - barH), strokeWidth = w, cap = androidx.compose.ui.graphics.StrokeCap.Round) } }
+    Box(
+        Modifier
+            .size(34.dp)
+            .then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip))
+            .irisPressable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(17.dp)) {
+            val c = colors.primary
+            val w = size.width * 0.17f
+            val heights = floatArrayOf(0.45f, 1f, 0.7f)
+            heights.forEachIndexed { i, h ->
+                val x = size.width * (0.2f + i * 0.3f)
+                val barH = size.height * 0.78f * h
+                drawLine(
+                    color = c,
+                    start = Offset(x, size.height * 0.88f),
+                    end = Offset(x, size.height * 0.88f - barH),
+                    strokeWidth = w,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+            }
+        }
     }
 }
 
+/**
+ * 切换排布：纵向 → 横向 → 堆叠 → 纵向循环。
+ * 画的是"下一种排布"的示意。卡片模式顶栏的同一枚按钮在 SongDeck.kt，两者长得一样。
+ */
 @Composable
-internal fun LayoutButton(onClick: () -> Unit, colors: IrisColors) {
-    Box(Modifier.size(34.dp).irisSurface(GlassLevel.CHIP, colors, IrisShape.chip).irisPressable(onClick = onClick), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(18.dp)) {
+internal fun LayoutButton(onClick: () -> Unit, colors: IrisColors, plain: Boolean = false) {
+    Box(
+        Modifier
+            .size(34.dp)
+            .then(if (plain) Modifier else Modifier.irisSurface(GlassLevel.CHIP, colors, IrisShape.chip))
+            .irisPressable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(17.dp)) {
             val c = colors.primary
-            val w = size.width
-            val h = size.height
-            drawRoundRect(c, topLeft = Offset(w * 0.1f, h * 0.1f), size = Size(w * 0.8f, h * 0.2f), cornerRadius = CornerRadius(2f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
-            drawRoundRect(c, topLeft = Offset(w * 0.1f, h * 0.4f), size = Size(w * 0.8f, h * 0.2f), cornerRadius = CornerRadius(2f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
-            drawRoundRect(c, topLeft = Offset(w * 0.1f, h * 0.7f), size = Size(w * 0.8f, h * 0.2f), cornerRadius = CornerRadius(2f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f))
+            val gap = 1.5.dp.toPx()
+            val cw = (size.width - gap * 2f) / 3f
+            val ch = size.height * 0.68f
+            for (i in 0..2) {
+                val hh = if (i == 1) ch else ch * 0.62f
+                drawRoundRect(
+                    color = if (i == 1) c else c.copy(alpha = 0.45f),
+                    topLeft = Offset(i * (cw + gap), (size.height - hh) / 2f),
+                    size = Size(cw, hh),
+                    cornerRadius = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx())
+                )
+            }
         }
+    }
+}
+
+// ==================== 歌曲行 / 文件夹行 ====================
+
+/**
+ * 网络封面行内小图：3 秒超时 + 兜底。与 PlayerCard 的 NetworkCoverArt 同策略，
+ * 但尺寸更小、去掉 Crossfade（行内不需要 280ms 淡入）。
+ */
+@Composable
+private fun NetworkRowArtwork(
+    uri: android.net.Uri,
+    fallbackUri: android.net.Uri?,
+    modifier: Modifier
+) {
+    val context = LocalContext.current
+    var loadFailed by remember(uri) { mutableStateOf(false) }
+    if (loadFailed && fallbackUri != null) {
+        AsyncImage(
+            model = fallbackUri,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.clip(IrisShape.item)
+        )
+    } else {
+        AsyncImage(
+            model = ImageRequest.Builder(context).data(uri).httpRequestTimeoutMillis(3000).build(),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            onState = { state -> if (state is AsyncImagePainter.State.Error) loadFailed = true },
+            modifier = modifier.clip(IrisShape.item)
+        )
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun SongRow(song: Song, active: Boolean, colors: IrisColors, rowSize: Int, showCover: Boolean = false, showArtist: Boolean = true, showPlaylist: Boolean = true, showLikedBadge: Boolean = false, liked: Boolean = false, playlistNames: List<String> = emptyList(), onClick: () -> Unit, onLongPress: () -> Unit) {
+private fun SongRow(
+    song: Song,
+    active: Boolean,
+    colors: IrisColors,
+    rowSize: Int,
+    showCover: Boolean = false,
+    showArtist: Boolean = true,
+    showPlaylist: Boolean = true,
+    showLikedBadge: Boolean = false,
+    liked: Boolean = false,
+    playlistNames: List<String> = emptyList(),
+    /** 网络封面加载失败兜底图（来自设置页「设置默认封面图」） */
+    defaultCoverUri: android.net.Uri? = null,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit
+) {
     val barH by animateDpAsState(if (active) 22.dp else 0.dp, IrisMotion.moveDp(), label = "cursorBar")
-    val activeT by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = IrisMotion.move(), label = "rowActive")
+    val activeT by animateFloatAsState(
+        targetValue = if (active) 1f else 0f,
+        animationSpec = IrisMotion.move(),
+        label = "rowActive"
+    )
     val activeBg = lerp(colors.row, colors.secondary.copy(alpha = 0.12f), activeT)
     val vPad = if (rowSize == 0) 5.dp else if (rowSize == 1) 10.dp else 15.dp
     val titleSize = if (rowSize == 0) 12.sp else if (rowSize == 1) 13.sp else 14.sp
     val subSize = if (rowSize == 0) 10.sp else if (rowSize == 1) 11.sp else 12.sp
     val coverSize = if (rowSize == 0) 34.dp else if (rowSize == 1) 44.dp else 50.dp
-    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = activeBg, accent = if (activeT > 0.5f) colors.secondary else null).combinedClickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = { Haptics.tap(); onClick() }, onLongClick = { Haptics.click(); onLongPress() }).padding(start = 14.dp, end = 14.dp, top = vPad, bottom = vPad), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(4.dp).height(barH).clip(RoundedCornerShape(2.dp)).background(colors.primary))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .irisSurface(
+                level = GlassLevel.ROW,
+                colors = colors,
+                shape = IrisShape.item,
+                solid = activeBg,
+                accent = if (activeT > 0.5f) colors.secondary else null
+            )
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { Haptics.tap(); onClick() },
+                onLongClick = { Haptics.click(); onLongPress() }
+            )
+            .padding(start = 14.dp, end = 14.dp, top = vPad, bottom = vPad),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .width(4.dp)
+                .height(barH)
+                .clip(RoundedCornerShape(2.dp))
+                .background(colors.primary)
+        )
         Spacer(Modifier.width(10.dp))
-        if (showCover) { 
+        if (showCover) {
             if (song.albumArtUri != null) {
-                AsyncImage(model = song.albumArtUri, contentDescription = null, modifier = Modifier.size(coverSize).clip(IrisShape.item), contentScale = ContentScale.Crop)
+                NetworkRowArtwork(
+                    uri = song.albumArtUri,
+                    fallbackUri = defaultCoverUri,
+                    modifier = Modifier.size(coverSize)
+                )
             } else {
-                SongArtwork(filePath = song.filePath, seedId = song.id, artworkSize = coverSize, isDark = colors.isDark)
+                SongArtwork(
+                    filePath = song.filePath,
+                    seedId = song.id,
+                    artworkSize = coverSize,
+                    isDark = colors.isDark
+                )
             }
-            Spacer(Modifier.width(12.dp)) 
+            Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(song.title, color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), activeT), fontSize = titleSize, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (showArtist) { Text(song.artist, color = colors.subText, fontSize = subSize, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Text(
+                song.title,
+                color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), activeT),
+                fontSize = titleSize, fontWeight = FontWeight.Bold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+            if (showArtist) {
+                Text(
+                    song.artist, color = colors.subText, fontSize = subSize,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+            }
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(formatDuration(song.durationMs), color = colors.subText, fontSize = subSize, fontWeight = FontWeight.Medium)
-            if (showPlaylist && playlistNames.isNotEmpty()) { Spacer(Modifier.height(2.dp)); Text(playlistNames.joinToString(" / "), color = colors.primary.readableOn(colors.row, 3.0f), fontSize = if (rowSize == 0) 9.sp else 10.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            val badgeT by animateFloatAsState(targetValue = if (liked) 1f else 0f, animationSpec = if (IrisMotion.jelly) IrisMotion.pressScale() else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium), label = "likedBadge")
-            if (showLikedBadge && badgeT > 0.01f) { Spacer(Modifier.height(2.dp)); Text("♥", color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.graphicsLayer { alpha = badgeT; scaleX = badgeT; scaleY = badgeT }) }
+            Text(
+                formatDuration(song.durationMs), color = colors.subText,
+                fontSize = subSize, fontWeight = FontWeight.Medium
+            )
+            if (showPlaylist && playlistNames.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    playlistNames.joinToString(" / "),
+                    color = colors.primary.readableOn(colors.row, 3.0f),
+                    fontSize = if (rowSize == 0) 9.sp else 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            val badgeT by animateFloatAsState(
+                targetValue = if (liked) 1f else 0f,
+                animationSpec = if (IrisMotion.jelly) IrisMotion.pressScale()
+                    else spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                label = "likedBadge"
+            )
+            if (showLikedBadge && badgeT > 0.01f) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "♥", color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Black,
+                    modifier = Modifier.graphicsLayer {
+                        alpha = badgeT
+                        scaleX = badgeT; scaleY = badgeT
+                    }
+                )
+            }
         }
     }
 }
 
 @Composable
 internal fun FolderRow(name: String, count: String, active: Boolean, colors: IrisColors, onClick: () -> Unit) {
-    val t by animateFloatAsState(targetValue = if (active) 1f else 0f, animationSpec = tween(240), label = "folderActive")
-    Row(Modifier.fillMaxWidth().irisSurface(level = GlassLevel.ROW, colors = colors, shape = IrisShape.item, solid = lerp(colors.row, colors.primary.copy(alpha = 0.12f), t), accent = if (t > 0.5f) colors.primary else null).clickable { Haptics.tap(); onClick() }.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(18.dp).clip(IrisShape.chip).background(lerp(colors.card, colors.primary, t)))
+    val t by animateFloatAsState(
+        targetValue = if (active) 1f else 0f,
+        animationSpec = tween(240),
+        label = "folderActive"
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .irisSurface(
+                level = GlassLevel.ROW,
+                colors = colors,
+                shape = IrisShape.item,
+                solid = lerp(colors.row, colors.primary.copy(alpha = 0.12f), t),
+                accent = if (t > 0.5f) colors.primary else null
+            )
+            .clickable { Haptics.tap(); onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(18.dp).clip(IrisShape.chip)
+                .background(lerp(colors.card, colors.primary, t))
+        )
         Spacer(Modifier.width(12.dp))
-        Text(name, Modifier.weight(1f), color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), t), fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            name, Modifier.weight(1f),
+            color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), t),
+            fontSize = 14.sp, fontWeight = FontWeight.Bold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
         Text(count, color = colors.subText, fontSize = 11.sp)
     }
 }
