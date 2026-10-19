@@ -912,8 +912,8 @@ private fun InlineSliderRow(
     valueRange: ClosedFloatingPointRange<Float>,
     valueFormat: (Float) -> String,
     colors: IrisColors,
-    onValueChange: (Float) -> Unit,
-    onValueChangeFinished: (() -> Unit)? = null
+    onValueChangeFinished: (() -> Unit)? = null,
+    onValueChange: (Float) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     Column(
@@ -952,7 +952,6 @@ private fun InlineSliderRow(
         SettingDivider(colors)
     }
 }
-
 @Composable
 private fun RoundSlider(
     value: Float,
