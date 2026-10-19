@@ -5,7 +5,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -13,7 +12,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -34,71 +32,73 @@ fun MaterialCarouselView(
     val density = LocalDensity.current
     val lazyListState = rememberLazyListState()
 
-    // 严格 1:1 的尺寸换算
-    val baseWidthPx = with(density) { 180.dp.toPx() }
-    val spacingPx = with(density) { 10.dp.toPx() }
-    // 调整这个值可以控制后方卡片保留的宽度，原版是 130f，这里调成 85f 左右让后面多露出两张
+    val baseWidth = 180.dp
+    val spacing = 10.dp
+    // 控制后方卡片露出的宽度，调小这个值，后方露出的卡片越多
     val spaceWidthPx = with(density) { 85.dp.toPx() }
     val divisor = 190f
 
-    // 计算全局的滚动偏移量
-    val totalOffset = (lazyListState.firstVisibleItemIndex * (baseWidthPx + spacingPx) - lazyListState.firstVisibleItemScrollOffset).toFloat()
-
     LazyRow(
         state = lazyListState,
-        // 使用自带的吸附行为，完美实现“滑动一次只切一张”且有物理阻尼感
+        // 原生吸附，完美解决“一滑飞七八个”，滑一次只切一张，且松手有平滑物理阻尼
         flingBehavior = rememberSnapFlingBehavior(lazyListState),
         modifier = Modifier
             .fillMaxWidth()
-            .height(200.dp)
-            .padding(vertical = 8.dp),
+            .height(200.dp),
         contentPadding = PaddingValues(horizontal = 15.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(spacing)
     ) {
         items(recommendations.size) { index ->
             val song = recommendations[index]
             
-            // 计算当前卡片相对于屏幕最左侧的物理位置
-            val minX = index * (baseWidthPx + spacingPx) - totalOffset
+            // 从 LazyRow 的底层状态中直接获取该卡片的物理位置（绝对精准）
+            val itemInfo = lazyListState.layoutInfo.visibleItemsInfo.find { it.index == index }
+            val offset = itemInfo?.offset ?: return@items
 
-            // SwiftUI 挤压算法
+            // 核心计算：根据偏移量计算压缩宽度和位移
+            val minX = offset.toFloat()
             val reducingWidth = (minX / divisor) * spaceWidthPx
             val cappedWidth = minOf(reducingWidth, spaceWidthPx)
             
-            val frameWidth = baseWidthPx - (if (minX > 0) cappedWidth else -cappedWidth)
-            val safeWidth = maxOf(frameWidth, 1f)
+            // 当前卡片的实际宽度
+            val currentWidth = with(density) { 
+                (baseWidth.toPx() - (if (minX > 0) cappedWidth else -cappedWidth)).toDp() 
+            }
             
+            // 自身视差偏移
             val baseOffsetX = if (minX > 0) 0f else -cappedWidth
             
-            // 计算前驱影响，填补空隙
+            // 计算前一张卡片的挤压影响，让后面的卡片补位
             var previousOffset = 0f
             if (index > 0) {
-                val prevMinX = (index - 1) * (baseWidthPx + spacingPx) - totalOffset
-                val prevReducingWidth = (prevMinX / divisor) * spaceWidthPx
-                previousOffset = if (prevMinX < 0f) 0f else prevReducingWidth
+                val prevInfo = lazyListState.layoutInfo.visibleItemsInfo.find { it.index == index - 1 }
+                if (prevInfo != null) {
+                    val prevMinX = prevInfo.offset.toFloat()
+                    val prevReducingWidth = (prevMinX / divisor) * spaceWidthPx
+                    previousOffset = if (prevMinX < 0f) 0f else prevReducingWidth
+                }
             }
 
-            // 最终绘制位置
+            // 最终绘制偏移量
             val finalOffsetX = baseOffsetX - previousOffset
 
-            // 外层使用固定宽度占位，防止 LazyRow 在计算时发生抖动，并通过 zIndex 保证层级
+            // 外层固定宽度占位，保证 LazyRow 滚动长度恒定，绝不白屏
             Box(
                 modifier = Modifier
-                    .width(180.dp)
+                    .width(baseWidth)
                     .height(200.dp)
                     .zIndex((recommendations.size - index).toFloat()),
-                contentAlignment = Alignment.CenterStart
+                contentAlignment = Alignment.TopStart
             ) {
-                // 内层执行真实的宽度缩放与偏移，同时裁剪圆角
+                // 内层动态改变宽度和位置
                 Box(
                     modifier = Modifier
-                        .width(with(density) { safeWidth.toDp() })
+                        .width(currentWidth)
                         .height(200.dp)
-                        // 【关键修复】：强制四舍五入取整像素，彻底解决边缘亚像素渲染产生的“闪线”Bug
                         .graphicsLayer {
+                            // 强制取整像素，解决图片边缘闪烁的 Bug
                             translationX = finalOffsetX.roundToInt().toFloat()
                         }
-                        .clipToBounds()
                         .clip(RoundedCornerShape(25.dp))
                         .background(colors.surface)
                         .clickable { onSelect(song) }
@@ -107,8 +107,8 @@ fun MaterialCarouselView(
                 }
             }
         }
-        
-        // 尾部留白，防止最后一张卡片被边缘卡住
+
+        // 尾部留白，让最后一张卡片也能滑到最前方
         item {
             Spacer(Modifier.width(50.dp))
         }
@@ -118,18 +118,18 @@ fun MaterialCarouselView(
 @Composable
 private fun CarouselCardInnerContent(song: Song, colors: IrisColors) {
     Column(Modifier.fillMaxSize()) {
-        // 图片部分
+        // 图片
         Box(Modifier.fillMaxWidth().weight(1f)) {
             SongArtwork(
                 filePath = song.filePath,
                 seedId = song.id,
-                artworkSize = 180.dp,
+                artworkSize = 200.dp,
                 isDark = colors.isDark,
                 modifier = Modifier.fillMaxSize()
             )
         }
         
-        // 文字部分
+        // 文字
         Column(
             Modifier
                 .fillMaxWidth()
