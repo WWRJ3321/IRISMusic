@@ -450,16 +450,22 @@ private fun LibraryPage(
             state.queue
         }
 
-        if (state.isOnlineMode && displayList.isEmpty() && state.searchQuery.isBlank()) {
-            // 在线模式下的空页面
+        if (state.isOnlineMode && displayList.isEmpty()) {
+            // 在线模式下没数据时的页面（加载中、报错、或提示）
             Box(Modifier.fillMaxSize().padding(top = 120.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("搜索全网音乐", color = colors.subText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    Text("在上方搜索框中输入歌名或歌手", color = colors.subText.copy(alpha = 0.7f), fontSize = 12.sp)
                     if (state.onlineSearchLoading) {
+                        CircularProgressIndicator(color = colors.primary, modifier = Modifier.size(32.dp))
                         Spacer(Modifier.height(16.dp))
-                        CircularProgressIndicator(color = colors.primary, modifier = Modifier.size(24.dp))
+                        Text("正在全网搜索…", color = colors.subText, fontSize = 14.sp)
+                    } else if (state.onlineErrorMsg != null) {
+                        Text("请求失败", color = Color.Red, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        Text(state.onlineErrorMsg ?: "", color = colors.subText, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
+                    } else {
+                        Text("搜索全网音乐", color = colors.subText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        Text("在上方搜索框中输入歌名或歌手", color = colors.subText.copy(alpha = 0.7f), fontSize = 12.sp)
                     }
                 }
             }
@@ -499,7 +505,6 @@ private fun LibraryPage(
                         playlistNames = Playlists.playlistsOfSong(song.id),
                         onClick = { 
                             if (state.isOnlineMode && state.searchQuery.isNotBlank()) {
-                                // 在线搜索结果点击播放
                                 onPlaySong(song)
                             } else {
                                 onSelect(index) 
