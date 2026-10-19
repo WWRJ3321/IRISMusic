@@ -193,15 +193,15 @@ internal fun SettingsPanel(
                             ModeSwatch("宽松", state.rowSize == 2, colors, Modifier.weight(1f)) { viewModel.setRowSize(2) }
                         }
                         Spacer(Modifier.height(14.dp))
-                        SettingToggleRow("行显示封面", state.showRowCover, colors) { viewModel.setShowRowCover(!state.showRowCover) }
+                        SettingToggleRow("行显示封面", checked = state.showRowCover, subtitle = "在歌曲列表中显示专辑封面", colors = colors) { viewModel.setShowRowCover(!state.showRowCover) }
                         Spacer(Modifier.height(10.dp))
-                        SettingToggleRow("行显示歌手", state.showRowArtist, colors) { viewModel.setShowRowArtist(!state.showRowArtist) }
+                        SettingToggleRow("行显示歌手", checked = state.showRowArtist, subtitle = "在歌曲列表中显示歌手名称", colors = colors) { viewModel.setShowRowArtist(!state.showRowArtist) }
                         Spacer(Modifier.height(10.dp))
-                        SettingToggleRow("行显示所属歌单", state.showRowPlaylist, colors) { viewModel.setShowRowPlaylist(!state.showRowPlaylist) }
+                        SettingToggleRow("行显示所属歌单", checked = state.showRowPlaylist, subtitle = "在歌曲列表中显示歌曲所属的歌单", colors = colors) { viewModel.setShowRowPlaylist(!state.showRowPlaylist) }
                         Spacer(Modifier.height(10.dp))
-                        SettingToggleRow("搜索框常驻", state.searchPersistent, colors) { viewModel.setSearchPersistent(!state.searchPersistent) }
+                        SettingToggleRow("搜索框常驻", checked = state.searchPersistent, subtitle = "始终在顶部显示搜索框", colors = colors) { viewModel.setSearchPersistent(!state.searchPersistent) }
                         Spacer(Modifier.height(10.dp))
-                        SettingToggleRow("行显示点赞角标", state.showLikedBadge, colors) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
+                        SettingToggleRow("行显示点赞角标", checked = state.showLikedBadge, subtitle = "收藏的歌曲旁显示小红心", colors = colors) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
                     }
                 }
                 Spacer(Modifier.height(18.dp))
@@ -209,22 +209,22 @@ internal fun SettingsPanel(
 
             // ==================== 播放 ====================
             CollapsibleSection("播放", colors, isExpanded = expandedSection == "播放", onToggle = { expandedSection = if (expandedSection == "播放") null else "播放" }) {
-                SettingToggleRow("淡入淡出", state.fadeEnabled, colors) { viewModel.setFadeEnabled(!state.fadeEnabled) }
+                SettingToggleRow("淡入淡出", checked = state.fadeEnabled, subtitle = "播放和暂停时音量平缓过渡", colors = colors) { viewModel.setFadeEnabled(!state.fadeEnabled) }
                 AnimatedVisibility(visible = state.fadeEnabled) {
                     Column(Modifier.padding(top = 8.dp)) {
                         CompactSlider(value = state.fadeMs.toFloat(), onValueChange = { viewModel.setFadeMs(it.toLong()) }, valueRange = 500f..5000f, activeColor = colors.primary, inactiveColor = colors.surface)
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                SettingToggleRow("无声略过", state.silenceSkip, colors) { viewModel.setSilenceSkip(!state.silenceSkip) }
-                SettingToggleRow("上栏静止时隐藏", state.topBarAutoHide, colors) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
+                SettingToggleRow("无声略过", checked = state.silenceSkip, subtitle = "自动跳过开头或结尾的无声片段", colors = colors) { viewModel.setSilenceSkip(!state.silenceSkip) }
+                SettingToggleRow("上栏静止时隐藏", checked = state.topBarAutoHide, subtitle = "无操作3秒后自动隐藏顶部栏，滑动时出现", colors = colors) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
             }
 
             // ==================== 歌词 ====================
             CollapsibleSection("歌词", colors, isExpanded = expandedSection == "歌词", onToggle = { expandedSection = if (expandedSection == "歌词") null else "歌词" }) {
-                SettingToggleRow("封面歌词", state.coverLyric, colors) { viewModel.setCoverLyric(!state.coverLyric) }
-                SettingToggleRow("逐字流光", state.karaokeLyric, colors) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
-                SettingToggleRow("歌词颜色", state.lyricUseCustomColor, colors) { viewModel.setLyricUseCustomColor(!state.lyricUseCustomColor) }
+                SettingToggleRow("封面歌词", checked = state.coverLyric, subtitle = "在播放页的专辑封面上显示歌词", colors = colors) { viewModel.setCoverLyric(!state.coverLyric) }
+                SettingToggleRow("逐字流光", checked = state.karaokeLyric, subtitle = "歌词随节奏逐字点亮", colors = colors) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
+                SettingToggleRow("歌词颜色", checked = state.lyricUseCustomColor, subtitle = "开启后可自定义歌词的主题颜色", colors = colors) { viewModel.setLyricUseCustomColor(!state.lyricUseCustomColor) }
                 AnimatedVisibility(visible = state.lyricUseCustomColor) {
                     Column(Modifier.padding(top = 8.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -258,10 +258,10 @@ internal fun SettingsPanel(
 
             // ==================== 动效 ====================
             CollapsibleSection("动效与反馈", colors, isExpanded = expandedSection == "动效与反馈", onToggle = { expandedSection = if (expandedSection == "动效与反馈") null else "动效与反馈" }) {
-                SettingToggleRow("触感反馈", state.hapticsEnabled, colors) { viewModel.setHapticsEnabled(!state.hapticsEnabled) }
-                SettingToggleRow("物理动效", state.tiltSpectrum || state.coverShake, colors) { viewModel.setPhysicsFx(!(state.tiltSpectrum || state.coverShake)) }
-                SettingToggleRow("灵动动效", state.jellyAnim, colors) { viewModel.setJellyAnim(!state.jellyAnim) }
-                SettingToggleRow("低音马达震动", state.bassHaptics, colors) { viewModel.setBassHaptics(!state.bassHaptics) }
+                SettingToggleRow("触感反馈", checked = state.hapticsEnabled, subtitle = "点击和操作时提供轻微震动反馈", colors = colors) { viewModel.setHapticsEnabled(!state.hapticsEnabled) }
+                SettingToggleRow("物理动效", checked = state.tiltSpectrum || state.coverShake, subtitle = "开启专辑封面倾斜与频谱晃动", colors = colors) { viewModel.setPhysicsFx(!(state.tiltSpectrum || state.coverShake)) }
+                SettingToggleRow("灵动动效", checked = state.jellyAnim, subtitle = "界面切换和点击时带有果冻弹跳效果", colors = colors) { viewModel.setJellyAnim(!state.jellyAnim) }
+                SettingToggleRow("低音马达震动", checked = state.bassHaptics, subtitle = "随音乐低音节奏触发马达震动", colors = colors) { viewModel.setBassHaptics(!state.bassHaptics) }
                 AnimatedVisibility(visible = state.bassHaptics) {
                     Column(Modifier.padding(top = 8.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -279,7 +279,7 @@ internal fun SettingsPanel(
             CollapsibleSection("推荐", colors, isExpanded = expandedSection == "推荐", onToggle = { expandedSection = if (expandedSection == "推荐") null else "推荐" }) {
                 CompactSlider(value = state.exploration, onValueChange = { viewModel.setExploration(it) }, valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
                 Spacer(Modifier.height(8.dp))
-                SettingToggleRow("歌单页显示推荐区", state.showRecommendations, colors) { viewModel.setShowRecommendations(!state.showRecommendations) }
+                SettingToggleRow("歌单页显示推荐区", checked = state.showRecommendations, subtitle = "在歌曲列表顶部显示系统推荐的歌曲", colors = colors) { viewModel.setShowRecommendations(!state.showRecommendations) }
             }
 
             // ==================== 数据 ====================
@@ -299,7 +299,7 @@ internal fun SettingsPanel(
                     Text(scanRootStatus, color = colors.subText, fontSize = 11.sp)
                 }
                 Spacer(Modifier.height(8.dp))
-                SettingToggleRow("上栏显示排序", state.showSortBar, colors) { viewModel.setShowSortBar(!state.showSortBar) }
+                SettingToggleRow("上栏显示排序", checked = state.showSortBar, subtitle = "在顶部栏显示歌曲排序与方向按钮", colors = colors) { viewModel.setShowSortBar(!state.showSortBar) }
                 
                 Spacer(Modifier.height(12.dp))
                 LazyColumn(Modifier.heightIn(max = 200.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -311,7 +311,7 @@ internal fun SettingsPanel(
 
             // ==================== 动画 ====================
             CollapsibleSection("动画", colors, isExpanded = expandedSection == "动画", onToggle = { expandedSection = if (expandedSection == "动画") null else "动画" }) {
-                SettingToggleRow("启动动画", state.splashEnabled, colors) { viewModel.setSplashEnabled(!state.splashEnabled) }
+                SettingToggleRow("启动动画", checked = state.splashEnabled, subtitle = "打开应用时播放 Hello 手写文字开场动画", colors = colors) { viewModel.setSplashEnabled(!state.splashEnabled) }
                 AnimatedVisibility(visible = state.splashEnabled) {
                     Column(Modifier.padding(top = 8.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -323,7 +323,7 @@ internal fun SettingsPanel(
                 }
                 Spacer(Modifier.height(10.dp))
                 // === 切换设置样式开关 ===
-                SettingToggleRow("切换设置样式", state.useNewSettingsStyle, colors) { 
+                SettingToggleRow("切换设置样式", checked = state.useNewSettingsStyle, subtitle = "开启极简高级的卡片式设置界面", colors = colors) { 
                     viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) 
                 }
             }
@@ -460,7 +460,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
     fun writeFloat(key: String, v: Float) = prefs.edit().putFloat(key, v).apply()
     fun writeInt(key: String, v: Int) = prefs.edit().putInt(key, v).apply()
 
-    SettingToggleRow("桌面悬浮歌词", enabled, colors) {
+    SettingToggleRow("桌面悬浮歌词", checked = enabled, subtitle = "在手机桌面上显示歌词悬浮窗", colors = colors) {
         val next = !enabled
         enabled = next
         writeBool(FloatingLyric.KEY_ENABLED, next)
@@ -477,8 +477,8 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(8.dp))
-            SettingToggleRow("逐字流光", karaoke, colors) { karaoke = !karaoke; writeBool(FloatingLyric.KEY_KARAOKE, karaoke) }
-            SettingToggleRow("固定位置", fixed, colors) { fixed = !fixed; writeBool(FloatingLyric.KEY_FIXED, fixed) }
+            SettingToggleRow("逐字流光", checked = karaoke, subtitle = "歌词随节奏逐字点亮", colors = colors) { karaoke = !karaoke; writeBool(FloatingLyric.KEY_KARAOKE, karaoke) }
+            SettingToggleRow("固定位置", checked = fixed, subtitle = "将悬浮窗锁定在屏幕固定位置", colors = colors) { fixed = !fixed; writeBool(FloatingLyric.KEY_FIXED, fixed) }
 
             AnimatedVisibility(visible = fixed) {
                 Column(Modifier.padding(top = 6.dp)) {
@@ -490,7 +490,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             }
 
             Spacer(Modifier.height(8.dp))
-            SettingToggleRow("悬浮歌词颜色", useCustomColor, colors) { useCustomColor = !useCustomColor; writeBool(FloatingLyric.KEY_USE_CUSTOM, useCustomColor) }
+            SettingToggleRow("悬浮歌词颜色", checked = useCustomColor, subtitle = "开启后可自定义悬浮窗歌词颜色", colors = colors) { useCustomColor = !useCustomColor; writeBool(FloatingLyric.KEY_USE_CUSTOM, useCustomColor) }
 
             AnimatedVisibility(visible = useCustomColor) {
                 Column(Modifier.padding(top = 8.dp)) {
@@ -524,17 +524,22 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
 private fun SettingToggleRow(
     label: String,
     checked: Boolean,
+    subtitle: String? = null,
     colors: IrisColors,
     onToggle: () -> Unit
 ) {
-    Row(
-        Modifier.fillMaxWidth().irisSurface(GlassLevel.CARD, colors, IrisShape.item).clickable { Haptics.tap(); onToggle() }.padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Column(
+        Modifier.fillMaxWidth().irisSurface(GlassLevel.CARD, colors, IrisShape.item).clickable { Haptics.tap(); onToggle() }.padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-        Text(label, color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-        val knobAlign by animateFloatAsState(targetValue = if (checked) 1f else 0f, animationSpec = IrisMotion.knob(), label = "toggleKnob")
-        Box(Modifier.size(40.dp, 24.dp).clip(RoundedCornerShape(12.dp)).background(if (checked) colors.primary else colors.subText.copy(alpha = 0.55f)).padding(2.dp), contentAlignment = androidx.compose.ui.BiasAlignment(horizontalBias = -1f + 2f * knobAlign, verticalBias = 0f)) {
-            Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(colors.surface))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            val knobAlign by animateFloatAsState(targetValue = if (checked) 1f else 0f, animationSpec = IrisMotion.knob(), label = "toggleKnob")
+            Box(Modifier.size(40.dp, 24.dp).clip(RoundedCornerShape(12.dp)).background(if (checked) colors.primary else colors.subText.copy(alpha = 0.55f)).padding(2.dp), contentAlignment = androidx.compose.ui.BiasAlignment(horizontalBias = -1f + 2f * knobAlign, verticalBias = 0f)) {
+                Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(colors.surface))
+            }
+        }
+        if (subtitle != null) {
+            Text(subtitle, color = colors.subText, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }
