@@ -73,8 +73,9 @@ fun MaterialCarouselView(
                 Constraints(
                     minWidth = safeWidth,
                     maxWidth = safeWidth,
-                    minHeight = constraints.maxHeight,
-                    maxHeight = constraints.maxHeight
+                    // 这里为了防止父布局高度无限大导致崩溃，给一个兜底高度
+                    minHeight = if (constraints.hasBoundedHeight) constraints.maxHeight else 200.dp.roundToPx(),
+                    maxHeight = if (constraints.hasBoundedHeight) constraints.maxHeight else 200.dp.roundToPx()
                 )
             )
             placeables[i] = placeable
@@ -98,7 +99,8 @@ fun MaterialCarouselView(
         }
 
         // 计算总宽度以支持完整滚动
-        val totalWidth = maxOf(currentX.toInt(), constraints.maxWidth)
+        // 必须使用 currentX.toInt()，不能使用 constraints.maxWidth，因为外层 horizontalScroll 会给出 Infinity
+        val totalWidth = maxOf(currentX.toInt(), 1)
 
         layout(totalWidth, constraints.maxHeight) {
             // 倒序绘制，让前面的卡片盖住后面的卡片（对应 SwiftUI 默认层级）
