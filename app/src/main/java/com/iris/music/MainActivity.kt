@@ -22,7 +22,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -79,7 +78,7 @@ class MainActivity : ComponentActivity() {
                     )
 
                     Box(Modifier.fillMaxSize()) {
-                        // 主界面的入场动画参数
+                        // 主界面的入场动画参数（去掉了容易引起崩溃的 blur）
                         val mainAlpha by animateFloatAsState(
                             targetValue = if (showSplash) 0f else 1f,
                             animationSpec = tween(600, easing = FastOutSlowInEasing),
@@ -89,11 +88,6 @@ class MainActivity : ComponentActivity() {
                             targetValue = if (showSplash) 80.dp else 0.dp,
                             animationSpec = tween(600, easing = FastOutSlowInEasing),
                             label = "mainOffset"
-                        )
-                        val mainBlur by animateDpAsState(
-                            targetValue = if (showSplash) 15.dp else 0.dp,
-                            animationSpec = tween(600, easing = FastOutSlowInEasing),
-                            label = "mainBlur"
                         )
 
                         MainScreen(
@@ -113,7 +107,6 @@ class MainActivity : ComponentActivity() {
                                     alpha = mainAlpha
                                     translationY = mainOffset.toPx()
                                 }
-                                .blur(mainBlur)
                         )
 
                         if (showSplash) {
