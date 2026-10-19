@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -84,13 +85,11 @@ class MainActivity : ComponentActivity() {
                             animationSpec = tween(600, easing = FastOutSlowInEasing),
                             label = "mainAlpha"
                         )
-                        // 从下方 80dp 快速向上滑动，结束时停留在 0
                         val mainOffset by animateDpAsState(
                             targetValue = if (showSplash) 80.dp else 0.dp,
                             animationSpec = tween(600, easing = FastOutSlowInEasing),
                             label = "mainOffset"
                         )
-                        // 滑动时带有轻微的模糊淡入效果
                         val mainBlur by animateDpAsState(
                             targetValue = if (showSplash) 15.dp else 0.dp,
                             animationSpec = tween(600, easing = FastOutSlowInEasing),
@@ -118,11 +117,25 @@ class MainActivity : ComponentActivity() {
                         )
 
                         if (showSplash) {
-                            SplashScreen(
-                                style = state.splashStyle,
-                                isDark = colors.isDark,
-                                onFinished = { showSplash = false }
-                            )
+                            // 增加触摸拦截层，防止启动期间误触主界面
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(Unit) {
+                                        awaitPointerEventScope {
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                event.changes.forEach { it.consume() }
+                                            }
+                                        }
+                                    }
+                            ) {
+                                SplashScreen(
+                                    style = state.splashStyle,
+                                    isDark = colors.isDark,
+                                    onFinished = { showSplash = false }
+                                )
+                            }
                         }
                     }
                 }
