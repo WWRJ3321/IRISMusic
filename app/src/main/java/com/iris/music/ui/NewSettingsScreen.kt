@@ -354,6 +354,14 @@ internal fun NewSettingsPanel(
                     viewModel.setKaraokeLyric(!state.karaokeLyric)
                 }
                 
+                // === 新增：双语歌词开关 ===
+                SettingSwitchRow(
+                    "显示翻译歌词与罗马音",
+                    checked = state.showTranslationLyric,
+                    surfaceStyle = state.surfaceStyle,
+                    colors = colors
+                ) { viewModel.setShowTranslationLyric(!state.showTranslationLyric) }
+
                 val themeOptions = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)
                 InlineSwitchOptionRow(
                     title = "歌词颜色",
@@ -624,6 +632,7 @@ internal fun NewSettingsPanel(
                     colors = colors
                 ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
                 
+                // === 新增：切换服务器音乐 ===
                 SettingSwitchRow(
                     "切换服务器音乐",
                     subtitle = "开启后清空本地列表，搜索全网音乐",
