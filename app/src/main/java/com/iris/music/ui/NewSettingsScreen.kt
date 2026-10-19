@@ -40,7 +40,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -126,491 +125,493 @@ internal fun NewSettingsPanel(
 
     // 外层 iOS 浅灰背景
     val panelBg = if (colors.isDark) Color(0xFF000000) else Color(0xFFF2F2F7)
-    val isLiquid = state.surfaceStyle == IrisSurfaceStyle.LIQUID
     val isScrolled = scrollState.value > 60
 
     BoxWithConstraints(Modifier.fillMaxWidth().background(panelBg)) {
         val maxW = maxWidth
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f, fill = false)
-                .verticalScroll(scrollState)
-                .padding(horizontal = 16.dp)
-        ) {
-            SheetDragHandle(sheetDrag, onDismiss, colors.card)
-            Spacer(Modifier.height(14.dp))
-            
-            // 顶部占位，用来放悬浮标题
-            Box(Modifier.fillMaxWidth().height(44.dp)) {
-                // 悬浮标题
-                val targetX = if (isScrolled) 16.dp else (maxW / 2f - 32.dp)
-                val targetY = if (isScrolled) (-4).dp else 0.dp
-                val textSize = if (isScrolled) 18.sp else 24.sp
-                val textAlign = if (isScrolled) TextAlign.Start else TextAlign.Center
+        
+        Column(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 16.dp)
+            ) {
+                SheetDragHandle(sheetDrag, onDismiss, colors.card)
+                Spacer(Modifier.height(14.dp))
+                
+                // 顶部占位，用来放悬浮标题
+                Box(Modifier.fillMaxWidth().height(44.dp)) {
+                    // 悬浮标题
+                    val targetX = if (isScrolled) 16.dp else (maxW / 2f - 32.dp)
+                    val targetY = if (isScrolled) (-4).dp else 0.dp
+                    val textSize = if (isScrolled) 18.sp else 24.sp
+                    val textAlign = if (isScrolled) TextAlign.Start else TextAlign.Center
 
-                val animatedX by animateDpAsState(targetX, spring(dampingRatio = 0.8f, stiffness = 400f))
-                val animatedY by animateDpAsState(targetY, spring(dampingRatio = 0.8f, stiffness = 400f))
+                    val animatedX by animateDpAsState(targetX, spring(dampingRatio = 0.8f, stiffness = 400f))
+                    val animatedY by animateDpAsState(targetY, spring(dampingRatio = 0.8f, stiffness = 400f))
 
-                Text(
-                    "设置",
-                    color = colors.text,
-                    fontSize = textSize,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = textAlign,
-                    modifier = Modifier
-                        .offset(x = animatedX - 16.dp, y = animatedY) // 减去基础 padding
-                        .graphicsLayer {
-                            if (isScrolled) {
-                                translationX = 0f
+                    Text(
+                        "设置",
+                        color = colors.text,
+                        fontSize = textSize,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = textAlign,
+                        modifier = Modifier
+                            .offset(x = animatedX - 16.dp, y = animatedY)
+                            .graphicsLayer {
+                                if (isScrolled) {
+                                    translationX = 0f
+                                }
                             }
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+
+                // ==================== 外观 ====================
+                SettingsGroup("外观", state.surfaceStyle, colors) {
+                    InlineOptionRow(
+                        title = "明暗模式",
+                        options = listOf("深色", "浅色", "自动"),
+                        selectedIndex = IrisMode.entries.indexOf(state.mode),
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setMode(IrisMode.entries[it]) }
+
+                    SettingActionRow(
+                        title = "背景图片",
+                        trailingText = if (state.customBackgroundUri != null) "重置" else "自定义",
+                        showDivider = true,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) {
+                        if (state.customBackgroundUri != null) {
+                            viewModel.setCustomBackground(null)
+                        } else {
+                            onPickBackground()
                         }
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-
-            // ==================== 外观 ====================
-            SettingsGroup("外观", state.surfaceStyle, colors) {
-                InlineOptionRow(
-                    title = "明暗模式",
-                    options = listOf("深色", "浅色", "自动"),
-                    selectedIndex = IrisMode.entries.indexOf(state.mode),
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setMode(IrisMode.entries[it]) }
-
-                SettingActionRow(
-                    title = "背景图片",
-                    trailingText = if (state.customBackgroundUri != null) "重置" else "自定义",
-                    showDivider = true,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) {
-                    if (state.customBackgroundUri != null) {
-                        viewModel.setCustomBackground(null)
-                    } else {
-                        onPickBackground()
                     }
-                }
-
-                InlineOptionRow(
-                    title = "按钮颜色",
-                    options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
-                    selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { index ->
-                    viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
-                }
-
-                if (state.theme == IrisTheme.CUSTOM) {
-                    InlineColorRow(
-                        title = "自定义按钮颜色",
-                        primaryArgb = state.customPrimaryArgb,
-                        secondaryArgb = state.customSecondaryArgb,
-                        surfaceStyle = state.surfaceStyle,
-                        colors = colors
-                    ) { p, s -> viewModel.setCustomColors(p, s) }
-                }
-
-                val allowedStyles = listOf(IrisSurfaceStyle.SOLID, IrisSurfaceStyle.LIQUID)
-                InlineOptionRow(
-                    title = "材质分级",
-                    options = allowedStyles.map { it.label },
-                    selectedIndex = allowedStyles.indexOf(state.surfaceStyle).coerceAtLeast(0),
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setSurfaceStyle(allowedStyles[it]) }
-
-                if (state.surfaceStyle != IrisSurfaceStyle.SOLID) {
-                    val glassSpan = (GLASS_BLUR_MAX - GLASS_BLUR_MIN).takeIf { it > 0f } ?: 1f
-                    InlineSliderRow(
-                        title = "玻璃模糊",
-                        value = ((state.glassBlur - GLASS_BLUR_MIN) / glassSpan * 100f).coerceIn(0f, 100f),
-                        valueRange = 0f..100f,
-                        valueFormat = { "${it.toInt()}" },
-                        surfaceStyle = state.surfaceStyle,
-                        colors = colors
-                    ) { v -> viewModel.setGlassBlur(GLASS_BLUR_MIN + (v / 100f) * glassSpan) }
-                }
-
-                InlineSliderRow(
-                    title = "背景模糊",
-                    value = state.bgBlur,
-                    valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
-                    valueFormat = { "${it.toInt()}" },
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setBgBlur(it) }
-
-                InlineSliderRow(
-                    title = "界面圆角",
-                    value = state.cornerBase,
-                    valueRange = 0f..44f,
-                    valueFormat = { "${it.toInt()}" },
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setCornerBase(it) }
-
-                var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
-                InlineSliderRow(
-                    title = "字体大小",
-                    value = pendingFontScale,
-                    valueRange = 0.85f..1.30f,
-                    valueFormat = { "${(it * 100).toInt()}%" },
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors,
-                    onValueChange = { pendingFontScale = it },
-                    onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) }
-                )
-
-                InlineOptionRow(
-                    title = "界面字体",
-                    options = listOf("系统", "衬线"),
-                    selectedIndex = if (state.uiFont == 0) 0 else 1,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setUiFont(it) }
-
-                InlineOptionRow(
-                    title = "界面排布",
-                    options = IrisLayout.entries.map { it.label },
-                    selectedIndex = IrisLayout.entries.indexOf(state.layout),
-                    surfaceStyle = state.surfaceStyle,
-                    showDivider = false,
-                    colors = colors
-                ) { viewModel.setLayout(IrisLayout.entries[it]) }
-            }
-
-            // ==================== 列表 ====================
-            if (!state.layout.isDeck) {
-                SettingsGroup("列表", state.surfaceStyle, colors) {
-                    SettingSwitchRow("搜索框常驻", checked = state.searchPersistent, surfaceStyle = state.surfaceStyle, colors = colors) {
-                        viewModel.setSearchPersistent(!state.searchPersistent)
-                    }
-                    SettingSwitchRow("行显示封面", checked = state.showRowCover, surfaceStyle = state.surfaceStyle, colors = colors) {
-                        viewModel.setShowRowCover(!state.showRowCover)
-                    }
-                    SettingSwitchRow("行显示歌手", checked = state.showRowArtist, surfaceStyle = state.surfaceStyle, colors = colors) {
-                        viewModel.setShowRowArtist(!state.showRowArtist)
-                    }
-                    SettingSwitchRow("行显示所属歌单", checked = state.showRowPlaylist, surfaceStyle = state.surfaceStyle, colors = colors) {
-                        viewModel.setShowRowPlaylist(!state.showRowPlaylist)
-                    }
-                    SettingSwitchRow(
-                        "行显示点赞角标",
-                        checked = state.showLikedBadge,
-                        surfaceStyle = state.surfaceStyle,
-                        colors = colors
-                    ) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
 
                     InlineOptionRow(
-                        title = "卡片距离",
-                        options = listOf("紧凑", "标准", "宽松"),
-                        selectedIndex = state.rowSize,
-                        surfaceStyle = state.surfaceStyle,
-                        showDivider = false,
-                        colors = colors
-                    ) { viewModel.setRowSize(it) }
-                }
-            }
-
-            // ==================== 播放 ====================
-            SettingsGroup("播放", state.surfaceStyle, colors) {
-                SettingSwitchRow("上栏静止时隐藏", checked = state.topBarAutoHide, surfaceStyle = state.surfaceStyle, colors = colors) {
-                    viewModel.setTopBarAutoHide(!state.topBarAutoHide)
-                }
-                SettingSwitchRow("无声略过", checked = state.silenceSkip, surfaceStyle = state.surfaceStyle, colors = colors) {
-                    viewModel.setSilenceSkip(!state.silenceSkip)
-                }
-                SettingSwitchRow("淡入淡出", checked = state.fadeEnabled, surfaceStyle = state.surfaceStyle, showDivider = state.fadeEnabled, colors = colors) {
-                    viewModel.setFadeEnabled(!state.fadeEnabled)
-                }
-                if (state.fadeEnabled) {
-                    InlineSliderRow(
-                        title = "淡入淡出时长",
-                        value = state.fadeMs.toFloat(),
-                        valueRange = 500f..5000f,
-                        valueFormat = { String.format(java.util.Locale.US, "%.1f s", it / 1000f) },
-                        surfaceStyle = state.surfaceStyle,
-                        showDivider = false,
-                        colors = colors
-                    ) { viewModel.setFadeMs(it.toLong()) }
-                }
-            }
-
-            // ==================== 歌词 ====================
-            SettingsGroup("歌词", state.surfaceStyle, colors) {
-                SettingSwitchRow("封面歌词", checked = state.coverLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
-                    viewModel.setCoverLyric(!state.coverLyric)
-                }
-                SettingSwitchRow("逐字流光", checked = state.karaokeLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
-                    viewModel.setKaraokeLyric(!state.karaokeLyric)
-                }
-                SettingSwitchRow("歌词颜色", checked = state.lyricUseCustomColor, surfaceStyle = state.surfaceStyle, colors = colors) {
-                    viewModel.setLyricUseCustomColor(!state.lyricUseCustomColor)
-                }
-
-                if (state.lyricUseCustomColor) {
-                    InlineOptionRow(
-                        title = "歌词主题",
+                        title = "按钮颜色",
                         options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
-                        selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.lyricTheme),
+                        selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.theme),
                         surfaceStyle = state.surfaceStyle,
                         colors = colors
                     ) { index ->
-                        viewModel.setLyricTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
+                        viewModel.setTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
                     }
-                    if (state.lyricTheme == IrisTheme.CUSTOM) {
+
+                    if (state.theme == IrisTheme.CUSTOM) {
                         InlineColorRow(
-                            title = "自定义歌词色",
-                            primaryArgb = state.lyricCustomPrimary,
-                            secondaryArgb = state.lyricCustomSecondary,
+                            title = "自定义按钮颜色",
+                            primaryArgb = state.customPrimaryArgb,
+                            secondaryArgb = state.customSecondaryArgb,
                             surfaceStyle = state.surfaceStyle,
                             colors = colors
-                        ) { p, s -> viewModel.setLyricCustomColors(p, s) }
+                        ) { p, s -> viewModel.setCustomColors(p, s) }
                     }
-                }
 
-                InlineOptionRow(
-                    title = "歌词对齐",
-                    options = listOf("靠左", "居中", "靠右"),
-                    selectedIndex = state.lyricAlign,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setLyricAlign(it) }
-
-                InlineOptionRow(
-                    title = "歌词字体",
-                    options = listOf("系统", "衬线"),
-                    selectedIndex = if (state.lyricFont == 0) 0 else 1,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setLyricFont(it) }
-
-                InlineSliderRow(
-                    title = "歌词字号",
-                    value = state.lyricFontSize,
-                    valueRange = 14f..32f,
-                    valueFormat = { "${it.toInt()}" },
-                    surfaceStyle = state.surfaceStyle,
-                    showDivider = false,
-                    colors = colors
-                ) { viewModel.setLyricFontSize(it) }
-            }
-
-            // ==================== 悬浮歌词 ====================
-            SettingsGroup("悬浮歌词", state.surfaceStyle, colors) {
-                FloatingLyricGroup(colors, state.surfaceStyle)
-            }
-
-            // ==================== 动效与反馈 ====================
-            SettingsGroup("动效与反馈", state.surfaceStyle, colors) {
-                SettingSwitchRow("触感反馈", checked = state.hapticsEnabled, surfaceStyle = state.surfaceStyle, colors = colors) {
-                    viewModel.setHapticsEnabled(!state.hapticsEnabled)
-                }
-                SettingSwitchRow(
-                    "物理动效",
-                    checked = state.tiltSpectrum || state.coverShake,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setPhysicsFx(!(state.tiltSpectrum || state.coverShake)) }
-                SettingSwitchRow("灵动动效", checked = state.jellyAnim, surfaceStyle = state.surfaceStyle, colors = colors) {
-                    viewModel.setJellyAnim(!state.jellyAnim)
-                }
-                SettingSwitchRow(
-                    "低音马达震动",
-                    checked = state.bassHaptics,
-                    surfaceStyle = state.surfaceStyle,
-                    showDivider = state.bassHaptics,
-                    colors = colors
-                ) { viewModel.setBassHaptics(!state.bassHaptics) }
-
-                if (state.bassHaptics) {
+                    val allowedStyles = listOf(IrisSurfaceStyle.SOLID, IrisSurfaceStyle.LIQUID)
                     InlineOptionRow(
-                        title = "震动强度",
-                        options = listOf("轻点", "标准", "重击"),
-                        selectedIndex = state.bassHapticsIntensity,
+                        title = "材质分级",
+                        options = allowedStyles.map { it.label },
+                        selectedIndex = allowedStyles.indexOf(state.surfaceStyle).coerceAtLeast(0),
                         surfaceStyle = state.surfaceStyle,
                         colors = colors
-                    ) { viewModel.setBassHapticsIntensity(it) }
+                    ) { viewModel.setSurfaceStyle(allowedStyles[it]) }
+
+                    if (state.surfaceStyle != IrisSurfaceStyle.SOLID) {
+                        val glassSpan = (GLASS_BLUR_MAX - GLASS_BLUR_MIN).takeIf { it > 0f } ?: 1f
+                        InlineSliderRow(
+                            title = "玻璃模糊",
+                            value = ((state.glassBlur - GLASS_BLUR_MIN) / glassSpan * 100f).coerceIn(0f, 100f),
+                            valueRange = 0f..100f,
+                            valueFormat = { "${it.toInt()}" },
+                            surfaceStyle = state.surfaceStyle,
+                            colors = colors
+                        ) { v -> viewModel.setGlassBlur(GLASS_BLUR_MIN + (v / 100f) * glassSpan) }
+                    }
 
                     InlineSliderRow(
-                        title = "低频截止",
-                        value = state.bassHapticsLowCutoff.toFloat(),
-                        valueRange = 120f..320f,
-                        valueFormat = { "${it.toInt()} Hz" },
-                        surfaceStyle = state.surfaceStyle,
-                        showDivider = false,
-                        colors = colors
-                    ) { viewModel.setBassHapticsLowCutoff(it.toInt()) }
-                }
-            }
-
-            // ==================== 推荐 ====================
-            SettingsGroup("推荐", state.surfaceStyle, colors) {
-                InlineSliderRow(
-                    title = "探索度",
-                    value = state.exploration,
-                    valueRange = 0f..1f,
-                    valueFormat = { "${(it * 100).toInt()}%" },
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setExploration(it) }
-
-                SettingSwitchRow(
-                    "歌单页显示推荐区",
-                    checked = state.showRecommendations,
-                    surfaceStyle = state.surfaceStyle,
-                    showDivider = false,
-                    colors = colors
-                ) { viewModel.setShowRecommendations(!state.showRecommendations) }
-            }
-
-            // ==================== 数据 ====================
-            SettingsGroup("数据", state.surfaceStyle, colors) {
-                SettingActionRow(
-                    title = "扫描文件夹",
-                    trailingText = if (state.scanRoot != null) "已指定" else "全部音乐",
-                    showDivider = true,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { folderPickerLauncher.launch(null) }
-
-                if (state.scanRoot != null) {
-                    SettingActionRow(
-                        title = "恢复全部文件夹",
-                        trailingText = "重置",
+                        title = "背景模糊",
+                        value = state.bgBlur,
+                        valueRange = BG_BLUR_MIN..BG_BLUR_MAX,
+                        valueFormat = { "${it.toInt()}" },
                         surfaceStyle = state.surfaceStyle,
                         colors = colors
-                    ) { viewModel.setScanRoot(null) }
-                }
+                    ) { viewModel.setBgBlur(it) }
 
-                SettingDivider(colors)
+                    InlineSliderRow(
+                        title = "界面圆角",
+                        value = state.cornerBase,
+                        valueRange = 0f..44f,
+                        valueFormat = { "${it.toInt()}" },
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setCornerBase(it) }
 
-                LazyColumn(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 220.dp)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    item {
-                        FolderRow(
-                            "全部音乐",
-                            "${state.folders.sumOf { it.songCount }} 首",
-                            state.selectedFolders.isEmpty() && !state.onlyLiked,
-                            colors
-                        ) { viewModel.clearFolders(); viewModel.setOnlyLiked(false) }
-                    }
-                    item {
-                        FolderRow(
-                            "我的收藏",
-                            "${state.likedSongIds.size} 首",
-                            state.onlyLiked,
-                            colors
-                        ) { viewModel.setOnlyLiked(true) }
-                    }
-                    itemsIndexed(state.folders, key = { _, f -> "folder-${f.path}" }) { _, f ->
-                        FolderRow(
-                            f.name,
-                            "${f.songCount} 首",
-                            f.path in state.selectedFolders,
-                            colors
-                        ) { viewModel.toggleFolder(f.path) }
-                    }
-                }
-                SettingDivider(colors)
+                    var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
+                    InlineSliderRow(
+                        title = "字体大小",
+                        value = pendingFontScale,
+                        valueRange = 0.85f..1.30f,
+                        valueFormat = { "${(it * 100).toInt()}%" },
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors,
+                        onValueChange = { pendingFontScale = it },
+                        onValueChangeFinished = { viewModel.setFontScale(pendingFontScale) }
+                    )
 
-                SettingSwitchRow(
-                    "上栏显示排序",
-                    checked = state.showSortBar,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { viewModel.setShowSortBar(!state.showSortBar) }
-
-                SettingActionRow(
-                    title = "导出数据",
-                    trailingText = if (transferBusy) "请稍候" else null,
-                    enabled = !transferBusy,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { exportLauncher.launch(DataTransfer.SUGGESTED_FILE_NAME) }
-
-                SettingActionRow(
-                    title = "导入数据",
-                    enabled = !transferBusy,
-                    showDivider = false,
-                    surfaceStyle = state.surfaceStyle,
-                    colors = colors
-                ) { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
-            }
-
-            if (transferStatus.isNotBlank() || scanRootStatus.isNotBlank()) {
-                Column(Modifier.padding(horizontal = 28.dp)) {
-                    Spacer(Modifier.height(2.dp))
-                    if (scanRootStatus.isNotBlank()) {
-                        Text(scanRootStatus, color = colors.subText, fontSize = 12.sp)
-                    }
-                    if (transferStatus.isNotBlank()) {
-                        Text(transferStatus, color = colors.subText, fontSize = 12.sp)
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-
-            // ==================== 动画 ====================
-            SettingsGroup("动画", state.surfaceStyle, colors) {
-                SettingSwitchRow("启动动画", checked = state.splashEnabled, surfaceStyle = state.surfaceStyle, showDivider = state.splashEnabled, colors = colors) {
-                    viewModel.setSplashEnabled(!state.splashEnabled)
-                }
-                if (state.splashEnabled) {
                     InlineOptionRow(
-                        title = "动画风格",
-                        options = listOf("简约", "温柔", "细腻"),
-                        selectedIndex = state.splashStyle,
+                        title = "界面字体",
+                        options = listOf("系统", "衬线"),
+                        selectedIndex = if (state.uiFont == 0) 0 else 1,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setUiFont(it) }
+
+                    InlineOptionRow(
+                        title = "界面排布",
+                        options = IrisLayout.entries.map { it.label },
+                        selectedIndex = IrisLayout.entries.indexOf(state.layout),
                         surfaceStyle = state.surfaceStyle,
                         showDivider = false,
                         colors = colors
-                    ) { viewModel.setSplashStyle(it) }
+                    ) { viewModel.setLayout(IrisLayout.entries[it]) }
                 }
+
+                // ==================== 列表 ====================
+                if (!state.layout.isDeck) {
+                    SettingsGroup("列表", state.surfaceStyle, colors) {
+                        SettingSwitchRow("搜索框常驻", checked = state.searchPersistent, surfaceStyle = state.surfaceStyle, colors = colors) {
+                            viewModel.setSearchPersistent(!state.searchPersistent)
+                        }
+                        SettingSwitchRow("行显示封面", checked = state.showRowCover, surfaceStyle = state.surfaceStyle, colors = colors) {
+                            viewModel.setShowRowCover(!state.showRowCover)
+                        }
+                        SettingSwitchRow("行显示歌手", checked = state.showRowArtist, surfaceStyle = state.surfaceStyle, colors = colors) {
+                            viewModel.setShowRowArtist(!state.showRowArtist)
+                        }
+                        SettingSwitchRow("行显示所属歌单", checked = state.showRowPlaylist, surfaceStyle = state.surfaceStyle, colors = colors) {
+                            viewModel.setShowRowPlaylist(!state.showRowPlaylist)
+                        }
+                        SettingSwitchRow(
+                            "行显示点赞角标",
+                            checked = state.showLikedBadge,
+                            surfaceStyle = state.surfaceStyle,
+                            colors = colors
+                        ) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
+
+                        InlineOptionRow(
+                            title = "卡片距离",
+                            options = listOf("紧凑", "标准", "宽松"),
+                            selectedIndex = state.rowSize,
+                            surfaceStyle = state.surfaceStyle,
+                            showDivider = false,
+                            colors = colors
+                        ) { viewModel.setRowSize(it) }
+                    }
+                }
+
+                // ==================== 播放 ====================
+                SettingsGroup("播放", state.surfaceStyle, colors) {
+                    SettingSwitchRow("上栏静止时隐藏", checked = state.topBarAutoHide, surfaceStyle = state.surfaceStyle, colors = colors) {
+                        viewModel.setTopBarAutoHide(!state.topBarAutoHide)
+                    }
+                    SettingSwitchRow("无声略过", checked = state.silenceSkip, surfaceStyle = state.surfaceStyle, colors = colors) {
+                        viewModel.setSilenceSkip(!state.silenceSkip)
+                    }
+                    SettingSwitchRow("淡入淡出", checked = state.fadeEnabled, surfaceStyle = state.surfaceStyle, showDivider = state.fadeEnabled, colors = colors) {
+                        viewModel.setFadeEnabled(!state.fadeEnabled)
+                    }
+                    if (state.fadeEnabled) {
+                        InlineSliderRow(
+                            title = "淡入淡出时长",
+                            value = state.fadeMs.toFloat(),
+                            valueRange = 500f..5000f,
+                            valueFormat = { String.format(java.util.Locale.US, "%.1f s", it / 1000f) },
+                            surfaceStyle = state.surfaceStyle,
+                            showDivider = false,
+                            colors = colors
+                        ) { viewModel.setFadeMs(it.toLong()) }
+                    }
+                }
+
+                // ==================== 歌词 ====================
+                SettingsGroup("歌词", state.surfaceStyle, colors) {
+                    SettingSwitchRow("封面歌词", checked = state.coverLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
+                        viewModel.setCoverLyric(!state.coverLyric)
+                    }
+                    SettingSwitchRow("逐字流光", checked = state.karaokeLyric, surfaceStyle = state.surfaceStyle, colors = colors) {
+                        viewModel.setKaraokeLyric(!state.karaokeLyric)
+                    }
+                    SettingSwitchRow("歌词颜色", checked = state.lyricUseCustomColor, surfaceStyle = state.surfaceStyle, colors = colors) {
+                        viewModel.setLyricUseCustomColor(!state.lyricUseCustomColor)
+                    }
+
+                    if (state.lyricUseCustomColor) {
+                        InlineOptionRow(
+                            title = "歌词主题",
+                            options = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).map { it.label },
+                            selectedIndex = listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM).indexOf(state.lyricTheme),
+                            surfaceStyle = state.surfaceStyle,
+                            colors = colors
+                        ) { index ->
+                            viewModel.setLyricTheme(listOf(IrisTheme.MONO, IrisTheme.OCEAN, IrisTheme.GRASS, IrisTheme.CUSTOM)[index])
+                        }
+                        if (state.lyricTheme == IrisTheme.CUSTOM) {
+                            InlineColorRow(
+                                title = "自定义歌词色",
+                                primaryArgb = state.lyricCustomPrimary,
+                                secondaryArgb = state.lyricCustomSecondary,
+                                surfaceStyle = state.surfaceStyle,
+                                colors = colors
+                            ) { p, s -> viewModel.setLyricCustomColors(p, s) }
+                        }
+                    }
+
+                    InlineOptionRow(
+                        title = "歌词对齐",
+                        options = listOf("靠左", "居中", "靠右"),
+                        selectedIndex = state.lyricAlign,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setLyricAlign(it) }
+
+                    InlineOptionRow(
+                        title = "歌词字体",
+                        options = listOf("系统", "衬线"),
+                        selectedIndex = if (state.lyricFont == 0) 0 else 1,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setLyricFont(it) }
+
+                    InlineSliderRow(
+                        title = "歌词字号",
+                        value = state.lyricFontSize,
+                        valueRange = 14f..32f,
+                        valueFormat = { "${it.toInt()}" },
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = false,
+                        colors = colors
+                    ) { viewModel.setLyricFontSize(it) }
+                }
+
+                // ==================== 悬浮歌词 ====================
+                SettingsGroup("悬浮歌词", state.surfaceStyle, colors) {
+                    FloatingLyricGroup(colors, state.surfaceStyle)
+                }
+
+                // ==================== 动效与反馈 ====================
+                SettingsGroup("动效与反馈", state.surfaceStyle, colors) {
+                    SettingSwitchRow("触感反馈", checked = state.hapticsEnabled, surfaceStyle = state.surfaceStyle, colors = colors) {
+                        viewModel.setHapticsEnabled(!state.hapticsEnabled)
+                    }
+                    SettingSwitchRow(
+                        "物理动效",
+                        checked = state.tiltSpectrum || state.coverShake,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setPhysicsFx(!(state.tiltSpectrum || state.coverShake)) }
+                    SettingSwitchRow("灵动动效", checked = state.jellyAnim, surfaceStyle = state.surfaceStyle, colors = colors) {
+                        viewModel.setJellyAnim(!state.jellyAnim)
+                    }
+                    SettingSwitchRow(
+                        "低音马达震动",
+                        checked = state.bassHaptics,
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = state.bassHaptics,
+                        colors = colors
+                    ) { viewModel.setBassHaptics(!state.bassHaptics) }
+
+                    if (state.bassHaptics) {
+                        InlineOptionRow(
+                            title = "震动强度",
+                            options = listOf("轻点", "标准", "重击"),
+                            selectedIndex = state.bassHapticsIntensity,
+                            surfaceStyle = state.surfaceStyle,
+                            colors = colors
+                        ) { viewModel.setBassHapticsIntensity(it) }
+
+                        InlineSliderRow(
+                            title = "低频截止",
+                            value = state.bassHapticsLowCutoff.toFloat(),
+                            valueRange = 120f..320f,
+                            valueFormat = { "${it.toInt()} Hz" },
+                            surfaceStyle = state.surfaceStyle,
+                            showDivider = false,
+                            colors = colors
+                        ) { viewModel.setBassHapticsLowCutoff(it.toInt()) }
+                    }
+                }
+
+                // ==================== 推荐 ====================
+                SettingsGroup("推荐", state.surfaceStyle, colors) {
+                    InlineSliderRow(
+                        title = "探索度",
+                        value = state.exploration,
+                        valueRange = 0f..1f,
+                        valueFormat = { "${(it * 100).toInt()}%" },
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setExploration(it) }
+
+                    SettingSwitchRow(
+                        "歌单页显示推荐区",
+                        checked = state.showRecommendations,
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = false,
+                        colors = colors
+                    ) { viewModel.setShowRecommendations(!state.showRecommendations) }
+                }
+
+                // ==================== 数据 ====================
+                SettingsGroup("数据", state.surfaceStyle, colors) {
+                    SettingActionRow(
+                        title = "扫描文件夹",
+                        trailingText = if (state.scanRoot != null) "已指定" else "全部音乐",
+                        showDivider = true,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { folderPickerLauncher.launch(null) }
+
+                    if (state.scanRoot != null) {
+                        SettingActionRow(
+                            title = "恢复全部文件夹",
+                            trailingText = "重置",
+                            surfaceStyle = state.surfaceStyle,
+                            colors = colors
+                        ) { viewModel.setScanRoot(null) }
+                    }
+
+                    SettingDivider(colors)
+
+                    LazyColumn(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        item {
+                            FolderRow(
+                                "全部音乐",
+                                "${state.folders.sumOf { it.songCount }} 首",
+                                state.selectedFolders.isEmpty() && !state.onlyLiked,
+                                colors
+                            ) { viewModel.clearFolders(); viewModel.setOnlyLiked(false) }
+                        }
+                        item {
+                            FolderRow(
+                                "我的收藏",
+                                "${state.likedSongIds.size} 首",
+                                state.onlyLiked,
+                                colors
+                            ) { viewModel.setOnlyLiked(true) }
+                        }
+                        itemsIndexed(state.folders, key = { _, f -> "folder-${f.path}" }) { _, f ->
+                            FolderRow(
+                                f.name,
+                                "${f.songCount} 首",
+                                f.path in state.selectedFolders,
+                                colors
+                            ) { viewModel.toggleFolder(f.path) }
+                        }
+                    }
+                    SettingDivider(colors)
+
+                    SettingSwitchRow(
+                        "上栏显示排序",
+                        checked = state.showSortBar,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { viewModel.setShowSortBar(!state.showSortBar) }
+
+                    SettingActionRow(
+                        title = "导出数据",
+                        trailingText = if (transferBusy) "请稍候" else null,
+                        enabled = !transferBusy,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { exportLauncher.launch(DataTransfer.SUGGESTED_FILE_NAME) }
+
+                    SettingActionRow(
+                        title = "导入数据",
+                        enabled = !transferBusy,
+                        showDivider = false,
+                        surfaceStyle = state.surfaceStyle,
+                        colors = colors
+                    ) { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) }
+                }
+
+                if (transferStatus.isNotBlank() || scanRootStatus.isNotBlank()) {
+                    Column(Modifier.padding(horizontal = 28.dp)) {
+                        Spacer(Modifier.height(2.dp))
+                        if (scanRootStatus.isNotBlank()) {
+                            Text(scanRootStatus, color = colors.subText, fontSize = 12.sp)
+                        }
+                        if (transferStatus.isNotBlank()) {
+                            Text(transferStatus, color = colors.subText, fontSize = 12.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                // ==================== 动画 ====================
+                SettingsGroup("动画", state.surfaceStyle, colors) {
+                    SettingSwitchRow("启动动画", checked = state.splashEnabled, surfaceStyle = state.surfaceStyle, showDivider = state.splashEnabled, colors = colors) {
+                        viewModel.setSplashEnabled(!state.splashEnabled)
+                    }
+                    if (state.splashEnabled) {
+                        InlineOptionRow(
+                            title = "动画风格",
+                            options = listOf("简约", "温柔", "细腻"),
+                            selectedIndex = state.splashStyle,
+                            surfaceStyle = state.surfaceStyle,
+                            showDivider = false,
+                            colors = colors
+                        ) { viewModel.setSplashStyle(it) }
+                    }
+                }
+
+                // ==================== 设置样式 ====================
+                SettingsGroup("设置样式", state.surfaceStyle, colors) {
+                    SettingSwitchRow(
+                        "切换回经典设置面板",
+                        subtitle = "关闭后使用经典列表样式",
+                        checked = !state.useNewSettingsStyle,
+                        surfaceStyle = state.surfaceStyle,
+                        showDivider = false,
+                        colors = colors
+                    ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
+                }
+
+                Spacer(Modifier.height(8.dp))
             }
 
-            // ==================== 设置样式 ====================
-            SettingsGroup("设置样式", state.surfaceStyle, colors) {
-                SettingSwitchRow(
-                    "切换回经典设置面板",
-                    subtitle = "关闭后使用经典列表样式",
-                    checked = !state.useNewSettingsStyle,
-                    surfaceStyle = state.surfaceStyle,
-                    showDivider = false,
-                    colors = colors
-                ) { viewModel.setUseNewSettingsStyle(!state.useNewSettingsStyle) }
+            // 底部完成按钮
+            Spacer(Modifier.height(10.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .clip(IrisShape.item)
+                    .background(colors.primary)
+                    .clickable { onDismiss() }
+                    .padding(vertical = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "完成",
+                    color = colors.primary.readableTextOn(),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Black
+                )
             }
-
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(18.dp))
         }
-
-        // 底部完成按钮
-        Spacer(Modifier.height(10.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .clip(IrisShape.item)
-                .background(colors.primary)
-                .clickable { onDismiss() }
-                .padding(vertical = 14.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                "完成",
-                color = colors.primary.readableTextOn(),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Black
-            )
-        }
-        Spacer(Modifier.height(18.dp))
     }
 }
 
@@ -622,7 +623,6 @@ private fun SettingsGroup(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val isLiquid = surfaceStyle == IrisSurfaceStyle.LIQUID
-    // 液态玻璃：半透明。实色：纯白卡片，与外层灰形成色差
     val groupModifier = if (isLiquid) {
         Modifier.irisSurface(GlassLevel.CARD, colors, RoundedCornerShape(20.dp))
     } else {
@@ -801,7 +801,6 @@ private fun InlineOptionRow(
                         } else {
                             if (isLiquid) colors.subText.copy(alpha = 0.08f) else Color.White
                         }
-                        // 按钮立体效果
                         val btnModifier = if (isLiquid) {
                             Modifier.irisSurface(GlassLevel.CHIP, colors, RoundedCornerShape(10.dp), solid = btnBg)
                         } else {
@@ -829,7 +828,6 @@ private fun InlineOptionRow(
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 文字自动缩放以防溢出
                             val autoSize = if (opt.length > 3) 10.sp else 12.sp
                             Text(
                                 opt,
