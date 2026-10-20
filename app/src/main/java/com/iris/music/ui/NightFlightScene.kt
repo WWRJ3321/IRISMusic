@@ -139,7 +139,7 @@ fun NightFlightScene(state: PlayerUiState, onToggle: () -> Unit, onPrev: () -> U
                 .background(Color(0xFF050F1C)).border(1.dp, Color(0xFF5E87A8).copy(alpha = .5f)),
             contentAlignment = Alignment.Center
         ) {
-            if (art != null) Image(art!!, "封面立牌", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            if (art != null) Image(art!!, L.nfCoverStand, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             else Text("IRIS", color = Color(0xFFB9D6EA), fontSize = 13.sp)
             Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color.White.copy(alpha = .1f), Color.Transparent, Color.Transparent))))
         }
@@ -149,13 +149,13 @@ fun NightFlightScene(state: PlayerUiState, onToggle: () -> Unit, onPrev: () -> U
             if (index > 0) Text(lines[index - 1].text, color = Color(0xFF9DB8D2).copy(alpha = .3f), fontSize = 13.sp, maxLines = 2)
             Spacer(Modifier.height(4.dp))
             Text(
-                if (index >= 0) lines[index].text else (state.currentSong?.title ?: "今夜，让城市陪你听歌"),
+                if (index >= 0) lines[index].text else (state.currentSong?.title ?: L.nfSlogan),
                 color = Color(0xFFEAF3FC), fontSize = 23.sp, maxLines = 3
             )
         }
 
         if (controls) {
-            Text("天台夜航 · 转回竖屏退出", Modifier.align(Alignment.TopStart).statusBarsPadding().padding(20.dp),
+            Text(L.nfHint, Modifier.align(Alignment.TopStart).statusBarsPadding().padding(20.dp),
                 color = Color(0xFFB4CBE2).copy(alpha = .8f), fontSize = 12.sp)
             Row(
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 26.dp),

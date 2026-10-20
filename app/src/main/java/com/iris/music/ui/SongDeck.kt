@@ -253,7 +253,7 @@ fun SongDeck(
                 ) {
                     if (state.queue.isEmpty()) {
                         Text(
-                                if (state.loading) "读取音乐库…" else "还没有歌曲\n去设置里换个文件夹，或取消当前筛选",
+                                if (state.loading) L.loadingLibrary else L.emptyLibrary,
                             color = colors.subText,
                             fontSize = 13.sp,
                             lineHeight = 19.sp,
@@ -266,7 +266,7 @@ fun SongDeck(
                         if (stackLandscape) {
                             // 横屏：左侧封面堆叠（复用原手势），右侧固定控制区
                             LandscapeDeckPlayer(
-                                title = stackCur?.title ?: "未选择",
+                                title = stackCur?.title ?: L.none,
                                 artist = stackCur?.artist ?: "",
                                 positionMs = state.positionMs,
                                 durationMs = state.durationMs,
@@ -592,7 +592,7 @@ private fun DeckCarousel(
         // 横屏：封面 Pager（露左右邻曲）在左，固定控制区在右
         val cur = queue.getOrNull(state.currentIndex)
         LandscapeDeckPlayer(
-            title = cur?.title ?: "未选择",
+            title = cur?.title ?: L.none,
             artist = cur?.artist ?: "",
             positionMs = state.positionMs,
             durationMs = state.durationMs,
@@ -1222,7 +1222,7 @@ private fun DeckCompact(
                         .padding(start = 14.dp, top = 10.dp, bottom = 10.dp)
                 ) {
                     Text(
-                        song?.title ?: "未播放",
+                        song?.title ?: L.notPlaying,
                         color = colors.text,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -1232,7 +1232,7 @@ private fun DeckCompact(
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            song?.artist ?: "选一首开始播放",
+                            song?.artist ?: L.pickToPlay,
                             color = colors.subText,
                             fontSize = 10.sp,
                             maxLines = 1,

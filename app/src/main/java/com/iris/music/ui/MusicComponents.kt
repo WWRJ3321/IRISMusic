@@ -123,7 +123,7 @@ internal fun RecommendationSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "为你推荐",
+                L.forYou,
                 color = onSheet,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Black

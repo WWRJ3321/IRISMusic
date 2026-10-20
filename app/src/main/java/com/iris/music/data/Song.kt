@@ -26,16 +26,11 @@ data class MusicFolder(
 
 enum class RepeatMode { OFF, ALL, ONE }
 
-enum class SortOrder(val label: String) {
-    TITLE("标题"),
-    ARTIST("艺术家"),
-    DURATION("时长"),
-    RECENT("修改/添加时间")
+enum class SortOrder {
+    TITLE, ARTIST, DURATION, RECENT
 }
-
-enum class SortDirection(val label: String) {
-    ASCENDING("正序"),
-    DESCENDING("倒序")
+enum class SortDirection {
+    ASCENDING, DESCENDING
 }
 
 /**

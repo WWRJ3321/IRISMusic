@@ -1,5 +1,7 @@
 package com.iris.music.data
 
+import com.iris.music.ui.L
+
 import kotlin.math.sqrt
 import kotlin.random.Random
 
@@ -189,25 +191,25 @@ object Recommender {
         val factors = mutableListOf<Factor>()
 
         val liked = song.id in likes
-        if (liked) factors.add(Factor("你点赞过这首", 0.5f))
+        if (liked) factors.add(Factor(L.recLiked, 0.5f))
 
         rankBoost(allSongs, playCounts)[song.id]?.takeIf { it > 0.001f }?.let {
-            factors.add(Factor("播放次数排名靠前（${playCounts[song.id] ?: 0} 次）", it))
+            factors.add(Factor(L.recPlays(playCounts[song.id] ?: 0), it))
         }
         rankBoost(allSongs, totalPlayedMs)[song.id]?.takeIf { it > 0.001f }?.let {
             val minutes = ((totalPlayedMs[song.id] ?: 0L) / 60_000L).toInt()
-            factors.add(Factor("累计听了较久（约 $minutes 分钟）", it))
+            factors.add(Factor(L.recLongListen(minutes), it))
         }
         buildArtistLikeRatio(allSongs, likes)[song.artist]?.takeIf { it > 0f }?.let {
-            factors.add(Factor("你常点赞 ${song.artist} 的歌", it * 0.10f))
+            factors.add(Factor(L.recArtistLiked(song.artist), it * 0.10f))
         }
         rankPenalty(allSongs, incompleteCounts)[song.id]?.takeIf { it > 0.001f }?.let {
-            factors.add(Factor("经常没听完就切走（${incompleteCounts[song.id] ?: 0} 次）", -it))
+            factors.add(Factor(L.recSkipped(incompleteCounts[song.id] ?: 0), -it))
         }
 
         val last = lastPlayed[song.id]
         val recent = last != null && System.currentTimeMillis() - last < RECENT_WINDOW_MS
-        if (recent) factors.add(Factor("最近一小时刚听过，暂时降权", -0.9f))
+        if (recent) factors.add(Factor(L.recRecent, -0.9f))
 
         val isNew = song.id !in playCounts && song.id !in lastPlayed && !liked
         return Explanation(

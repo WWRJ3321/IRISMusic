@@ -27,10 +27,9 @@ const val EQ_MAX_ANCHORS = 12
  * 增益单位是毫贝，600 = +6dB。峰值压在 7dB 以内：更高会顶到多数设备的 ±15dB 量程边缘，
  * 也容易把总电平推爆产生削波。
  */
-enum class EqBoost(val label: String, val anchors: List<EqAnchor>) {
+enum class EqBoost(val anchors: List<EqAnchor>) {
     /** 低音增强：60Hz 抬起来，300Hz 以上回到平直，不糊中频人声 */
     BASS(
-        "低音增强",
         listOf(
             EqAnchor(32, 650),
             EqAnchor(70, 600),
@@ -43,7 +42,6 @@ enum class EqBoost(val label: String, val anchors: List<EqAnchor>) {
 
     /** 中音增强：人声与主奏乐器所在的 800Hz~3kHz 抬起，两端略压以突出中频 */
     MID(
-        "中音增强",
         listOf(
             EqAnchor(32, -150),
             EqAnchor(160, -60),
@@ -56,7 +54,6 @@ enum class EqBoost(val label: String, val anchors: List<EqAnchor>) {
 
     /** 高音增强：5kHz 以上抬起，增加空气感与细节，低频不动 */
     TREBLE(
-        "高音增强",
         listOf(
             EqAnchor(32, 0),
             EqAnchor(800, 0),

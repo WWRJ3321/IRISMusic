@@ -1428,7 +1428,7 @@ val out = ArrayList<VisibleTile>(48)
 
             } // end Box
             Text(
-                "拖动探索 · ${queue.size} 首",
+                L.posterHint(queue.size),
                 color = colors.subText,
                 fontSize = 11.sp,
                 modifier = Modifier

@@ -145,9 +145,9 @@ internal fun PlaylistSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("歌单", color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                        Text(L.playlists, color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
                         Text(
-                            if (state.activePlaylistId == null) "文件夹视图" else "歌单视图",
+                            if (state.activePlaylistId == null) L.folderView else L.playlistView,
                             color = colors.subText,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
@@ -157,7 +157,7 @@ internal fun PlaylistSheet(
 
                     // 视图切换：全部音乐优先置顶
                     val showAll = state.activePlaylistId == null
-                    FolderRow("全部音乐", "${state.allSongs.size} 首", showAll, colors) {
+                    FolderRow(L.allMusic, L.songs(state.allSongs.size), showAll, colors) {
                         onSelect(null)
                     }
 
@@ -168,8 +168,8 @@ internal fun PlaylistSheet(
                     // 恒存在列表第二位，不可删除、不可重命名。
                     val likedCount = state.likedSongIds.size
                     FolderRow(
-                        "♥ 我喜欢",
-                        "$likedCount 首",
+                        L.heartRow,
+                        L.songs(likedCount),
                         state.activePlaylistId == Playlists.LIKED_PLAYLIST_ID,
                         colors
                     ) { onSelect(Playlists.LIKED_PLAYLIST_ID) }
@@ -179,7 +179,7 @@ internal fun PlaylistSheet(
                     // 歌单列表
                     if (state.playlists.isEmpty()) {
                         Text(
-                            "还没有歌单，点下方「新建歌单」创建一个吧",
+                            L.emptyPlaylists,
                             color = colors.subText,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(vertical = 12.dp)
@@ -210,7 +210,7 @@ internal fun PlaylistSheet(
                                 value = newName,
                                 onValueChange = { newName = it },
                                 singleLine = true,
-                                placeholder = { Text("歌单名称", color = colors.subText, fontSize = 13.sp) },
+                                placeholder = { Text(L.playlistName, color = colors.subText, fontSize = 13.sp) },
                                 textStyle = TextStyle(color = colors.text, fontSize = 13.sp),
                                 modifier = Modifier.weight(1f),
                                 shape = IrisShape.item,
@@ -239,7 +239,7 @@ internal fun PlaylistSheet(
                                     .padding(horizontal = 14.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("创建", color = accent.readableTextOn(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(L.create, color = accent.readableTextOn(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     } else {
@@ -252,7 +252,7 @@ internal fun PlaylistSheet(
                                 .clickable { Haptics.tap(); showCreate = true },
                             contentAlignment = Alignment.Center
                          ) {
-                             Text("＋ 新建歌单", color = accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                             Text(L.newPlaylist, color = accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                          }
                      }
         }
@@ -284,14 +284,14 @@ internal fun PlaylistSheet(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            "删除歌单「${pendingDelete?.name}」？",
+                            L.deletePlaylistAsk(pendingDelete?.name ?: ""),
                             color = if (colors.isDark) Color.White else Color.Black,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "歌单内的 ${pendingDelete?.songCount ?: 0} 首歌不会被删除",
+                            L.deletePlaylistNote(pendingDelete?.songCount ?: 0),
                             color = colors.subText,
                             fontSize = 12.sp
                         )
@@ -310,7 +310,7 @@ internal fun PlaylistSheet(
                                     .clickable { Haptics.tap(); pendingDelete = null },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("取消", color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Text(L.cancel, color = colors.text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                             }
                             // 确认删除
                             Box(
@@ -326,7 +326,7 @@ internal fun PlaylistSheet(
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("删除", color = accent.readableTextOn(), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Text(L.delete, color = accent.readableTextOn(), fontSize = 14.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -374,7 +374,7 @@ private fun PlaylistRow(
                 fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis
             )
         }
-        Text("${playlist.songCount} 首", color = colors.subText, fontSize = 11.sp)
+        Text(L.songs(playlist.songCount), color = colors.subText, fontSize = 11.sp)
         Spacer(Modifier.width(10.dp))
         // 删除按钮：X（用主题文字色，深色=白、浅色=黑）
         Box(
@@ -476,7 +476,7 @@ internal fun AddToPlaylistSheet(
     ) {
         SheetDragHandle(drag, onDismiss, colors.card)
         Spacer(Modifier.height(14.dp))
-        Text("加入歌单", color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Text(L.addToPlaylist, color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
                     Spacer(Modifier.height(4.dp))
                     Text(
                         song.title,
@@ -490,8 +490,8 @@ internal fun AddToPlaylistSheet(
                     // 行为与自定义歌单完全一致——点心即加入这里，再点移出。
                     val likedIn = song.id in state.likedSongIds
                     AddRow(
-                        name = "♥ 我喜欢",
-                        trailing = if (likedIn) "已喜欢 · 点按移出" else "点按喜欢",
+                        name = L.heartRow,
+                        trailing = if (likedIn) L.likedIn else L.tapToLike,
                         alreadyIn = likedIn,
                         colors = colors,
                         accent = accent,
@@ -504,7 +504,7 @@ internal fun AddToPlaylistSheet(
 
                     if (state.playlists.isEmpty()) {
                         Text(
-                            "还没有歌单，点下方「新建歌单」创建一个吧",
+                            L.emptyPlaylists,
                             color = colors.subText,
                             fontSize = 13.sp
                         )
@@ -513,7 +513,7 @@ internal fun AddToPlaylistSheet(
                             val alreadyIn = Playlists.contains(p.id, song.id)
                             AddRow(
                                 name = p.name,
-                                trailing = if (alreadyIn) "已加入 · 点按移出" else "${p.songCount} 首",
+                                trailing = if (alreadyIn) L.addedIn else L.songs(p.songCount),
                                 alreadyIn = alreadyIn,
                                 colors = colors,
                                 accent = accent,
@@ -536,7 +536,7 @@ internal fun AddToPlaylistSheet(
                                 value = newName,
                                 onValueChange = { newName = it },
                                 singleLine = true,
-                                placeholder = { Text("歌单名称", color = colors.subText, fontSize = 13.sp) },
+                                placeholder = { Text(L.playlistName, color = colors.subText, fontSize = 13.sp) },
                                 textStyle = TextStyle(color = colors.text, fontSize = 13.sp),
                                 modifier = Modifier.weight(1f),
                                 shape = IrisShape.item,
@@ -561,7 +561,7 @@ internal fun AddToPlaylistSheet(
                                     .padding(horizontal = 14.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("创建并加入", color = accent.readableTextOn(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(L.createAndAdd, color = accent.readableTextOn(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     } else {
@@ -574,7 +574,7 @@ internal fun AddToPlaylistSheet(
                                 .clickable { Haptics.tap(); showCreate = true },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("＋ 新建歌单并加入", color = accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            Text(L.newPlaylistAndAdd, color = accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         }
                     }
     }

@@ -107,14 +107,14 @@ fun ListenReportSheet(
                         item {
                             Row(verticalAlignment = Alignment.Bottom) {
                                 Text(
-                                    "听歌报告",
+                                    L.reportTitle,
                                     color = onSheet,
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Black
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    "累计 ${formatListenDuration(report.allTimeMs)}",
+                                    L.allTime(formatListenDuration(report.allTimeMs)),
                                     color = onSheet.copy(alpha = 0.55f),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
@@ -158,7 +158,7 @@ fun ListenReportSheet(
                                 Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                SectionTitle("听歌热力图", onSheet)
+                                SectionTitle(L.heatmap, onSheet)
                                 Spacer(Modifier.weight(1f))
                                 Box(
                                     Modifier
@@ -168,7 +168,7 @@ fun ListenReportSheet(
                                         .padding(horizontal = 9.dp, vertical = 4.dp)
                                 ) {
                                     Text(
-                                        if (chartCurve) "方格" else "曲线",
+                                        if (chartCurve) L.heatmapGrid else L.eqCurve,
                                         color = accent.readableTextOn(),
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Black,
@@ -181,9 +181,9 @@ fun ListenReportSheet(
                             Text(
                                 picked?.let {
                                     "${ListenReportBuilder.dayLabel(it.day)} · " +
-                                        if (it.ms > 0) formatListenDuration(it.ms) else "没有听歌"
-                                } ?: if (chartCurve) "近一年每天的听歌时长，曲线越高听得越久"
-                                   else "近一年每天的听歌时长，颜色越深听得越久",
+                                        if (it.ms > 0) formatListenDuration(it.ms) else L.noListen
+                                } ?: if (chartCurve) L.heatmapCurveNote
+                                   else L.heatmapGridNote,
                                 color = if (picked != null) accent else onSheet.copy(alpha = 0.55f),
                                 fontSize = 11.sp,
                                 fontWeight = if (picked != null) FontWeight.Bold else FontWeight.Normal
@@ -216,10 +216,10 @@ fun ListenReportSheet(
 
                         // ---- 单曲排行 ----
                         item {
-                            SectionTitle("单曲时长排行", onSheet)
+                            SectionTitle(L.topSongsTitle, onSheet)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "${report.range.title}听得最久的歌，点一下直接播放",
+                                L.topSongsNote(report.range.title),
                                 color = onSheet.copy(alpha = 0.55f),
                                 fontSize = 11.sp
                             )
@@ -237,7 +237,7 @@ fun ListenReportSheet(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        if (report.loading) "统计中…" else "${report.range.title}还没有听歌记录",
+                                        if (report.loading) L.counting else L.emptyReport(report.range.title),
                                         color = onSheet.copy(alpha = 0.55f),
                                         fontSize = 12.sp
                                     )
@@ -271,8 +271,8 @@ fun ListenReportSheet(
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
-                                            if (expanded) "收起"
-                                            else "展开全部 ${report.topSongs.size} 首",
+                                            if (expanded) L.collapse
+                                            else L.expandAll(report.topSongs.size),
                                             color = onSheet.copy(alpha = 0.7f),
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold
@@ -297,7 +297,7 @@ fun ListenReportSheet(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            "完成",
+                            L.done,
                             color = accent.readableTextOn(),
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Black
@@ -327,7 +327,7 @@ private fun TotalCard(
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         Text(
-            "${report.range.title}听歌",
+            L.rangeListening(report.range.title),
             color = onSheet.copy(alpha = 0.6f),
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium
@@ -343,10 +343,10 @@ private fun TotalCard(
         )
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth()) {
-            MetricCell("歌曲", "${report.songCount} 首", onSheet, Modifier.weight(1f))
+            MetricCell(L.labelSongs, L.songs(report.songCount), onSheet, Modifier.weight(1f))
             MetricCell(
-                if (report.range == StatRange.DAY) "记录" else "活跃",
-                "${report.activeDays} 天",
+                if (report.range == StatRange.DAY) L.labelRecords else L.labelActive,
+                L.days(report.activeDays),
                 onSheet,
                 Modifier.weight(1f)
             )
@@ -354,13 +354,13 @@ private fun TotalCard(
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth()) {
             MetricCell(
-                "日均",
+                L.dailyAvg,
                 formatListenDuration(report.avgPerActiveDayMs),
                 onSheet,
                 Modifier.weight(1f)
             )
             MetricCell(
-                if (report.peakDayLabel.isBlank()) "最长一天" else "最长 ${report.peakDayLabel}",
+                if (report.peakDayLabel.isBlank()) L.longestDay else L.longestValue(report.peakDayLabel),
                 formatListenDuration(report.peakDayMs),
                 onSheet,
                 Modifier.weight(1f)
@@ -443,9 +443,9 @@ private fun HeatMap(
                 ) {
                     // 只标单数行（一/三/五），全标会挤在一起
                     val label = when (row) {
-                        0 -> "一"
-                        2 -> "三"
-                        4 -> "五"
+                        0 -> L.wdMon
+                        2 -> L.wdWed
+                        4 -> L.wdFri
                         else -> null
                     }
                     if (label != null) {
@@ -521,7 +521,7 @@ private fun HeatLegend(colors: IrisColors, onSheet: Color) {
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("少", color = onSheet.copy(alpha = 0.5f), fontSize = 10.sp)
+        Text(L.less, color = onSheet.copy(alpha = 0.5f), fontSize = 10.sp)
         Spacer(Modifier.width(6.dp))
         (0..4).forEach { level ->
             Box(
@@ -533,7 +533,7 @@ private fun HeatLegend(colors: IrisColors, onSheet: Color) {
             Spacer(Modifier.width(HEAT_GAP))
         }
         Spacer(Modifier.width(3.dp))
-        Text("多", color = onSheet.copy(alpha = 0.5f), fontSize = 10.sp)
+        Text(L.more, color = onSheet.copy(alpha = 0.5f), fontSize = 10.sp)
     }
 }
 
@@ -788,7 +788,7 @@ private fun RankRow(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    stat.artist + if (stat.plays > 0) " · 约 ${stat.plays} 次" else "",
+                    stat.artist + if (stat.plays > 0L) L.playsSuffix(stat.plays) else "",
                     color = onSheet.copy(alpha = 0.55f),
                     fontSize = 10.sp,
                     maxLines = 1,

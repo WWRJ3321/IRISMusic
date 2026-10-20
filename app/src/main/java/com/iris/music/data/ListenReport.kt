@@ -1,5 +1,7 @@
 package com.iris.music.data
 
+import com.iris.music.ui.L
+
 import java.util.Calendar
 
 /** 排行榜里的一行 */
@@ -92,8 +94,8 @@ object ListenReportBuilder {
                 val s = songById[id]
                 SongStat(
                     songId = id,
-                    title = s?.title ?: "已移除的歌曲",
-                    artist = s?.artist ?: "未知",
+                    title = s?.title ?: L.removedSongs,
+                    artist = s?.artist ?: L.unknown,
                     filePath = s?.filePath ?: "",
                     ms = ms,
                     plays = if (s != null && s.durationMs > 0) {
@@ -181,7 +183,7 @@ object ListenReportBuilder {
                 lastMonth = month
                 // 该月的第一列若已经过了 20 号，说明这列几乎属于上个月，标签留到下一列
                 if (cal.get(Calendar.DAY_OF_MONTH) <= 21) {
-                    out.add(HeatMonthLabel(w, "${month + 1}月"))
+                    out.add(HeatMonthLabel(w, L.monthShort(month)))
                 }
             }
         }
@@ -190,21 +192,21 @@ object ListenReportBuilder {
 
     fun dayLabel(day: Long): String {
         val cal = ListenStats.calendarOf(day)
-        return "${cal.get(Calendar.MONTH) + 1}月${cal.get(Calendar.DAY_OF_MONTH)}日"
+        return L.dateFull(cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
     }
 }
 
 /** 时长友好格式：14分、2小时36分、48秒 */
 fun formatListenDuration(ms: Long): String {
-    if (ms <= 0L) return "0分"
+    if (ms <= 0L) return L.zeroMin
     val totalMin = ms / 60_000L
-    if (totalMin < 1L) return "${(ms / 1000L).coerceAtLeast(1L)}秒"
+    if (totalMin < 1L) return L.secs((ms / 1000L).coerceAtLeast(1L))
     val h = totalMin / 60
     val m = totalMin % 60
     return when {
-        h <= 0L -> "${m}分"
-        m == 0L -> "${h}小时"
-        else -> "${h}小时${m}分"
+        h <= 0L -> L.mins(m)
+        m == 0L -> L.hours(h)
+        else -> L.hoursMins(h, m)
     }
 }
 
@@ -212,8 +214,8 @@ fun formatListenDuration(ms: Long): String {
 fun formatListenDurationShort(ms: Long): String {
     val totalMin = ms / 60_000L
     return when {
-        totalMin < 1L -> "<1分"
-        totalMin < 60L -> "${totalMin}分"
+        totalMin < 1L -> L.ltOneMin
+        totalMin < 60L -> L.mins(totalMin)
         else -> {
             val h = totalMin / 60f
             if (h < 10f) String.format("%.1fh", h) else "${(totalMin / 60)}h"

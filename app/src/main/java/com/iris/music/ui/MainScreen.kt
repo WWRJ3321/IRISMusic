@@ -628,7 +628,7 @@ private fun LibrarySortBar(
             contentAlignment = Alignment.Center
         ) {
             Text(
-                if (direction == SortDirection.ASCENDING) "正序 ↑" else "倒序 ↓",
+                if (direction == SortDirection.ASCENDING) L.sortAscArrow else L.sortDescArrow,
                 color = colors.text,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium
@@ -1005,7 +1005,7 @@ private fun LibraryPage(
                                 Modifier.fillMaxWidth().height(60.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("推荐中…", color = colors.subText, fontSize = 12.sp)
+                                Text(L.recommending, color = colors.subText, fontSize = 12.sp)
                             }
                         }
                     }
@@ -1252,7 +1252,7 @@ private fun LibraryPage(
                         .fillMaxWidth()
                         .focusRequester(searchFocusRequester)
                         .onGloballyPositioned { searchBounds.value = it.boundsInRoot() },
-                    placeholder = { Text("搜索歌曲、艺术家…", color = colors.subText, fontSize = 12.sp) },
+                    placeholder = { Text(L.searchHint, color = colors.subText, fontSize = 12.sp) },
                     textStyle = TextStyle(color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     leadingIcon = {
                         Canvas(Modifier.size(15.dp)) {
@@ -1301,12 +1301,12 @@ private fun LibraryPage(
                         Spacer(Modifier.height(6.dp))
                         val countLabel = when {
                             state.activePlaylistId == Playlists.LIKED_PLAYLIST_ID ->
-                                "♥ 我喜欢 · ${state.queue.size} 首"
+                                L.likedLabel(state.queue.size)
                             state.activePlaylistId != null ->
-                                state.playlists.firstOrNull { it.id == state.activePlaylistId }?.let { "歌单「${it.name}」· ${state.queue.size} 首" } ?: "${state.queue.size} 首"
-                            state.selectedFolders.isNotEmpty() -> "${state.queue.size} 首 · 已选 ${state.selectedFolders.size} 个文件夹"
-                            state.onlyLiked -> "我的收藏 · ${state.queue.size} 首"
-                            else -> "${state.queue.size} 首"
+                                state.playlists.firstOrNull { it.id == state.activePlaylistId }?.let { L.playlistLabel(L.displayName(it.name), state.queue.size) } ?: L.songs(state.queue.size)
+                            state.selectedFolders.isNotEmpty() -> L.folderLabel(state.queue.size, state.selectedFolders.size)
+                            state.onlyLiked -> L.legacyLikedLabel(state.queue.size)
+                            else -> L.songs(state.queue.size)
                         }
                         Text(
                             countLabel,
@@ -1431,7 +1431,7 @@ private fun PlayerPage(
             verticalArrangement = Arrangement.Center
         ) {
             PlayerCard(
-                title = state.currentSong?.title ?: "未选择",
+                title = state.currentSong?.title ?: L.none,
                 artist = state.currentSong?.artist ?: "",
                 positionMs = state.positionMs,
                 durationMs = state.durationMs,

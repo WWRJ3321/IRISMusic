@@ -154,7 +154,7 @@ fun EqualizerSheet(
             // 标题
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "音效",
+                    L.eqTitle,
                     Modifier.weight(1f),
                     color = onSheet,
                     fontSize = 20.sp,
@@ -164,7 +164,7 @@ fun EqualizerSheet(
 
             if (!state.available) {
                 Spacer(Modifier.height(20.dp))
-                Text("当前设备不支持系统均衡器（虚拟低音等增强仍可用）", color = colors.subText, fontSize = 13.sp, lineHeight = 20.sp)
+                Text(L.eqUnsupported, color = colors.subText, fontSize = 13.sp, lineHeight = 20.sp)
                 Spacer(Modifier.height(16.dp))
                 DoneButton(colors, onDismiss)
             } else {
@@ -183,10 +183,10 @@ fun EqualizerSheet(
                     .irisSurface(GlassLevel.ROW, colors, IrisShape.item)
                     .padding(3.dp)
             ) {
-                ModeTab("曲线", state.editMode == EqEditMode.CURVE, colors, Modifier.weight(1f)) {
+                ModeTab(L.eqCurve, state.editMode == EqEditMode.CURVE, colors, Modifier.weight(1f)) {
                     onSetEditMode(EqEditMode.CURVE)
                 }
-                ModeTab("滑条", state.editMode == EqEditMode.SLIDER, colors, Modifier.weight(1f)) {
+                ModeTab(L.eqSliders, state.editMode == EqEditMode.SLIDER, colors, Modifier.weight(1f)) {
                     onSetEditMode(EqEditMode.SLIDER)
                 }
             }
@@ -216,11 +216,11 @@ fun EqualizerSheet(
             // V3.10 声音增强：四个效果做成扁平行（点行展开滑条），整体更紧凑
             // 虚拟低音：心理声学谐波合成，为小喇叭补低音存在感
             EnhancerRow(
-                title = "虚拟低音",
+                title = L.eqVirtualBass,
                 subtitle = "",
                 checked = virtualBass,
                 strength = virtualBassStrength,
-                strengthLabel = "混合强度",
+                strengthLabel = L.eqBlend,
                 colors = colors,
                 onToggle = { onVirtualBassChange(!virtualBass) },
                 onStrengthChange = onVirtualBassStrengthChange
@@ -228,11 +228,11 @@ fun EqualizerSheet(
             Spacer(Modifier.height(6.dp))
             // 动态范围增强：压缩 + 化妆增益
             EnhancerRow(
-                title = "动态范围增强",
+                title = L.eqDre,
                 subtitle = "",
                 checked = rangeEnhancer,
                 strength = rangeEnhancerStrength,
-                strengthLabel = "增强强度",
+                strengthLabel = L.eqDreAmount,
                 colors = colors,
                 onToggle = { onRangeEnhancerChange(!rangeEnhancer) },
                 onStrengthChange = onRangeEnhancerStrengthChange
@@ -240,11 +240,11 @@ fun EqualizerSheet(
             Spacer(Modifier.height(6.dp))
             // 虚拟环绕：M/S 侧边增强，静态声场展宽（非 3D 旋转）；v3.11 单声道自动去相关成伪立体声
             EnhancerRow(
-                title = "虚拟环绕",
-                subtitle = "单声道歌曲也会自动展宽",
+                title = L.eqSurround,
+                subtitle = L.eqSurroundNote,
                 checked = virtualSurround,
                 strength = virtualSurroundStrength,
-                strengthLabel = "扩展强度",
+                strengthLabel = L.eqWidth,
                 colors = colors,
                 onToggle = { onVirtualSurroundChange(!virtualSurround) },
                 onStrengthChange = onVirtualSurroundStrengthChange
@@ -252,11 +252,11 @@ fun EqualizerSheet(
             Spacer(Modifier.height(6.dp))
             // 宽场环绕：多频段展宽（低频居中/中频温和/高频大幅）+ 去相关早期反射，制造包围感与纵深
             EnhancerRow(
-                title = "宽场环绕",
-                subtitle = "分频展宽 + 早期反射，空间感更强",
+                title = L.eqWide,
+                subtitle = L.eqWideNote,
                 checked = spatialWide,
                 strength = spatialWideStrength,
-                strengthLabel = "空间强度",
+                strengthLabel = L.eqSpace,
                 colors = colors,
                 onToggle = { onSpatialWideChange(!spatialWide) },
                 onStrengthChange = onSpatialWideStrengthChange
@@ -264,11 +264,11 @@ fun EqualizerSheet(
             Spacer(Modifier.height(6.dp))
             // V3.10 防失真：前瞻峰值限幅，防推高/增强后削波撕裂。强度越大余量越足越安全
             EnhancerRow(
-                title = "防失真保护",
-                subtitle = "只防破音撕裂，不影响正常音量与鼓点",
+                title = L.eqLimiter,
+                subtitle = L.eqLimiterNote,
                 checked = safeLimiter,
                 strength = safeLimiterStrength,
-                strengthLabel = "保护余量",
+                strengthLabel = L.eqHeadroom,
                 colors = colors,
                 onToggle = { onSafeLimiterChange(!safeLimiter) },
                 onStrengthChange = onSafeLimiterStrengthChange
@@ -276,11 +276,11 @@ fun EqualizerSheet(
             Spacer(Modifier.height(6.dp))
             // 曲间响度均衡：在线测响度、按曲拉平（解决现场版巨响/老录音听不清）
             EnhancerRow(
-                title = "响度均衡",
-                subtitle = "拉平各首歌的音量差异，避免忽大忽小（新歌听完一遍自动测量）",
+                title = L.eqLoudness,
+                subtitle = L.eqLoudnessNote,
                 checked = loudnorm,
                 strength = loudnormStrength,
-                strengthLabel = "拉平力度",
+                strengthLabel = L.eqLoudnessAmount,
                 colors = colors,
                 onToggle = { onLoudnormChange(!loudnorm) },
                 onStrengthChange = onLoudnormStrengthChange
@@ -318,7 +318,7 @@ fun EqualizerSheet(
                         .clickable { Haptics.tap(); onReset() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("重置", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = onSheet.copy(alpha = 0.75f))
+                    Text(L.reset, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = onSheet.copy(alpha = 0.75f))
                 }
                 Box(
                     Modifier
@@ -330,7 +330,7 @@ fun EqualizerSheet(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        "完成",
+                        L.done,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = accent.readableTextOn()
@@ -353,7 +353,7 @@ private fun DoneButton(colors: IrisColors, onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Text(
-            "完成",
+            L.done,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = colors.primary.readableTextOn()
@@ -608,7 +608,7 @@ private fun CurveEditor(
                         val a = anchors.getOrNull(dragIndex)
                         Text(
                             if (a != null) "${formatHz(a.freqHz)}  ${formatDb(a.gainMb)} dB"
-                            else "${anchors.size} 个节点",
+                            else L.eqNodes(anchors.size),
                             color = if (a != null) colors.primary else onSheet.copy(alpha = 0.72f),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
@@ -639,7 +639,7 @@ private fun CurveEditor(
         Spacer(Modifier.height(8.dp))
 
         Text(
-            "拖动节点调节 · 点击空白新增 · 双击节点删除（$EQ_MIN_ANCHORS-$EQ_MAX_ANCHORS 个）",
+            L.eqCurveHint(EQ_MIN_ANCHORS, EQ_MAX_ANCHORS),
             color = onSheet.copy(alpha = 0.68f),
             fontSize = 11.sp,
             lineHeight = 15.sp
@@ -899,7 +899,7 @@ private fun LoudnessRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text("等响曲线", color = onSheet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(L.eqLoudnessCurve, color = onSheet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.width(10.dp))
         Box(
@@ -930,7 +930,7 @@ private fun LoudnessRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "补偿强度 · $strength%",
+                    L.eqCompensation(strength.toString()),
                     color = onSheet.copy(alpha = 0.6f),
                     fontSize = 10.sp,
                     maxLines = 1,

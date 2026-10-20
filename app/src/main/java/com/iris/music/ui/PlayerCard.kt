@@ -894,7 +894,7 @@ fun SleepTimerSheet(
     ) {
             SheetDragHandle(drag, onDismiss, colors.card)
             Spacer(Modifier.height(14.dp))
-                    Text("睡眠定时器", color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                    Text(L.sleepTimer, color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
                     Spacer(Modifier.height(18.dp))
 
                     // 圆形进度环 + 分钟数（80dp 紧凑尺寸）
@@ -970,7 +970,7 @@ fun SleepTimerSheet(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         SheetActionButton(
-                            label = "取消",
+                            label = L.cancel,
                             labelColor = onSheet.copy(alpha = 0.75f),
                             borderColor = onSheet.copy(alpha = 0.25f),
                             colors = colors,
@@ -978,7 +978,7 @@ fun SleepTimerSheet(
                             onClick = { Haptics.tap(); onDismiss() }
                         )
                         SheetActionButton(
-                            label = "关闭",
+                            label = L.close,
                             labelColor = Color(0xFFFF4D6D),
                             borderColor = Color(0xFFFF4D6D).copy(alpha = 0.65f),
                             colors = colors,
@@ -996,7 +996,7 @@ fun SleepTimerSheet(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "设置",
+                                L.settings,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = accent.readableTextOn()

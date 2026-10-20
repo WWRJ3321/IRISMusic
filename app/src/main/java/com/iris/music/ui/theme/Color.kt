@@ -1,4 +1,6 @@
 package com.iris.music.ui.theme
+
+import com.iris.music.ui.L
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -41,23 +43,20 @@ object IrisPalette {
 }
 
 /** 明暗模式 */
-enum class IrisMode(val label: String) {
-    DARK("深色"),
-    LIGHT("浅色"),
-    AUTO("自动")
+enum class IrisMode { DARK, LIGHT, AUTO;
 }
 
 /**
  * 表面材质。与 [IrisTheme]（配色）正交：任意配色都能配任意材质，
  * 所以不做成第 9 套主题色，而是单独一维。
  */
-enum class IrisSurfaceStyle(val label: String) {
+enum class IrisSurfaceStyle {
     /** 实色卡片，原有观感 */
-    SOLID("实色"),
+    SOLID,
     /** 毛玻璃：卡片仍是实色，浮层（上栏 / 歌词）走 Haze 背景模糊 */
-    FROSTED("毛玻璃"),
+    FROSTED,
     /** 液态玻璃：半透明本体 + 折射边缘光 + 镜面高光 */
-    LIQUID("液态玻璃")
+    LIQUID;
 }
 
 /**
@@ -67,15 +66,15 @@ enum class IrisSurfaceStyle(val label: String) {
  * [LIST] 是原有结构（歌单页 ↔ 播放页 左右翻）。另两种进入"卡片模式"：
  * 整个 App 只剩一叠播放卡片，一首歌一张卡，区别只在怎么排。
  */
-enum class IrisLayout(val label: String) {
+enum class IrisLayout {
     /** 纵向排布：上栏 + 竖向歌单，右滑到播放页 */
-    LIST("纵向排布"),
+    LIST,
     /** 横向排布：卡片横向铺开，左右滑动翻歌，两侧露出邻卡 */
-    CAROUSEL("横向排布"),
+    CAROUSEL,
     /** 堆叠排布：卡片叠成一沓，拖走最上面那张切歌 */
-    STACK("堆叠排布"),
+    STACK,
     /** 紧凑排布：整屏唱片墙（磁贴铺满） */
-    COMPACT("唱片墙");
+    COMPACT;
 
     /** 是否为卡片模式（没有歌单页，只有播放卡片） */
     val isDeck: Boolean get() = this != LIST
@@ -91,19 +90,59 @@ enum class IrisLayout(val label: String) {
 
 /** 主题定义：主色/辅色（成对配色），明暗模式独立 */
 enum class IrisTheme(
-    val label: String,
     val primary: Color,
     val secondary: Color
 ) {
-    MONO("黑白", Color.White, IrisPalette.PureBlack),
-    SUNSET("落日橙", IrisPalette.NeonOrange, IrisPalette.NeonMagenta),
-    VIOLET("极光紫", IrisPalette.NeonPurple, IrisPalette.NeonCyan),
-    OCEAN("深海蓝", IrisPalette.NeonBlue, IrisPalette.NeonCyan),
-    BLOOD("血红", IrisPalette.NeonRed, IrisPalette.NeonPurple),
-    GRASS("青草绿", IrisPalette.NeonGreen, IrisPalette.NeonLime),
+    MONO(Color.White, IrisPalette.PureBlack),
+    SUNSET(IrisPalette.NeonOrange, IrisPalette.NeonMagenta),
+    VIOLET(IrisPalette.NeonPurple, IrisPalette.NeonCyan),
+    OCEAN(IrisPalette.NeonBlue, IrisPalette.NeonCyan),
+    BLOOD(IrisPalette.NeonRed, IrisPalette.NeonPurple),
+    GRASS(IrisPalette.NeonGreen, IrisPalette.NeonLime),
     /** 自定义：主/次色由用户在设置里取色器决定，枚举值只是占位 */
-    CUSTOM("自定义", IrisPalette.NeonCyan, IrisPalette.NeonMagenta)
+    CUSTOM(IrisPalette.NeonCyan, IrisPalette.NeonMagenta)
 }
+
+// ==================== 本地化显示名 ====================
+// 枚举本体不再携带中文 label（数据层不该绑死语言），显示名集中在 L：
+// 调用点依旧写 `.label`，零改动接入 i18n；读取 L.zh 即订阅语言状态，切换自动刷新。
+
+/** 明暗模式 */
+val IrisMode.label: String
+    get() = when (this) {
+        IrisMode.DARK -> L.modeDark
+        IrisMode.LIGHT -> L.modeLight
+        IrisMode.AUTO -> L.modeAuto
+    }
+
+/** 表面材质 */
+val IrisSurfaceStyle.label: String
+    get() = when (this) {
+        IrisSurfaceStyle.SOLID -> L.surfaceSolid
+        IrisSurfaceStyle.FROSTED -> L.surfaceFrosted
+        IrisSurfaceStyle.LIQUID -> L.surfaceLiquid
+    }
+
+/** 界面排布 */
+val IrisLayout.label: String
+    get() = when (this) {
+        IrisLayout.LIST -> L.layoutList
+        IrisLayout.CAROUSEL -> L.layoutCarousel
+        IrisLayout.STACK -> L.layoutStack
+        IrisLayout.COMPACT -> L.layoutCompact
+    }
+
+/** 主题配色 */
+val IrisTheme.label: String
+    get() = when (this) {
+        IrisTheme.MONO -> L.themeMono
+        IrisTheme.SUNSET -> L.themeSunset
+        IrisTheme.VIOLET -> L.themeViolet
+        IrisTheme.OCEAN -> L.themeOcean
+        IrisTheme.BLOOD -> L.themeBlood
+        IrisTheme.GRASS -> L.themeGrass
+        IrisTheme.CUSTOM -> L.themeCustom
+    }
 
 /**
  * 主题在给定明暗模式下的实际色对。

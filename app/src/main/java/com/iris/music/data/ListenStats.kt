@@ -13,12 +13,8 @@ data class ListenEntry(val day: Long, val songId: Long, val ms: Long)
  * 报告的时间范围。都是自然周期（本周 = 周一至今），不是"最近 7 天"，
  * 这样才和热力图里以周一起始的列对得上。
  */
-enum class StatRange(val label: String, val title: String) {
-    DAY("日", "今天"),
-    WEEK("周", "本周"),
-    MONTH("月", "本月"),
-    YEAR("年", "今年"),
-    ALL("全部", "累计")
+enum class StatRange {
+    DAY, WEEK, MONTH, YEAR, ALL
 }
 
 /**

@@ -127,7 +127,7 @@ internal fun SettingsPanel(
     if (uri == null) return@rememberLauncherForActivityResult
     val path = viewModel.resolveScanRoot(uri)
     if (path == null) {
-        scanRootStatus = "无法获取该文件夹的真实路径，请从本地存储中选择"
+        scanRootStatus = L.errNotRealPath
     } else {
         // 选定前探一次可读性——三种"选了却没歌"的常见情形要当场说清，
         // 不能让用户对着空曲库猜（B站评论反馈：选了全是 mp3 的文件夹却没歌，
@@ -138,9 +138,9 @@ internal fun SettingsPanel(
             !path.contains(panelContext.packageName)
         when {
             isOtherAppSandbox ->
-                scanRootStatus = "其他应用的 Android/data 目录系统禁止读取（Android 11+ 限制，与权限无关）。请把音乐移到 Music、Download 等普通文件夹后再选择。"
+                scanRootStatus = L.errAndroidData
             probe == null ->
-                scanRootStatus = "无法读取该文件夹，请先在下方「存储权限」开启「所有文件访问」后重新选择。"
+                scanRootStatus = L.errNoAccess
             else -> {
                 // 浅探一层：目录里（含一层子目录）有没有音频文件
                 val exts = setOf("mp3", "flac", "ogg", "oga", "opus", "m4a", "wav", "aac", "ape")
@@ -151,7 +151,7 @@ internal fun SettingsPanel(
                         }.getOrDefault(false)
                     }
                 viewModel.setScanRoot(path)
-                scanRootStatus = if (hasAudio) "" else "该文件夹（含一层子目录）未发现音频文件；更深层次的子目录会在扫描后收录。"
+                scanRootStatus = if (hasAudio) "" else L.folderNoAudio
             }
         }
     }
@@ -173,28 +173,50 @@ internal fun SettingsPanel(
         ) {
         SheetDragHandle(sheetDrag, onDismiss, colors.card)
         Spacer(Modifier.height(14.dp))
-        Text("设置", color = colors.text, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Text(L.settings, color = colors.text, fontSize = 20.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(16.dp))
 
         // ==================== 外观 ====================
-        CollapsibleSection("外观", colors) {
-
+        CollapsibleSection(L.secAppearance, colors) {
+        // ---- 语言 / Language ----
+        Text(L.languageLabel, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        val langApp = LocalContext.current.applicationContext as android.app.Application
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ModeSwatch(L.langSystem, L.langSelection == "sys", colors,
+                modifier = Modifier.weight(1f)) {
+                L.setLanguage(langApp, null)
+            }
+            ModeSwatch(L.langChinese, L.langSelection == "zh", colors,
+                modifier = Modifier.weight(1f)) {
+                L.setLanguage(langApp, false)
+            }
+            ModeSwatch(L.langEnglish, L.langSelection == "en", colors,
+                modifier = Modifier.weight(1f)) {
+                L.setLanguage(langApp, true)
+            }
+        }
+        if (L.langSelection == "sys") {
+            Spacer(Modifier.height(6.dp))
+            Text(L.langSummary, color = colors.subText, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(14.dp))
         // ---- 明暗模式 ----
-        Text("明暗模式", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.darkMode, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ModeSwatch("深色", state.mode == IrisMode.DARK, colors,
+            ModeSwatch(L.modeDark, state.mode == IrisMode.DARK, colors,
                 modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.DARK) }
-            ModeSwatch("浅色", state.mode == IrisMode.LIGHT, colors,
+            ModeSwatch(L.modeLight, state.mode == IrisMode.LIGHT, colors,
                 modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.LIGHT) }
-            ModeSwatch("自动", state.mode == IrisMode.AUTO, colors,
+            ModeSwatch(L.modeAuto, state.mode == IrisMode.AUTO, colors,
                 modifier = Modifier.weight(1f)) { viewModel.setMode(IrisMode.AUTO) }
         }
 
         Spacer(Modifier.height(14.dp))
 
         // ---- 主题 ----
-        Text("主题", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.themeSection, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -224,10 +246,10 @@ internal fun SettingsPanel(
             Column {
                 Spacer(Modifier.height(14.dp))
                 // ---- 自定义配色（紧跟主题）----
-                Text("自定义配色", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(L.customColors, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "拖动滑块调配主色与次色，立即生效",
+                    L.customColorsNote,
                     color = colors.subText, fontSize = 11.sp
                 )
                 Spacer(Modifier.height(10.dp))
@@ -244,13 +266,13 @@ internal fun SettingsPanel(
         // 毛玻璃从独立开关并入这里：三者本质是同一维度（浮层背后怎么处理），
         // 拆成"材质选择 + 毛玻璃开关"会出现"实色 + 毛玻璃""液态玻璃 + 毛玻璃"这类
         // 语义打架的组合，后者还会把折射素材糊掉。
-        Text("界面材质", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.surfaceStyle, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
             when (state.surfaceStyle) {
-                IrisSurfaceStyle.SOLID -> "实色：不透明卡片，对比强、最省电"
-                IrisSurfaceStyle.FROSTED -> "毛玻璃：上栏与歌词层背景模糊，卡片仍是实色"
-                IrisSurfaceStyle.LIQUID -> "液态玻璃：真折射取样 + 色散 + 镜面内缘，最费性能"
+                IrisSurfaceStyle.SOLID -> L.surfaceSolidNote
+                IrisSurfaceStyle.FROSTED -> L.surfaceFrostedNote
+                IrisSurfaceStyle.LIQUID -> L.surfaceLiquidNote
             },
             color = colors.subText, fontSize = 11.sp
         )
@@ -275,17 +297,17 @@ internal fun SettingsPanel(
         ) {
             Column(Modifier.padding(top = 12.dp)) {
                 Text(
-                    "模糊浓度 · ${"%.1f".format(state.glassBlur)}×",
+                    L.frostBlur("%.1f".format(state.glassBlur)+"×"),
                     color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
                     when {
-                        state.glassBlur < 0.55f -> "清透：几乎能看清背后内容，最省电"
-                        state.glassBlur < 0.9f -> "轻薄：淡淡一层雾"
-                        state.glassBlur < 1.25f -> "标准（推荐）"
-                        state.glassBlur < 1.6f -> "厚重：背景只剩色块"
-                        else -> "极厚：糊成纯色，最费性能"
+                        state.glassBlur < 0.55f -> L.frostClear
+                        state.glassBlur < 0.9f -> L.frostLight
+                        state.glassBlur < 1.25f -> L.frostStandard
+                        state.glassBlur < 1.6f -> L.frostHeavy
+                        else -> L.frostMax
                     },
                     color = colors.subText, fontSize = 11.sp
                 )
@@ -304,15 +326,15 @@ internal fun SettingsPanel(
         // 独立于「模糊浓度」：那个管浮层背后的玻璃，这个管最底层封面本身糊多少，
         // 实色材质下也生效，所以不放在上面那个 AnimatedVisibility 里。
         Column(Modifier.padding(top = 14.dp)) {
-            Text("背景模糊 · ${state.bgBlur.toInt()}dp", color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(L.bgBlur(state.bgBlur.toInt()), color = colors.text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text(
                 when {
-                    state.bgBlur < 4f -> "关闭：封面原图直接当背景，最清晰也最抢眼"
-                    state.bgBlur < 18f -> "轻微：还看得出封面构图"
-                    state.bgBlur < 34f -> "适中：只剩色块与轮廓"
-                    state.bgBlur < 50f -> "标准（推荐）：纯色氛围底"
-                    else -> "极致：几乎是一片纯色"
+                    state.bgBlur < 4f -> L.blurOff
+                    state.bgBlur < 18f -> L.blurSlight
+                    state.bgBlur < 34f -> L.blurMedium
+                    state.bgBlur < 50f -> L.blurStandard
+                    else -> L.blurExtreme
                 },
                 color = colors.subText, fontSize = 11.sp
             )
@@ -330,11 +352,11 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(14.dp))
         // ---- 自定义背景 ----
-        Text("自定义背景", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.customBackground, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (state.customBackgroundUri != null) "已使用自选图片做背景（仍受上方「背景模糊」影响）"
-            else "不设则背景跟随当前专辑封面",
+            if (state.customBackgroundUri != null) L.customBgOn
+            else L.customBgOff,
             color = colors.subText, fontSize = 11.sp
         )
         Spacer(Modifier.height(10.dp))
@@ -347,7 +369,7 @@ internal fun SettingsPanel(
                     .clickable { Haptics.tap(); onPickBackground() },
                 contentAlignment = Alignment.Center
             ) {
-                Text("选择图片",
+                Text(L.pickImage,
                     fontSize = 13.sp, fontWeight = FontWeight.Bold,
                     color = if (state.theme == IrisTheme.CUSTOM) colors.primary.readableTextOn() else colors.primary)
             }
@@ -360,7 +382,7 @@ internal fun SettingsPanel(
                         .clickable { Haptics.tap(); viewModel.setCustomBackground(null) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("恢复封面", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.text)
+                    Text(L.resetCover, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.text)
                 }
             }
         }
@@ -368,15 +390,15 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(14.dp))
 
         // ---- 界面圆角 ----
-        Text("界面圆角", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.cornerRadius, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
             when {
-                state.cornerBase < 4f -> "直角：锐利硬朗"
-                state.cornerBase < 16f -> "微圆：克制内敛"
-                state.cornerBase < 30f -> "标准圆角"
-                state.cornerBase < 40f -> "大圆角：柔和饱满（推荐）"
-                else -> "极圆：接近胶囊"
+                state.cornerBase < 4f -> L.cornerSharp
+                state.cornerBase < 16f -> L.cornerSlight
+                state.cornerBase < 30f -> L.fontStandard
+                state.cornerBase < 40f -> L.cornerLarge
+                else -> L.cornerPill
             } + " · ${state.cornerBase.toInt()}dp",
             color = colors.subText, fontSize = 11.sp
         )
@@ -394,14 +416,14 @@ internal fun SettingsPanel(
         // 拖动时只改本地值，松手才提交全局——否则每次 onValueChange 都切 Density，
         // 触发整树重测量打断手势，表现为"拉不动"。
         var pendingFontScale by remember(state.fontScale) { mutableStateOf(state.fontScale) }
-        Text("字号大小", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.fontSize, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
             when {
-                pendingFontScale < 0.92f -> "偏小：紧凑省地"
-                pendingFontScale < 1.05f -> "标准（推荐）"
-                pendingFontScale < 1.18f -> "偏大：清晰易读"
-                else -> "特大：醒目护眼"
+                pendingFontScale < 0.92f -> L.fontSmall
+                pendingFontScale < 1.05f -> L.fontStandard
+                pendingFontScale < 1.18f -> L.fontLarge
+                else -> L.fontXL
             } + " · ${(pendingFontScale * 100).toInt()}%",
             color = colors.subText, fontSize = 11.sp
         )
@@ -417,25 +439,25 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(14.dp))
 
         // ---- 界面字体 ----
-        Text("界面字体", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.appFont, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ModeSwatch("系统", state.uiFont == 0, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(0) }
-            ModeSwatch("衬线", state.uiFont == 1, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(1) }
+            ModeSwatch(L.fontSystem, state.uiFont == 0, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(0) }
+            ModeSwatch(L.fontSerif, state.uiFont == 1, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(1) }
         }
         Spacer(Modifier.height(14.dp))
 
         // ---- 界面排布 ----
         // 和材质、配色一样是独立一维：这里决定"整个 App 长什么结构"。
         // 卡片模式下歌单和上栏都不存在，所以下面那些歌单相关的设置项要跟着藏起来。
-        Text("界面排布", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.layout, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
             when (state.layout) {
-                IrisLayout.LIST -> "纵向排布：歌单列表 + 右滑播放页，原有结构"
-                IrisLayout.CAROUSEL -> "横向排布：只剩播放卡片，左右滑动翻歌"
-                IrisLayout.STACK -> "堆叠排布：卡片叠成一沓，把最上面那张拖走切歌"
-                IrisLayout.COMPACT -> "唱片墙：正方形/长方形磁贴组成画布，可自由拖动探索"
+                IrisLayout.LIST -> L.layoutListNote
+                IrisLayout.CAROUSEL -> L.layoutCarouselNote
+                IrisLayout.STACK -> L.layoutStackNote
+                IrisLayout.COMPACT -> L.layoutCompactNote
             },
             color = colors.subText, fontSize = 11.sp
         )
@@ -461,36 +483,36 @@ internal fun SettingsPanel(
             exit = fadeOut() + shrinkVertically()
         ) {
             Column {
-                Text("列表行样式", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(L.rowStyle, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModeSwatch("紧凑", state.rowSize == 0, colors,
+                    ModeSwatch(L.rowCompact, state.rowSize == 0, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setRowSize(0) }
-                    ModeSwatch("标准", state.rowSize == 1, colors,
+                    ModeSwatch(L.rowStandard, state.rowSize == 1, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setRowSize(1) }
-                    ModeSwatch("宽松", state.rowSize == 2, colors,
+                    ModeSwatch(L.rowLoose, state.rowSize == 2, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setRowSize(2) }
                 }
 
                 Spacer(Modifier.height(14.dp))
 
-                SettingToggleRow("歌单行显示封面", state.showRowCover, colors) { viewModel.setShowRowCover(!state.showRowCover) }
+                SettingToggleRow(L.rowShowCover, state.showRowCover, colors) { viewModel.setShowRowCover(!state.showRowCover) }
 
                 Spacer(Modifier.height(10.dp))
-                SettingToggleRow("歌单行显示歌手", state.showRowArtist, colors,
-                    subtitle = "关闭后歌单行只显示歌名") { viewModel.setShowRowArtist(!state.showRowArtist) }
+                SettingToggleRow(L.rowShowArtist, state.showRowArtist, colors,
+                    subtitle = L.rowShowArtistOff) { viewModel.setShowRowArtist(!state.showRowArtist) }
 
                 Spacer(Modifier.height(10.dp))
-                SettingToggleRow("歌单行显示所属歌单", state.showRowPlaylist, colors,
-                    subtitle = "关闭后不再显示歌曲所在的收藏歌单") { viewModel.setShowRowPlaylist(!state.showRowPlaylist) }
+                SettingToggleRow(L.rowShowPlaylist, state.showRowPlaylist, colors,
+                    subtitle = L.rowShowPlaylistOff) { viewModel.setShowRowPlaylist(!state.showRowPlaylist) }
 
                 Spacer(Modifier.height(10.dp))
-                SettingToggleRow("搜索框常驻", state.searchPersistent, colors,
-                    subtitle = "关闭后上栏收起搜索框，点标题展开，闲置几秒自动收起") { viewModel.setSearchPersistent(!state.searchPersistent) }
+                SettingToggleRow(L.searchPinned, state.searchPersistent, colors,
+                    subtitle = L.searchPinnedOff) { viewModel.setSearchPersistent(!state.searchPersistent) }
 
                 Spacer(Modifier.height(10.dp))
-                SettingToggleRow("歌单行显示点赞角标", state.showLikedBadge, colors,
-                    subtitle = "已点赞的歌曲在右下角显示爱心") { viewModel.setShowLikedBadge(!state.showLikedBadge) }
+                SettingToggleRow(L.rowShowLikeBadge, state.showLikedBadge, colors,
+                    subtitle = L.rowShowLikeBadgeNote) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
             }
         }
 
@@ -499,13 +521,13 @@ internal fun SettingsPanel(
         } // 结束外观
 
         // ==================== 播放 ====================
-        CollapsibleSection("播放", colors) {
+        CollapsibleSection(L.secPlayback, colors) {
 
         SettingToggleRow(
-            "淡入淡出",
+            L.fadeInOut,
             state.fadeEnabled,
             colors,
-            subtitle = "开头音量渐起、结尾渐落，暂停也不再突兀"
+            subtitle = L.fadeInOutNote
         ) { viewModel.setFadeEnabled(!state.fadeEnabled) }
 
         // 时长滑块只在开启时出现：关闭状态下它没有意义，摆着反而干扰
@@ -516,7 +538,7 @@ internal fun SettingsPanel(
         ) {
             Column(Modifier.padding(top = 10.dp)) {
                 Text(
-                    "渐变时长 · ${"%.1f".format(state.fadeMs / 1000f)} 秒",
+                    L.fadeSeconds("%.1f".format(state.fadeMs / 1000f)),
                     color = colors.subText, fontSize = 11.sp
                 )
                 Spacer(Modifier.height(4.dp))
@@ -534,19 +556,19 @@ internal fun SettingsPanel(
 
         // ---- 无声略过（beta） ----
         SettingToggleRow(
-            "无声略过 · beta",
+            L.silenceSkip,
             state.silenceSkip,
             colors,
-            subtitle = "自动跳过歌曲开头和结尾没有声音的部分"
+            subtitle = L.silenceSkipNote
         ) { viewModel.setSilenceSkip(!state.silenceSkip) }
 
         Spacer(Modifier.height(10.dp))
 
         SettingToggleRow(
-            "上栏静止时隐藏",
+            L.topBarIdleHide,
             state.topBarAutoHide,
             colors,
-            subtitle = "完全静止时上栏淡到全透明，碰一下即回"
+            subtitle = L.topBarIdleHideNote
         ) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
 
         Spacer(Modifier.height(18.dp))
@@ -554,32 +576,32 @@ internal fun SettingsPanel(
         } // 结束播放
 
         // ==================== 歌词 ====================
-        CollapsibleSection("歌词", colors) {
+        CollapsibleSection(L.secLyrics, colors) {
 
         SettingToggleRow(
-            "封面歌词",
+            L.coverLyric,
             state.coverLyric,
             colors,
-            subtitle = "封面左下角单行歌词，换句时模糊渐隐渐出"
+            subtitle = L.coverLyricNote
         ) { viewModel.setCoverLyric(!state.coverLyric) }
         Spacer(Modifier.height(14.dp))
 
         SettingToggleRow(
-            "逐字流光",
+            L.karaoke,
             state.karaokeLyric,
             colors,
-            subtitle = "全屏歌词当前行按进度扫光点亮（无词级时间时按句长估算）"
+            subtitle = L.karaokeNote
         ) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
         Spacer(Modifier.height(14.dp))
         Column {
-            Text("歌词对齐", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(L.lyricAlign, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModeSwatch("靠左", state.lyricAlign == 0, colors,
+                ModeSwatch(L.alignLeft, state.lyricAlign == 0, colors,
                     modifier = Modifier.weight(1f)) { viewModel.setLyricAlign(0) }
-                ModeSwatch("居中", state.lyricAlign == 1, colors,
+                ModeSwatch(L.alignCenter, state.lyricAlign == 1, colors,
                     modifier = Modifier.weight(1f)) { viewModel.setLyricAlign(1) }
-                ModeSwatch("靠右", state.lyricAlign == 2, colors,
+                ModeSwatch(L.alignRight, state.lyricAlign == 2, colors,
                     modifier = Modifier.weight(1f)) { viewModel.setLyricAlign(2) }
             }
         }
@@ -587,17 +609,17 @@ internal fun SettingsPanel(
 
         // ---- 歌词字体 ----
         Column {
-            Text("歌词字体", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(L.lyricFont, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModeSwatch("系统", state.lyricFont == 0, colors, modifier = Modifier.weight(1f)) { viewModel.setLyricFont(0) }
-                ModeSwatch("衬线", state.lyricFont == 1, colors, modifier = Modifier.weight(1f)) { viewModel.setLyricFont(1) }
+                ModeSwatch(L.fontSystem, state.lyricFont == 0, colors, modifier = Modifier.weight(1f)) { viewModel.setLyricFont(0) }
+                ModeSwatch(L.fontSerif, state.lyricFont == 1, colors, modifier = Modifier.weight(1f)) { viewModel.setLyricFont(1) }
             }
         }
         Spacer(Modifier.height(14.dp))
 
         // ---- 歌词字号 ----
-        Text("歌词字号 · ${state.lyricFontSize.toInt()}sp", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.lyricFontSize(state.lyricFontSize.toInt()), color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         CompactSlider(
             value = state.lyricFontSize,
             onValueChange = { viewModel.setLyricFontSize(it) },
@@ -615,44 +637,44 @@ internal fun SettingsPanel(
         } // 结束歌词
 
         // ==================== 动效与反馈 ====================
-        CollapsibleSection("动效与反馈", colors) {
+        CollapsibleSection(L.secMotion, colors) {
 
         // ---- 触感反馈 ----
         SettingToggleRow(
-            "触感反馈",
+            L.haptics,
             state.hapticsEnabled,
             colors,
-            subtitle = "按键、切歌、拖动滚动条时轻微震动"
+            subtitle = L.hapticsNote
         ) { viewModel.setHapticsEnabled(!state.hapticsEnabled) }
 
         Spacer(Modifier.height(10.dp))
 
         // ---- 物理动效 ----
         SettingToggleRow(
-            "物理动效 · beta",
+            L.physicsMotion,
             state.tiltSpectrum || state.coverShake,
             colors,
-            subtitle = "倾斜频谱 + 摇动封面，传感器驱动"
+            subtitle = L.physicsMotionNote
         ) { viewModel.setPhysicsFx(!(state.tiltSpectrum || state.coverShake)) }
 
         Spacer(Modifier.height(10.dp))
 
         // ---- 灵动动效 ----
         SettingToggleRow(
-            "灵动动效",
+            L.springyMotion,
             state.jellyAnim,
             colors,
-            subtitle = "按钮、列表、卡片与面板采用更有弹性的过渡"
+            subtitle = L.springyMotionNote
         ) { viewModel.setJellyAnim(!state.jellyAnim) }
 
         Spacer(Modifier.height(10.dp))
 
         // ---- 低音马达震动（beta） ----
         SettingToggleRow(
-            "低音马达震动 · beta",
+            L.bassMotor,
             state.bassHaptics,
             colors,
-            subtitle = "跟随低频节奏轻微震动，幅度随鼓点强弱变化"
+            subtitle = L.bassMotorNote
         ) { viewModel.setBassHaptics(!state.bassHaptics) }
 
         // 强度档位只在开启时出现（同渐变时长的做法）
@@ -662,14 +684,14 @@ internal fun SettingsPanel(
             exit = fadeOut() + shrinkVertically()
         ) {
             Column(Modifier.padding(top = 10.dp)) {
-                Text("震动强度", color = colors.subText, fontSize = 11.sp)
+                Text(L.vibStrength, color = colors.subText, fontSize = 11.sp)
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModeSwatch("轻点", state.bassHapticsIntensity == 0, colors,
+                    ModeSwatch(L.vibLightTap, state.bassHapticsIntensity == 0, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(0) }
-                    ModeSwatch("标准", state.bassHapticsIntensity == 1, colors,
+                    ModeSwatch(L.rowStandard, state.bassHapticsIntensity == 1, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(1) }
-                    ModeSwatch("重击", state.bassHapticsIntensity == 2, colors,
+                    ModeSwatch(L.vibHeavyHit, state.bassHapticsIntensity == 2, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(2) }
                 }
 
@@ -678,10 +700,10 @@ internal fun SettingsPanel(
                 // 自适应：震动强度跟随鼓点力度、时长跟随鼓点时长，开启后隐藏手动时长档
                 Spacer(Modifier.height(4.dp))
                 SettingToggleRow(
-                    "自适应旋律",
+                    L.vibAdaptive,
                     state.bassHapticsAdaptive,
                     colors,
-                    subtitle = "强度随鼓点力度、时长随鼓点长短自动变化"
+                    subtitle = L.vibAdaptiveNote
                 ) { viewModel.setBassHapticsAdaptive(!state.bassHapticsAdaptive) }
 
                 // 单次震动时长仅在「自适应」关闭时显示（自适应时由鼓点时长接管）
@@ -695,19 +717,19 @@ internal fun SettingsPanel(
 
                         // 单次震动时长：三档（短/中/长 = 8/20/30ms），按钮替代滑条——
                         // 底部滑条手势竞争太强调不动，改成点选一档最稳。
-                        Text("单次震动时长", color = colors.subText, fontSize = 11.sp)
+                        Text(L.vibDuration, color = colors.subText, fontSize = 11.sp)
                         Spacer(Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             val dur = state.bassHapticsPulseMs
-                            ModeSwatch("短", dur <= 6, colors,
+                            ModeSwatch(L.vibShort, dur <= 6, colors,
                                 modifier = Modifier.weight(1f)) {
                                 viewModel.setBassHapticsPulseMs(4); BassHaptics.preview(state.bassHapticsIntensity)
                             }
-                            ModeSwatch("中", dur > 6 && dur < 15, colors,
+                            ModeSwatch(L.vibMedium, dur > 6 && dur < 15, colors,
                                 modifier = Modifier.weight(1f)) {
                                 viewModel.setBassHapticsPulseMs(10); BassHaptics.preview(state.bassHapticsIntensity)
                             }
-                            ModeSwatch("长", dur >= 15, colors,
+                            ModeSwatch(L.vibLong, dur >= 15, colors,
                                 modifier = Modifier.weight(1f)) {
                                 viewModel.setBassHapticsPulseMs(18); BassHaptics.preview(state.bassHapticsIntensity)
                             }
@@ -718,15 +740,15 @@ internal fun SettingsPanel(
                 Spacer(Modifier.height(10.dp))
 
                 // 触发灵敏度：三档（低/中/高）。始终可单独调节，不受自适应影响。
-                Text("触发灵敏度", color = colors.subText, fontSize = 11.sp)
+                Text(L.triggerSensitivity, color = colors.subText, fontSize = 11.sp)
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val sens = state.bassHapticsSensitivity
-                    ModeSwatch("低", sens <= 3, colors,
+                    ModeSwatch(L.sensLow, sens <= 3, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setBassHapticsSensitivity(3) }
-                    ModeSwatch("中", sens > 3 && sens < 7, colors,
+                    ModeSwatch(L.vibMedium, sens > 3 && sens < 7, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setBassHapticsSensitivity(5) }
-                    ModeSwatch("高", sens >= 7, colors,
+                    ModeSwatch(L.sensHigh, sens >= 7, colors,
                         modifier = Modifier.weight(1f)) { viewModel.setBassHapticsSensitivity(8) }
                 }
 
@@ -734,10 +756,10 @@ internal fun SettingsPanel(
 
                 // 低音截止频率：多少 Hz 以下算作"低音"（走底鼓闷震），120–320Hz 可调。
                 // 调高 → 更多中低频鼓（如厚底鼓/低 tom）归入低音走沉震；调低 → 只有最低的底鼓算低音。
-                Text("低音范围（截止频率）", color = colors.subText, fontSize = 11.sp)
+                Text(L.bassCutoff, color = colors.subText, fontSize = 11.sp)
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "${state.bassHapticsLowCutoff}Hz 以下算作低音（走沉震），以上走脆震",
+                    L.bassCutoffNote(state.bassHapticsLowCutoff),
                     color = colors.subText, fontSize = 10.sp
                 )
                 Spacer(Modifier.height(6.dp))
@@ -760,16 +782,16 @@ internal fun SettingsPanel(
         } // 结束动效与反馈
 
         // ==================== 推荐 ====================
-        CollapsibleSection("推荐", colors) {
+        CollapsibleSection(L.secRecs, colors) {
 
         // ---- 推荐探索度 ----
-        Text("推荐探索度", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.recExplore, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (state.exploration < 0.2f) "贴合口味：按相似度和历史喜好推荐"
-            else if (state.exploration < 0.5f) "均衡：偏好为主，偶尔新鲜"
-            else if (state.exploration < 0.8f) "探索为主：多推没听过的风格"
-            else "全随机：完全探索未知",
+            if (state.exploration < 0.2f) L.recSafe
+            else if (state.exploration < 0.5f) L.recBalanced
+            else if (state.exploration < 0.8f) L.recExploreMost
+            else L.recRandom,
             color = colors.subText, fontSize = 11.sp
         )
         Spacer(Modifier.height(8.dp))
@@ -783,10 +805,10 @@ internal fun SettingsPanel(
 
         Spacer(Modifier.height(10.dp))
         SettingToggleRow(
-            "歌单页显示推荐区",
+            L.showRecsOnPlaylists,
             state.showRecommendations,
             colors,
-            subtitle = "关闭后歌单页只显示歌曲列表"
+            subtitle = L.showRecsOff
         ) { viewModel.setShowRecommendations(!state.showRecommendations) }
 
         Spacer(Modifier.height(18.dp))
@@ -794,14 +816,14 @@ internal fun SettingsPanel(
         } // 结束推荐
 
         // ==================== 数据 ====================
-        CollapsibleSection("数据", colors) {
+        CollapsibleSection(L.secData, colors) {
 
         // ---- 指定文件夹 ----
-        Text("指定文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.scanFolder, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
         Text(
-            if (state.scanRoot != null) "当前限定：${state.scanRoot}\n曲库只包含该文件夹之内的歌曲，推荐与搜索同步收窄"
-            else "不限定则扫描整个共享存储；选择后只显示该文件夹之内（含子文件夹）的歌曲",
+            if (state.scanRoot != null) L.scanCurrent(state.scanRoot!!)
+            else L.scanUnsetNote,
             color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp
         )
         Spacer(Modifier.height(8.dp))
@@ -814,7 +836,7 @@ internal fun SettingsPanel(
                     .clickable { Haptics.tap(); folderPickerLauncher.launch(null) },
                 contentAlignment = Alignment.Center
             ) {
-                Text("选择文件夹", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                Text(L.pickFolder, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
             }
             if (state.scanRoot != null) {
                 Box(
@@ -825,7 +847,7 @@ internal fun SettingsPanel(
                         .clickable { Haptics.tap(); viewModel.setScanRoot(null) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("恢复全部", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.text)
+                    Text(L.restoreAll, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.text)
                 }
             }
         }
@@ -836,10 +858,10 @@ internal fun SettingsPanel(
         Spacer(Modifier.height(12.dp))
         // ---- 上栏排序行 ----
         SettingToggleRow(
-            "上栏显示排序",
+            L.topBarSort,
             state.showSortBar,
             colors,
-            subtitle = "关闭后上栏不再展开排序选项，界面更简洁"
+            subtitle = L.topBarSortOff
         ) { viewModel.setShowSortBar(!state.showSortBar) }
 
         // ---- 存储权限 ----
@@ -848,9 +870,9 @@ internal fun SettingsPanel(
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
             && !android.os.Environment.isExternalStorageManager()) {
             Spacer(Modifier.height(12.dp))
-            Text("存储权限", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(L.storagePerm, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
-            Text("未授予「所有文件访问」，曲库可能漏掉部分歌曲。", color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
+            Text(L.storagePermWarn, color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
             Spacer(Modifier.height(8.dp))
             Box(
                 Modifier
@@ -872,14 +894,14 @@ internal fun SettingsPanel(
                     },
                 contentAlignment = Alignment.Center
             ) {
-                Text("去开启", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                Text(L.goEnable, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
             }
         }
 
         Spacer(Modifier.height(14.dp))
 
         // ---- 文件夹 ----
-        Text("音乐文件夹", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(L.musicFolders, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
 
         LazyColumn(
@@ -887,15 +909,15 @@ internal fun SettingsPanel(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             item {
-                FolderRow("全部音乐", "${state.folders.sumOf { it.songCount }} 首",
+                FolderRow(L.allMusic, L.songs(state.folders.sumOf { it.songCount }),
                     state.selectedFolders.isEmpty() && !state.onlyLiked, colors) { viewModel.clearFolders(); viewModel.setOnlyLiked(false) }
             }
             item {
-                FolderRow("我的收藏", "${state.likedSongIds.size} 首",
+                FolderRow(L.myLikes, L.songs(state.likedSongIds.size),
                     state.onlyLiked, colors) { viewModel.setOnlyLiked(true) }
             }
             itemsIndexed(state.folders, key = { _, f -> "folder-${f.path}" }) { _, f ->
-                FolderRow(f.name, "${f.songCount} 首",
+                FolderRow(f.name, L.songs(f.songCount),
                     f.path in state.selectedFolders, colors) { viewModel.toggleFolder(f.path) }
             }
         }
@@ -905,10 +927,10 @@ internal fun SettingsPanel(
         } // 结束数据
 
         // ==================== 关于 ====================
-        CollapsibleSection("关于", colors) {
+        CollapsibleSection(L.about, colors) {
 
         Text(
-            "IRIS Music v${BuildConfig.VERSION_NAME}\n纯本地音乐播放器 · 不联网不上传\nKotlin + Jetpack Compose 构建",
+            L.aboutBody(BuildConfig.VERSION_NAME),
             color = colors.subText,
             fontSize = 12.sp,
             lineHeight = 18.sp
@@ -924,7 +946,7 @@ internal fun SettingsPanel(
         } // 结束关于
 
         // ==================== 我的数据 ====================
-        CollapsibleSection("我的数据", colors) {
+        CollapsibleSection(L.myData, colors) {
 
         DataTransferSection(colors, state.allSongs)
 
@@ -945,7 +967,7 @@ internal fun SettingsPanel(
                 .padding(vertical = 14.dp),
             contentAlignment = Alignment.Center
         ) {
-            Text("完成", color = colors.primary.readableTextOn(),
+            Text(L.done, color = colors.primary.readableTextOn(),
                 fontSize = 15.sp, fontWeight = FontWeight.Black)
         }
         Spacer(Modifier.height(18.dp))
@@ -1047,10 +1069,10 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true
-        status = "正在导出…"
+        status = L.exporting
         scope.launch {
             val ok = DataTransfer.export(ctx, uri, songs)
-            status = if (ok) "已导出到所选位置" else "导出失败"
+            status = if (ok) L.exported else L.exportFailed
             busy = false
         }
     }
@@ -1060,15 +1082,15 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
     ) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true
-        status = "正在导入…"
+        status = L.importing
         scope.launch {
             status = when (val r = DataTransfer.import(ctx, uri, songs)) {
                 is DataTransfer.ImportResult.Success -> {
                     val s = r.summary
-                    "导入完成：匹配 ${s.playedSongs} 首、点赞 ${s.likes}、歌单 ${s.playlists}、听歌记录 ${s.listenDays} 天"
+                    L.imported(s.playedSongs, s.likes, s.playlists, s.listenDays)
                 }
-                DataTransfer.ImportResult.BadFormat -> "导入失败：文件格式不是 IRIS Music 导出的数据"
-                DataTransfer.ImportResult.Failed -> "导入失败：文件无法读取"
+                DataTransfer.ImportResult.BadFormat -> L.importBadFormat
+                DataTransfer.ImportResult.Failed -> L.importUnreadable
             }
             busy = false
         }
@@ -1076,8 +1098,8 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
 
     Column {
         Text(
-            "把点赞、播放次数、听歌时长和歌单导出成 JSON 文件，换机或重装后导入即可恢复。" +
-                "导入按曲目匹配并取较大值合并，重复导入不会翻倍。全程本地读写，不联网。",
+            L.dataExportNote +
+                L.dataMergeNote,
             color = colors.subText,
             fontSize = 12.sp,
             lineHeight = 18.sp
@@ -1099,7 +1121,7 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "导出数据",
+                    L.exportData,
                     fontSize = 13.sp, fontWeight = FontWeight.Bold,
                     color = if (busy) colors.primary else colors.primary.readableTextOn()
                 )
@@ -1151,10 +1173,10 @@ private fun UpdateCheckSection(colors: IrisColors) {
 
     Column {
         SettingToggleRow(
-            "检查更新",
+            L.checkUpdate,
             enabled,
             colors,
-            subtitle = "开启后可手动检查 GitHub 上的新版本，仅此访问网络"
+            subtitle = L.checkUpdateNote
         ) {
             enabled = !enabled
             prefs.edit().putBoolean(UpdateChecker.KEY_ENABLED, enabled).apply()
@@ -1181,16 +1203,16 @@ private fun UpdateCheckSection(colors: IrisColors) {
                             .clickable(enabled = !checking) {
                                 Haptics.tap()
                                 checking = true
-                                statusText = "正在检查…"
+                                statusText = L.checking
                                 newTag = null
                                 scope.launch {
                                     when (val r = UpdateChecker.check()) {
                                         is UpdateChecker.Result.NewVersion -> {
                                             newTag = r.tag
-                                            statusText = "发现新版本 ${r.tag}"
+                                            statusText = L.newVersionFound(r.tag)
                                         }
-                                        UpdateChecker.Result.UpToDate -> statusText = "已是最新版本"
-                                        UpdateChecker.Result.Failed -> statusText = "检查失败：网络不可用或稍后再试"
+                                        UpdateChecker.Result.UpToDate -> statusText = L.upToDate
+                                        UpdateChecker.Result.Failed -> statusText = L.checkFailed
                                     }
                                     checking = false
                                 }
@@ -1198,7 +1220,7 @@ private fun UpdateCheckSection(colors: IrisColors) {
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            if (checking) "检查中…" else "检查更新",
+                            if (checking) L.checkingShort else L.checkUpdate,
                             fontSize = 13.sp, fontWeight = FontWeight.Bold,
                             color = if (checking) colors.primary else colors.primary.readableTextOn()
                         )
@@ -1231,7 +1253,7 @@ private fun UpdateCheckSection(colors: IrisColors) {
                                 },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("前往下载", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                            Text(L.goDownload, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                         }
                     }
                 }
@@ -1272,18 +1294,18 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
     fun writeBool(key: String, v: Boolean) = prefs.edit().putBoolean(key, v).apply()
     fun writeFloat(key: String, v: Float) = prefs.edit().putFloat(key, v).apply()
 
-    Text("悬浮歌词", color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    Text(L.floatLyric, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(4.dp))
     Text(
-        "在桌面/其它应用上方常驻显示当前歌词，单行可拖动移动位置",
+        L.floatLyricNote,
         color = colors.subText, fontSize = 11.sp
     )
     Spacer(Modifier.height(10.dp))
     SettingToggleRow(
-        "桌面悬浮歌词",
+        L.floatLyricSetting,
         enabled,
         colors,
-        subtitle = if (!granted) "尚未授予悬浮窗权限" else "常驻前台服务，退到后台也跟随"
+        subtitle = if (!granted) L.floatPermMissing else L.floatServiceNote
     ) {
         val next = !enabled
         enabled = next
@@ -1309,12 +1331,12 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
                         .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("去授予悬浮窗权限", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
+                    Text(L.goFloatPerm, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
                 }
             }
 
             Spacer(Modifier.height(10.dp))
-            Text("字号 · ${font.toInt()} sp", color = colors.subText, fontSize = 11.sp)
+            Text(L.floatFontSize(font.toInt()), color = colors.subText, fontSize = 11.sp)
             CompactSlider(
                 value = font,
                 onValueChange = { font = it; writeFloat(FloatingLyric.KEY_FONT, it) },
@@ -1324,7 +1346,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             )
 
             Spacer(Modifier.height(10.dp))
-            Text("长度 · ${(widthFrac * 100).toInt()}% 屏宽", color = colors.subText, fontSize = 11.sp)
+            Text(L.floatWidth((widthFrac * 100).toInt()), color = colors.subText, fontSize = 11.sp)
             CompactSlider(
                 value = widthFrac,
                 onValueChange = { widthFrac = it; writeFloat(FloatingLyric.KEY_WIDTH, it) },
@@ -1334,7 +1356,7 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
             )
 
             Spacer(Modifier.height(10.dp))
-            Text("黑底透明度 · ${(bg * 100).toInt()}%", color = colors.subText, fontSize = 11.sp)
+            Text(L.floatBgAlpha((bg * 100).toInt()), color = colors.subText, fontSize = 11.sp)
             CompactSlider(
                 value = bg,
                 onValueChange = { bg = it; writeFloat(FloatingLyric.KEY_BG, it) },
@@ -1636,22 +1658,22 @@ private fun CustomColorSection(
     }
 
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        ColorPreviewBox(argbOf(primaryHsv), "主色", !editSecondary, colors,
+        ColorPreviewBox(argbOf(primaryHsv), L.colorPrimary, !editSecondary, colors,
             Modifier.weight(1f)) { editSecondary = false }
-        ColorPreviewBox(argbOf(secondaryHsv), "次色", editSecondary, colors,
+        ColorPreviewBox(argbOf(secondaryHsv), L.colorSecondary, editSecondary, colors,
             Modifier.weight(1f)) { editSecondary = true }
     }
     Spacer(Modifier.height(12.dp))
 
-    Text("色相 · ${activeHsv[0].toInt()}", color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    Text(L.hue(activeHsv[0].toInt()), color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     CompactSlider(value = activeHsv[0], onValueChange = { onSlider(0, it) },
         valueRange = 0f..360f, activeColor = colors.primary, inactiveColor = colors.surface)
     Spacer(Modifier.height(8.dp))
-    Text("饱和度 · ${(activeHsv[1] * 100).toInt()}%", color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    Text(L.saturation((activeHsv[1] * 100).toInt()), color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     CompactSlider(value = activeHsv[1], onValueChange = { onSlider(1, it) },
         valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
     Spacer(Modifier.height(8.dp))
-    Text("明度 · ${(activeHsv[2] * 100).toInt()}%", color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    Text(L.brightness((activeHsv[2] * 100).toInt()), color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     CompactSlider(value = activeHsv[2], onValueChange = { onSlider(2, it) },
         valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
 }

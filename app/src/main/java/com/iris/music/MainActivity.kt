@@ -35,6 +35,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // i18n：在任何 Compose 内容之前确定语言（读取偏好/系统 locale）
+        com.iris.music.ui.L.init(application)
         requestNeededPermissions()
         enableImmersiveMode()
 

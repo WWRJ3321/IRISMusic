@@ -1,5 +1,7 @@
 package com.iris.music.data
 
+import com.iris.music.ui.L
+
 import android.content.Context
 import android.content.SharedPreferences
 
@@ -50,7 +52,7 @@ object Playlists {
     fun create(name: String): Long = synchronized(writeLock) {
         val id = prefs.getLong(KEY_NEXT_ID, 1L)
         val cur = readNamesMap()
-        cur[id] = name.trim().ifBlank { "歌单 $id" }
+        cur[id] = name.trim().ifBlank { L.autoPlaylistName(id) }
         writeNames(cur)
         prefs.edit().putLong(KEY_NEXT_ID, id + 1).apply()
         cachedPlaylists = null
@@ -61,7 +63,7 @@ object Playlists {
     fun rename(playlistId: Long, newName: String): Boolean = synchronized(writeLock) {
         val cur = readNamesMap()
         if (playlistId !in cur) return@synchronized false
-        cur[playlistId] = newName.trim().ifBlank { "歌单 $playlistId" }
+        cur[playlistId] = newName.trim().ifBlank { L.autoPlaylistName(playlistId) }
         writeNames(cur)
         cachedPlaylists = null
         true

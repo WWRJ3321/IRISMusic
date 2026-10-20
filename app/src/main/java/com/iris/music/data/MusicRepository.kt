@@ -1,5 +1,7 @@
 package com.iris.music.data
 
+import com.iris.music.ui.L
+
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -196,7 +198,7 @@ object MusicRepository {
             albumArtUri = null,  // 封面由 ArtworkLoader 直接从文件读内嵌图
             filePath = path,
             folderPath = parent,
-            folderName = parent.substringAfterLast('/', "根目录").ifEmpty { "根目录" }
+            folderName = parent.substringAfterLast('/', L.rootFolder).ifEmpty { L.rootFolder }
         )
     }
 
@@ -232,7 +234,7 @@ object MusicRepository {
             val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
                 ?.takeIf { it.isNotBlank() } ?: file.nameWithoutExtension
             val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-                ?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: "未知艺术家"
+                ?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: L.unknownArtist
             val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
                 ?.takeIf { it.isNotBlank() } ?: ""
             MetaEntry(file.length(), file.lastModified(), durationMs, title, artist, album)
