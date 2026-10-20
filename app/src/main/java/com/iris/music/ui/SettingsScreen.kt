@@ -176,12 +176,10 @@ internal fun SettingsPanel(
         Text(L.settings, color = colors.text, fontSize = 20.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(16.dp))
 
-        // ==================== 外观 ====================
-        CollapsibleSection(L.secAppearance, colors) {
-        // ---- 语言 / Language ----
-        Text(L.languageLabel, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
+        // ==================== 语言 / Language ====================
+        CollapsibleSection(L.languageLabel, colors) {
         val langApp = LocalContext.current.applicationContext as android.app.Application
+        Spacer(Modifier.height(2.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ModeSwatch(L.langSystem, L.langSelection == "sys", colors,
                 modifier = Modifier.weight(1f)) {
@@ -200,7 +198,11 @@ internal fun SettingsPanel(
             Spacer(Modifier.height(6.dp))
             Text(L.langSummary, color = colors.subText, fontSize = 11.sp)
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(18.dp))
+        } // 结束语言
+
+        // ==================== 外观 ====================
+        CollapsibleSection(L.secAppearance, colors) {
         // ---- 明暗模式 ----
         Text(L.darkMode, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
