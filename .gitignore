@@ -66,3 +66,6 @@ sfx/
 
 # 截图原 jpg（带 EXIF、README 未引用）仅留本机，发布物只用 _f.png
 docs/screenshots/*.jpg
+
+# 源码归档 zip 不进库（发布物只含源码）
+*.zip

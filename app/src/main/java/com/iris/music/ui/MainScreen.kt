@@ -295,6 +295,7 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                     onCycleLayout = { viewModel.setLayout(state.layout.next) },
                     onOpenPlaylists = { showPlaylists = true },
                     onReload = { viewModel.reloadLibrary() },
+                    onAddToPlaylist = { song -> pendingAddSong = song },
                     eqActive = eqState.active
                 )
             } else {
@@ -1299,6 +1300,8 @@ private fun LibraryPage(
                     Column {
                         Spacer(Modifier.height(6.dp))
                         val countLabel = when {
+                            state.activePlaylistId == Playlists.LIKED_PLAYLIST_ID ->
+                                "♥ 我喜欢 · ${state.queue.size} 首"
                             state.activePlaylistId != null ->
                                 state.playlists.firstOrNull { it.id == state.activePlaylistId }?.let { "歌单「${it.name}」· ${state.queue.size} 首" } ?: "${state.queue.size} 首"
                             state.selectedFolders.isNotEmpty() -> "${state.queue.size} 首 · 已选 ${state.selectedFolders.size} 个文件夹"

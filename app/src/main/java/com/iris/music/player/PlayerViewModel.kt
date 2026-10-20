@@ -381,8 +381,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val allPlaylists = Playlists.all()
         // 恢复上次选中的歌单：存盘里的 ID 必须仍存在于歌单列表才采纳，
         // 否则（歌单已被删）回落到全部视图，避免指向不存在的歌单。
-        val restoredActive = prefs.getLong(KEY_ACTIVE_PLAYLIST, -1L)
-            .takeIf { id -> id >= 0 && allPlaylists.any { it.id == id } }
+        // 「我喜欢」是虚拟歌单，不在 allPlaylists 里，单独放行。
+        val restoredActive = prefs.getLong(KEY_ACTIVE_PLAYLIST, -1L).takeIf { id ->
+            id == Playlists.LIKED_PLAYLIST_ID || allPlaylists.any { it.id == id }
+        }
         _state.value = _state.value.copy(
             likedSongIds = PlayHistory.getLikes(),
             playlists = allPlaylists,
@@ -755,23 +757,42 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         refreshPlaylists()
     }
 
-    /** 选中歌单（null = 回到文件夹/收藏视图） */
+    /**
+     * 选中歌单（null = 回到文件夹视图）。
+     * 传 [Playlists.LIKED_PLAYLIST_ID] 即进入「我喜欢」虚拟歌单。
+     */
     fun selectPlaylist(playlistId: Long?) {
         _state.value = _state.value.copy(activePlaylistId = playlistId)
         prefs.edit().putLong(KEY_ACTIVE_PLAYLIST, playlistId ?: -1L).apply()
         applyFilters(resetToFirst = true)
     }
-
-    /** 把一首歌加入歌单 */
+    /**
+     * 把一首歌加入歌单。
+     *
+     * [Playlists.LIKED_PLAYLIST_ID] 是「我喜欢」虚拟歌单：它的数据源就是红心集合，
+     * 所以「加入我喜欢」= 点赞，而不是往自定义歌单表里多写一条。
+     */
     fun addToPlaylist(playlistId: Long, songId: Long) {
+        if (playlistId == Playlists.LIKED_PLAYLIST_ID) {
+            setLiked(songId, true)
+            return
+        }
         Playlists.addSong(playlistId, songId)
         refreshPlaylists()
         // 若当前正显示该歌单，需要把新歌加入队列
         if (_state.value.activePlaylistId == playlistId) applyFilters(resetToFirst = false)
     }
-
-    /** 把一首歌从歌单移除 */
+    /**
+     * 把一首歌移出歌单（「我喜欢」= 取消点赞）。
+     *
+     * 移出当前正在播的那首会连带重建播放队列（显示列表与队列同源），
+     * 这是点「移出」的预期后果，不做二次确认；UI 文案已写明。
+     */
     fun removeFromPlaylist(playlistId: Long, songId: Long) {
+        if (playlistId == Playlists.LIKED_PLAYLIST_ID) {
+            setLiked(songId, false)
+            return
+        }
         Playlists.removeSong(playlistId, songId)
         refreshPlaylists()
         if (_state.value.activePlaylistId == playlistId) applyFilters(resetToFirst = false)
@@ -1148,17 +1169,27 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ==================== 点赞 ====================
-
     fun toggleLike(songId: Long) {
+        setLiked(songId, songId !in _state.value.likedSongIds)
+    }
+    /**
+     * 点赞的唯一落点：写盘 + 状态 + 推荐缓存 + 视图同步。
+     *
+     * 红心集合同时是「我喜欢」虚拟歌单的数据源，所以两种视图
+     * （旧收藏开关 onlyLiked / activePlaylistId==我喜欢）都要跟着重刷，
+     * 否则在「我喜欢」里点心取消，那首歌还留在屏上。
+     */
+    private fun setLiked(songId: Long, liked: Boolean) {
+        if ((songId in _state.value.likedSongIds) == liked) return
         PlayHistory.toggleLike(songId)
         _state.value = _state.value.copy(likedSongIds = PlayHistory.getLikes())
-        // 点赞变化后立即刷新推荐
+        // 点赞是单项最强信号（×1.5），不失效缓存的话推荐结果不会变
         updateRecommendations()
-        // 收藏筛选模式下点赞取消后要重新过滤队列
-        if (_state.value.onlyLiked) applyFilters(resetToFirst = false)
+        if (_state.value.onlyLiked ||
+            _state.value.activePlaylistId == Playlists.LIKED_PLAYLIST_ID
+        ) applyFilters(resetToFirst = false)
     }
-
-    /** 队列仅显示点赞歌曲（我的收藏） */
+    /** 队列仅显示点赞歌曲（旧「我的收藏」开关） */
     fun setOnlyLiked(only: Boolean) {
         _state.value = _state.value.copy(onlyLiked = only)
         applyFilters(resetToFirst = true)
@@ -1506,10 +1537,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
         var list = s.allSongs
 
-        // 自定义歌单优先：选中歌单时只显示歌单内的歌（按加入顺序），
-        // 与文件夹/收藏筛选互斥。
+        // 自定义歌单优先：选中歌单时只显示歌单内的歌（按加入顺序），与文件夹筛选互斥。
+        // 「我喜欢」是同一入口下的虚拟歌单，数据源是红心集合。
         val activePid = _state.value.activePlaylistId
-        if (activePid != null) {
+        if (activePid == Playlists.LIKED_PLAYLIST_ID) {
+            list = list.filter { it.id in _state.value.likedSongIds }
+        } else if (activePid != null) {
             val ids = Playlists.songs(activePid).toSet()
             list = list.filter { it.id in ids }
         } else {

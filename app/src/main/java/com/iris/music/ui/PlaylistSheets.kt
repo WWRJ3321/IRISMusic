@@ -155,11 +155,24 @@ internal fun PlaylistSheet(
                     }
                     Spacer(Modifier.height(16.dp))
 
-                    // 视图切换：全部音乐（文件夹/收藏）优先置顶
+                    // 视图切换：全部音乐优先置顶
                     val showAll = state.activePlaylistId == null
                     FolderRow("全部音乐", "${state.allSongs.size} 首", showAll, colors) {
                         onSelect(null)
                     }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    // 「我喜欢」：红心集合以歌单形态出现在同一个列表里，
+                    // 数据源仍是 PlayHistory 的红心，不额外占存储。
+                    // 恒存在列表第二位，不可删除、不可重命名。
+                    val likedCount = state.likedSongIds.size
+                    FolderRow(
+                        "♥ 我喜欢",
+                        "$likedCount 首",
+                        state.activePlaylistId == Playlists.LIKED_PLAYLIST_ID,
+                        colors
+                    ) { onSelect(Playlists.LIKED_PLAYLIST_ID) }
 
                     Spacer(Modifier.height(6.dp))
 
@@ -383,6 +396,51 @@ private fun PlaylistRow(
 }
 
 // ==================== 添加到歌单弹层 ====================
+/**
+ * 「加入歌单」弹层里的一行：歌单名 + 状态文字 + 点按加入/移出。
+ * 自定义歌单与「我喜欢」虚拟歌单共用同一套外观与交互。
+ */
+@Composable
+private fun AddRow(
+    name: String,
+    trailing: String,
+    alreadyIn: Boolean,
+    colors: IrisColors,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .irisSurface(
+                level = GlassLevel.ROW,
+                colors = colors,
+                shape = IrisShape.item,
+                accent = if (alreadyIn) colors.primary else null
+            )
+            // 已加入 → 点按移出；未加入 → 点按加入。两边都不关弹层，
+            // 状态实时翻转，可在同一屏连续编排多个歌单。
+            .clickable { Haptics.tap(); onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            name,
+            Modifier.weight(1f),
+            color = colors.text,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            trailing,
+            color = if (alreadyIn) accent else colors.subText,
+            fontSize = 11.sp,
+            fontWeight = if (alreadyIn) FontWeight.Bold else FontWeight.Medium
+        )
+    }
+}
 
 /**
  * 长按歌曲后弹出的「添加到歌单」弹层。
@@ -428,52 +486,39 @@ internal fun AddToPlaylistSheet(
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(16.dp))
+// 「我喜欢」置顶：它就是歌单体系里那条虚拟歌单，数据源是红心集合。
+                    // 行为与自定义歌单完全一致——点心即加入这里，再点移出。
+                    val likedIn = song.id in state.likedSongIds
+                    AddRow(
+                        name = "♥ 我喜欢",
+                        trailing = if (likedIn) "已喜欢 · 点按移出" else "点按喜欢",
+                        alreadyIn = likedIn,
+                        colors = colors,
+                        accent = accent,
+                        onClick = {
+                            if (likedIn) onRemove(Playlists.LIKED_PLAYLIST_ID)
+                            else onAdd(Playlists.LIKED_PLAYLIST_ID)
+                        }
+                    )
+                    Spacer(Modifier.height(4.dp))
 
                     if (state.playlists.isEmpty()) {
                         Text(
-                            "还没有歌单，点下方「新建歌单」创建一个",
+                            "还没有歌单，点下方「新建歌单」创建一个吧",
                             color = colors.subText,
                             fontSize = 13.sp
                         )
                     } else {
-                        // 已在该歌单的提示
                         state.playlists.forEach { p ->
                             val alreadyIn = Playlists.contains(p.id, song.id)
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .irisSurface(
-                                        level = GlassLevel.ROW,
-                                        colors = colors,
-                                        shape = IrisShape.item,
-                                        accent = if (alreadyIn) colors.primary else null
-                                    )
-                                    .clickable {
-                                        Haptics.tap()
-                                        // 已加入 → 点按移出；未加入 → 点按加入。
-                                        // 加入/移出都不关弹层，可在同一屏连续操作多个歌单。
-                                        if (alreadyIn) onRemove(p.id) else onAdd(p.id)
-                                    }
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    p.name,
-                                    Modifier.weight(1f),
-                                    color = colors.text,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    // 旧版"已加入"行不可点，只能加不能移——现在点它即移出
-                                    if (alreadyIn) "已加入 · 点按移出" else "${p.songCount} 首",
-                                    color = if (alreadyIn) accent else colors.subText,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (alreadyIn) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
+                            AddRow(
+                                name = p.name,
+                                trailing = if (alreadyIn) "已加入 · 点按移出" else "${p.songCount} 首",
+                                alreadyIn = alreadyIn,
+                                colors = colors,
+                                accent = accent,
+                                onClick = { if (alreadyIn) onRemove(p.id) else onAdd(p.id) }
+                            )
                             Spacer(Modifier.height(4.dp))
                         }
                     }

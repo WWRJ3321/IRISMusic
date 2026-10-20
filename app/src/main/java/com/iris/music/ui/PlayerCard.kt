@@ -12,7 +12,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -70,6 +72,7 @@ import com.iris.music.ui.theme.readableTextOn
 import com.iris.music.player.PlayerViewModel
 
 /** 中央播放器卡片：白色圆角卡片 + 封面 + 标题/作者 + 进度条 + 时间 + 三枚圆角矢量按钮 + 副控制 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PlayerCard(
     title: String,
@@ -117,7 +120,8 @@ fun PlayerCard(
      * 拖动类手势——进度条的水平拖动会把翻页 / 抽卡手势整段吃掉，旁边的卡一拖就变成
      * 给当前歌曲 seek。非活动卡只保留点击（点一下跳到那首）。
      */
-    interactive: Boolean = true
+    interactive: Boolean = true,
+    onAddToPlaylist: () -> Unit = {}
 ) {
     // 深色模式：深色卡片 + 白字 + 白图标；浅色模式：白色卡片 + 黑字 + 黑图标
     val cardColor = if (colors.isDark) Color(0xFF1E1E26) else Color(0xFFFFFFFF)
@@ -160,6 +164,9 @@ fun PlayerCard(
 
     Box(
         modifier = modifier
+            // 长按卡片空白处 →「加入歌单」。onClick 传空 lambda：不拦子级按钮的点击
+            // （子级 clickable 优先消费事件），只有空白区域的长按会落到这里。
+            .combinedClickable(onClick = {}, onLongClick = { Haptics.click(); onAddToPlaylist() })
             // 横屏窄化：内容不再拉满整个横屏宽度，统一封顶后由外层 Column 居中。
             // 竖屏保持 fillMaxWidth 原样（竖屏宽度本就小于封顶值，但 tablet 竖屏
             // 可能超过，所以只在横屏生效）。

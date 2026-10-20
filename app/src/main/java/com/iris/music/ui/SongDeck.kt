@@ -4,10 +4,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -107,6 +108,7 @@ fun SongDeck(
     onCycleLayout: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onReload: () -> Unit,
+    onAddToPlaylist: (Song) -> Unit,
     eqActive: Boolean
 ) {
     val glass = isLiquidGlass
@@ -306,6 +308,7 @@ fun SongDeck(
                                     onOpenEqualizer = onOpenEqualizer,
                                     onOpenSleepTimer = onOpenSleepTimer,
                                     onClickArtwork = openLyrics,
+                                    onAddToPlaylist = onAddToPlaylist,
                                     eqActive = eqActive,
                                     landscape = true
                                 )
@@ -325,6 +328,7 @@ fun SongDeck(
                             onOpenEqualizer = onOpenEqualizer,
                             onOpenSleepTimer = onOpenSleepTimer,
                             onClickArtwork = openLyrics,
+                            onAddToPlaylist = onAddToPlaylist,
                             eqActive = eqActive
                         )
                         }
@@ -343,6 +347,7 @@ fun SongDeck(
                             onOpenEqualizer = onOpenEqualizer,
                             onOpenSleepTimer = onOpenSleepTimer,
                             onClickArtwork = openLyrics,
+                            onAddToPlaylist = onAddToPlaylist,
                             eqActive = eqActive
                         )
                     }
@@ -533,6 +538,7 @@ private val CoverPageSize = object : PageSize {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DeckCarousel(
+    onAddToPlaylist: (Song) -> Unit = {},
     state: PlayerUiState,
     colors: IrisColors,
     onToggle: () -> Unit,
@@ -703,6 +709,7 @@ private fun DeckCarousel(
                 state = state,
                 colors = colors,
                 onActivate = { onSelect(page) },
+                onAddToPlaylist = onAddToPlaylist,
                 onToggle = onToggle,
                 onPrev = onPrev,
                 onNext = onNext,
@@ -778,6 +785,7 @@ private val STACK_SWIPE_MIN = 24.dp
 
 @Composable
 private fun DeckStack(
+    onAddToPlaylist: (Song) -> Unit = {},
     state: PlayerUiState,
     colors: IrisColors,
     onToggle: () -> Unit,
@@ -1099,6 +1107,7 @@ private fun DeckStack(
                         onOpenEqualizer = onOpenEqualizer,
                         onOpenSleepTimer = onOpenSleepTimer,
                         onClickArtwork = onClickArtwork,
+                        onAddToPlaylist = onAddToPlaylist,
                         eqActive = eqActive,
                         fullWidth = false
                     )
@@ -1126,6 +1135,7 @@ private fun DeckStack(
  */
 @Composable
 private fun DeckCompact(
+    onAddToPlaylist: (Song) -> Unit = {},
     state: PlayerUiState,
     colors: IrisColors,
     onToggle: () -> Unit,
@@ -1166,7 +1176,8 @@ private fun DeckCompact(
                     active = index == state.currentIndex,
                     playing = index == state.currentIndex && state.isPlaying,
                     colors = colors,
-                    onClick = { onSelect(index) }
+                    onClick = { onSelect(index) },
+                    onAddToPlaylist = { onAddToPlaylist(song) }
                 )
             }
         }
@@ -1256,13 +1267,15 @@ private fun DeckCompact(
 
 /** 紧凑模式的歌曲行：序号/跳动条 + 标题 + 元信息，无封面无点赞（Folia 式极简） */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun CompactSongRow(
     song: Song,
     index: Int,
     active: Boolean,
     playing: Boolean,
     colors: IrisColors,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onAddToPlaylist: (Song) -> Unit = {}
 ) {
     Row(
         Modifier
@@ -1274,10 +1287,11 @@ private fun CompactSongRow(
                 solid = if (active) colors.row.copy(alpha = 0.8f) else colors.row,
                 accent = if (active) colors.primary else null
             )
-            .clickable(
+            .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                onClick = { Haptics.tap(); onClick() }
+                onClick = { Haptics.tap(); onClick() },
+                onLongClick = { Haptics.click(); onAddToPlaylist(song) }
             )
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1516,6 +1530,7 @@ private fun DeckCard(
     onOpenEqualizer: () -> Unit,
     onOpenSleepTimer: () -> Unit,
     onClickArtwork: () -> Unit,
+    onAddToPlaylist: (Song) -> Unit,
     eqActive: Boolean,
     modifier: Modifier = Modifier,
     /** true 时自己撑满可用宽度（横向排布由 Pager 给宽度），false 时由外层控制 */
@@ -1544,6 +1559,7 @@ private fun DeckCard(
             onToggleLike = { if (isCurrent) onToggleLike(song.id) else onActivate() },
             liked = song.id in state.likedSongIds,
             onClickArtwork = if (isCurrent) onClickArtwork else onActivate,
+            onAddToPlaylist = { onAddToPlaylist(song) },
             colors = colors,
             modifier = Modifier.fillMaxWidth(),
             sleepTimerMs = state.sleepTimerMs,

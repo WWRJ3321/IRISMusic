@@ -100,6 +100,18 @@ object Playlists {
         true
     }
 
+    /**
+     * 「我喜欢」在歌单体系里的虚拟 ID。
+     *
+     * 红心（ liked ）本身仍存在 PlayHistory 里，这里是把同一份数据以歌单的形态
+     * 暴露出来：歌单面板多一条恒存在的置顶条目，点开即只看红心的歌，
+     * 长按任意歌曲也能像普通歌单那样把歌「加进我喜欢」。
+     *
+     * 取 -2：真实歌单 ID 从 1 递增（见 KEY_NEXT_ID），-1 已被「未选中歌单」占用。
+     * 这个 ID 不写进 names JSON，因此永远不会与真实歌单冲突，也不会被删除。
+     */
+    const val LIKED_PLAYLIST_ID = -2L
+
     /** 歌曲是否在歌单中 */
     fun contains(playlistId: Long, songId: Long): Boolean = songId in songs(playlistId)
 
