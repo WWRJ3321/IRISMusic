@@ -160,6 +160,8 @@ data class PlayerUiState(
     val fadeMs: Long = 2000L,
     /** 触感反馈开关 */
     val hapticsEnabled: Boolean = true,
+    /** 拖动刻度震动（进度条/唱片墙滑动）独立开关 */
+    val hapticsDrag: Boolean = true,
     /** 歌单页显示"为你推荐"区域 */
     val showRecommendations: Boolean = true,
     /** 上栏排序行显示开关（关闭后上栏不再展开排序胶囊） */
@@ -266,6 +268,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             fadeEnabled = prefs.getBoolean(FadeController.KEY_ENABLED, false),
             fadeMs = prefs.getLong(FadeController.KEY_FADE_MS, FadeController.DEFAULT_FADE_MS),
             hapticsEnabled = prefs.getBoolean(Haptics.KEY_ENABLED, true),
+            hapticsDrag = prefs.getBoolean(Haptics.KEY_DRAG_ENABLED, true),
             showRecommendations = prefs.getBoolean(KEY_SHOW_RECS, true),
             showSortBar = prefs.getBoolean(KEY_SHOW_SORT_BAR, true),
             jellyAnim = prefs.getBoolean(KEY_JELLY_ANIM, false),
@@ -1014,6 +1017,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(hapticsEnabled = enabled)
         // 打开时立刻给一次反馈，让用户当场感知强度
         if (enabled) Haptics.click()
+    }
+    /** 拖动刻度震动独立开关（进度条/唱片墙滑动） */
+    fun setHapticsDrag(enabled: Boolean) {
+        prefs.edit().putBoolean(Haptics.KEY_DRAG_ENABLED, enabled).apply()
+        Haptics.dragEnabled = enabled
+        _state.value = _state.value.copy(hapticsDrag = enabled)
+        if (enabled) Haptics.drag()
     }
 
     /** 歌单页"为你推荐"区域显示开关 */

@@ -640,7 +640,6 @@ internal fun SettingsPanel(
 
         // ==================== 动效与反馈 ====================
         CollapsibleSection(L.secMotion, colors) {
-
         // ---- 触感反馈 ----
         SettingToggleRow(
             L.haptics,
@@ -648,6 +647,16 @@ internal fun SettingsPanel(
             colors,
             subtitle = L.hapticsNote
         ) { viewModel.setHapticsEnabled(!state.hapticsEnabled) }
+
+        Spacer(Modifier.height(6.dp))
+        // ---- 拖动刻度震动 ----
+        SettingToggleRow(
+            L.hapticsDrag,
+            state.hapticsDrag,
+            colors,
+            subtitle = L.hapticsDragNote
+        ) { viewModel.setHapticsDrag(!state.hapticsDrag) }
+
 
         Spacer(Modifier.height(10.dp))
 

@@ -1182,6 +1182,7 @@ private fun NeonProgressBar(
                     }
                     .pointerInput(Unit) {
                         detectHorizontalDragGestures { change, _ ->
+                            Haptics.drag()
                             onSeek((change.position.x / size.width).coerceIn(0f, 1f))
                         }
                     }

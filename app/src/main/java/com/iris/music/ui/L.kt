@@ -391,6 +391,8 @@ object L {
     val secMotion get() = if (zh) "动效与反馈" else "Motion & feedback"
     val haptics get() = if (zh) "触感反馈" else "Haptic feedback"
     val hapticsNote get() = if (zh) "按键、切歌、拖动滚动条时轻微震动" else "A light buzz on taps, track changes and scrubbing"
+    val hapticsDrag get() = if (zh) "拖动刻度震动" else "Scrub haptics"
+    val hapticsDragNote get() = if (zh) "拖动进度条、滑动唱片墙时每格轻震" else "Subtle ticks while scrubbing the seek bar or sliding the poster wall"
     val physicsMotion get() = if (zh) "物理动效 · beta" else "Physical motion · beta"
     val physicsMotionNote get() = if (zh) "倾斜频谱 + 摇动封面，传感器驱动" else "Tilting spectrum + shakeable cover, sensor-driven"
     val springyMotion get() = if (zh) "灵动动效" else "Springy motion"

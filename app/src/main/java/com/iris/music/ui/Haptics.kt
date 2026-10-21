@@ -17,9 +17,14 @@ object Haptics {
 
     const val PREFS = "iris_prefs"
     const val KEY_ENABLED = "haptics_enabled"
+    const val KEY_DRAG_ENABLED = "haptics_drag_enabled"
 
     @Volatile
     var enabled: Boolean = true
+
+    /** 拖动类刻度震动（进度条/唱片墙滑动）独立开关，默认开 */
+    @Volatile
+    var dragEnabled: Boolean = true
 
     private var vibrator: Vibrator? = null
     private var lastTickAt = 0L
@@ -27,6 +32,8 @@ object Haptics {
     fun init(context: Context) {
         enabled = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_ENABLED, true)
+        dragEnabled = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_DRAG_ENABLED, true)
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)
                 ?.defaultVibrator
@@ -48,6 +55,14 @@ object Haptics {
         if (now - lastTickAt < 25L) return
         lastTickAt = now
         fire(VibrationEffect.EFFECT_TICK, 6L, 50)
+    }
+    /** 拖动刻度：进度条/唱片墙跟手划过时每 60ms 一格轻震，独立开关（跟随触感总开关） */
+    fun drag() {
+        if (!dragEnabled) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastTickAt < 60L) return
+        lastTickAt = now
+        fire(VibrationEffect.EFFECT_TICK, 5L, 45)
     }
 
     /**
