@@ -32,6 +32,9 @@ object Haptics {
     /** 上次震动的秒位（进度条跨秒刻度用） */
     private var lastSeekSecond = -1L
 
+    /** 上次震动的格子序号（唱片墙 0.25 格刻度用） */
+    private var lastWallCell = -1L
+
     fun init(context: Context) {
         enabled = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_ENABLED, true)
@@ -70,13 +73,16 @@ object Haptics {
             fire(VibrationEffect.EFFECT_TICK, 5L, 45)
         }
     }
-    /** 拖动刻度（唱片墙滑动）：跟手 60ms 一格 */
-    fun dragWall() {
-        if (!dragEnabled) return
+    /** 拖动刻度（唱片墙滑动）：每滑过 0.25 格震一次，慢滑少震、快滑密震 */
+    fun dragWall(worldOffset: Float, stepPx: Float) {
+        if (!dragEnabled || stepPx <= 0f) return
+        val cell = (worldOffset / (stepPx * 0.25f)).toLong()
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickAt < 60L) return
-        lastTickAt = now
-        fire(VibrationEffect.EFFECT_TICK, 5L, 45)
+        if (cell != lastWallCell && now - lastTickAt >= 40L) {
+            lastWallCell = cell
+            lastTickAt = now
+            fire(VibrationEffect.EFFECT_TICK, 5L, 45)
+        }
     }
 
     /**

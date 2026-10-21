@@ -1307,7 +1307,7 @@ val out = ArrayList<VisibleTile>(48)
                                     val cs = camScaleF.floatValue
                                     offsetX.floatValue += panChange.x / cs
                                     offsetY.floatValue += panChange.y / cs
-                                    Haptics.dragWall()
+                                    Haptics.dragWall(offsetX.floatValue + offsetY.floatValue, step)
                                 }
                                 event.changes.forEach {
                                     it.consume()
