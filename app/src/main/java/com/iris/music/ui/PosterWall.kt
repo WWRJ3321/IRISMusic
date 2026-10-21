@@ -1307,7 +1307,7 @@ val out = ArrayList<VisibleTile>(48)
                                     val cs = camScaleF.floatValue
                                     offsetX.floatValue += panChange.x / cs
                                     offsetY.floatValue += panChange.y / cs
-                                    Haptics.drag()
+                                    Haptics.dragWall()
                                 }
                                 event.changes.forEach {
                                     it.consume()
@@ -1632,7 +1632,7 @@ private fun PosterTile(
                         detectHorizontalDragGestures(
                             onHorizontalDrag = { change, _ ->
                                 change.consume()
-                                Haptics.drag()
+                                Haptics.drag(frac(change.position.x), globalDurationMs)
                                 dragPos.floatValue = frac(change.position.x)
                             },
                             onDragStart = { dragPos.floatValue = frac(it.x) },

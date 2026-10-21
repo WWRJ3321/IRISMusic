@@ -491,6 +491,7 @@ private fun PlayerControls(
         NeonProgressBar(
             progress = progress,
             onSeek = onSeek,
+            durationMs = durationMs,
             accent = readableAccent,
             track = trackColor,
             glass = glass,
@@ -1161,6 +1162,8 @@ private fun AlbumArt(filePath: String?) {
 private fun NeonProgressBar(
     progress: Float,
     onSeek: (Float) -> Unit,
+    /** 拖动刻度震动按秒位计，需要总时长 */
+    durationMs: Long = 0L,
     accent: Color,
     track: Color,
     modifier: Modifier = Modifier,
@@ -1182,7 +1185,7 @@ private fun NeonProgressBar(
                     }
                     .pointerInput(Unit) {
                         detectHorizontalDragGestures { change, _ ->
-                            Haptics.drag()
+                            Haptics.drag((change.position.x / size.width).coerceIn(0f, 1f), durationMs)
                             onSeek((change.position.x / size.width).coerceIn(0f, 1f))
                         }
                     }

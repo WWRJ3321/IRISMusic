@@ -29,6 +29,9 @@ object Haptics {
     private var vibrator: Vibrator? = null
     private var lastTickAt = 0L
 
+    /** 上次震动的秒位（进度条跨秒刻度用） */
+    private var lastSeekSecond = -1L
+
     fun init(context: Context) {
         enabled = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_ENABLED, true)
@@ -56,8 +59,19 @@ object Haptics {
         lastTickAt = now
         fire(VibrationEffect.EFFECT_TICK, 6L, 50)
     }
-    /** 拖动刻度：进度条/唱片墙跟手划过时每 60ms 一格轻震，独立开关（跟随触感总开关） */
-    fun drag() {
+    /** 拖动刻度（进度条）：拖动位置每跨 1 秒才震一次，原地小幅移动不震 */
+    fun drag(fraction: Float, durationMs: Long) {
+        if (!dragEnabled || durationMs <= 0L) return
+        val sec = ((fraction * durationMs).toLong()) / 1000L
+        val now = android.os.SystemClock.uptimeMillis()
+        if (sec != lastSeekSecond && now - lastTickAt >= 40L) {
+            lastSeekSecond = sec
+            lastTickAt = now
+            fire(VibrationEffect.EFFECT_TICK, 5L, 45)
+        }
+    }
+    /** 拖动刻度（唱片墙滑动）：跟手 60ms 一格 */
+    fun dragWall() {
         if (!dragEnabled) return
         val now = android.os.SystemClock.uptimeMillis()
         if (now - lastTickAt < 60L) return

@@ -1023,7 +1023,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean(Haptics.KEY_DRAG_ENABLED, enabled).apply()
         Haptics.dragEnabled = enabled
         _state.value = _state.value.copy(hapticsDrag = enabled)
-        if (enabled) Haptics.drag()
+        if (enabled) Haptics.drag(0.5f, 120000L)
     }
 
     /** 歌单页"为你推荐"区域显示开关 */
