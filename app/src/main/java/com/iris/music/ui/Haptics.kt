@@ -32,6 +32,9 @@ object Haptics {
     /** 上次震动的秒位（进度条跨秒刻度用） */
     private var lastSeekSecond = -1L
 
+    /** 上次震动的格子序号（唱片墙 0.25 格距离刻度用） */
+    private var lastWallCell = Long.MIN_VALUE
+
     fun init(context: Context) {
         enabled = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_ENABLED, true)
@@ -70,13 +73,17 @@ object Haptics {
             fire(VibrationEffect.EFFECT_TICK, 5L, 45)
         }
     }
-    /** 拖动刻度（唱片墙滑动）：拖动与惯性共用，55ms 节流——慢滑少震、快滑/惯性密震 */
-    fun dragWall() {
-        if (!dragEnabled) return
+    /** 拖动刻度（唱片墙滑动）：按距离刻度——每滑过 0.25 格震一次，拖动与惯性共用，慢滑少震、快滑密震 */
+    fun dragWall(worldOffset: Float, stepPx: Float) {
+        if (!dragEnabled || stepPx <= 0f) return
+        val cell = kotlin.math.floor(worldOffset / (stepPx * 0.25f)).toLong()
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTickAt < 55L) return
-        lastTickAt = now
-        fire(VibrationEffect.EFFECT_TICK, 5L, 45)
+        // 45ms 下限只为保护马达：极快甩动时 0.25 格刻度可能超过马达响应率，封顶 ~22 次/秒
+        if (cell != lastWallCell && now - lastTickAt >= 45L) {
+            lastWallCell = cell
+            lastTickAt = now
+            fire(VibrationEffect.EFFECT_TICK, 5L, 45)
+        }
     }
 
     /**

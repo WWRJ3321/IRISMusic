@@ -1248,8 +1248,8 @@ val out = ArrayList<VisibleTile>(48)
                                     val cs = camScaleF.floatValue
                                     offsetX.floatValue += (vX * dt) / cs
                                     offsetY.floatValue += (vY * dt) / cs
-                                    // 惯性阶段同样给刻度震动：滑行越快震得越密，随衰减自然变疏直至停止
-                                    Haptics.dragWall()
+                                    // 惯性阶段同样按距离刻度：每滑过 0.25 格震一次，随衰减自然变疏直至停止
+                                    Haptics.dragWall(offsetX.floatValue + offsetY.floatValue, step)
                                     // 阻尼衰减常数 4.2/s：松手后更快收敛，减少惯性滑行距离。
                                     val damp = kotlin.math.exp(-(dt) * 4.2).toFloat()
                                     vX *= damp; vY *= damp
@@ -1309,7 +1309,7 @@ val out = ArrayList<VisibleTile>(48)
                                     val cs = camScaleF.floatValue
                                     offsetX.floatValue += panChange.x / cs
                                     offsetY.floatValue += panChange.y / cs
-                                    Haptics.dragWall()
+                                    Haptics.dragWall(offsetX.floatValue + offsetY.floatValue, step)
                                 }
                                 event.changes.forEach {
                                     it.consume()
