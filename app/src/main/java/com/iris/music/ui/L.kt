@@ -122,6 +122,7 @@ object L {
 
     // ==================== 主界面 ====================
     val searchHint get() = if (zh) "搜索歌曲、艺术家…" else "Search songs, artists…"
+    val noMatchInQueue get() = if (zh) "当前列表中没有匹配的歌曲" else "No match in the current queue"
     val recommending get() = if (zh) "推荐中…" else "Finding picks…"
     val forYou get() = if (zh) "为你推荐" else "For you"
     fun likedLabel(n: Int) = if (zh) "♥ 我喜欢 · ${songs(n)}" else "♥ Favourites · ${songs(n)}"

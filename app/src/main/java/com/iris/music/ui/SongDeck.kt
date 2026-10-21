@@ -53,6 +53,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -175,7 +177,32 @@ fun SongDeck(
 
 // 顶栏三档透明度联动：deck 内容区（非顶栏）任意按下 → contentTick++，顶栏升到中档。
     var contentTick by remember { mutableIntStateOf(0) }
-
+    // ============ Deck 本地搜索（只在当前队列内定位，不改队列、不清其他歌） ============
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchText by remember { mutableStateOf("") }
+    // 定位请求：三布局各自消费。Song=目标歌；nonce 保证同歌重复搜索也能再触发
+    var locateTarget by remember { mutableStateOf<Pair<com.iris.music.data.Song, Int>?>(null) }
+    var locateNonce by remember { mutableIntStateOf(0) }
+    val matchQuery = searchText.trim().lowercase()
+    val matchedSong = if (matchQuery.isEmpty()) null else state.queue.firstOrNull {
+        it.title.lowercase().contains(matchQuery) ||
+            it.artist.lowercase().contains(matchQuery) ||
+            it.album.lowercase().contains(matchQuery)
+    }
+    val matchedIndex = matchedSong?.let { m -> state.queue.indexOfFirst { it.id == m.id } } ?: -1
+    fun requestLocate(song: com.iris.music.data.Song?) {
+        if (song == null) return
+        locateTarget = song to locateNonce
+        locateNonce++
+        searchOpen = false
+        searchText = ""
+    }
+    // Carousel/Stack 跳转：直接调 onSelect（切到那首，队列不动）
+    LaunchedEffect(locateTarget) {
+        val (song, nonce) = locateTarget ?: return@LaunchedEffect
+        val idx = state.queue.indexOfFirst { it.id == song.id }
+        if (idx >= 0 && state.layout != IrisLayout.COMPACT && nonce >= 0) onSelect(idx)
+    }
     Box(modifier.fillMaxSize()) {
         if (state.layout == IrisLayout.COMPACT) {
             // 海报墙铺满整屏（延伸进状态栏），顶部按钮作为浮层叠在最上层
@@ -197,6 +224,7 @@ fun SongDeck(
                     onNext = onNext,
                     onSeek = onSeek,
                     onSelect = onSelect,
+                    locateTarget = locateTarget,
                     jelly = state.jellyAnim
                 )
             }
@@ -209,6 +237,14 @@ fun SongDeck(
                 onOpenSettings = onOpenSettings,
                 onOpenPlaylists = onOpenPlaylists,
                 onReload = onReload,
+                searchOpen = searchOpen,
+                onToggleSearch = { searchOpen = !searchOpen },
+                searchActive = matchQuery.isNotEmpty(),
+                matchedIndex = matchedIndex,
+                matchedTitle = matchedSong?.title,
+                onJump = { requestLocate(matchedSong) },
+                onSearchText = { searchText = it },
+                searchText = searchText,
                 contentTick = contentTick,
                 autoHide = state.topBarAutoHide,
                 modifier = Modifier
@@ -237,6 +273,14 @@ fun SongDeck(
                     onOpenSettings = onOpenSettings,
                     onOpenPlaylists = onOpenPlaylists,
                     onReload = onReload,
+                    searchOpen = searchOpen,
+                    onToggleSearch = { searchOpen = !searchOpen },
+                    searchActive = matchQuery.isNotEmpty(),
+                    matchedIndex = matchedIndex,
+                    matchedTitle = matchedSong?.title,
+                    onJump = { requestLocate(matchedSong) },
+                    onSearchText = { searchText = it },
+                    searchText = searchText,
                     autoHide = state.topBarAutoHide,
                     // 横屏窄化：顶栏玻璃与下方播放卡片同宽（用补偿值抵消 padding 差，
                     // 唱片墙分支不走这里）
@@ -387,6 +431,16 @@ private fun DeckTopBar(
     onOpenSettings: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onReload: () -> Unit,
+    // ---- Deck 本地搜索（当前队列内定位，不改队列） ----
+    searchOpen: Boolean = false,
+    onToggleSearch: () -> Unit = {},
+    /** 输入非空且有匹配 = 面板上显示"跳转到目标" */
+    searchActive: Boolean = false,
+    matchedIndex: Int = -1,
+    matchedTitle: String? = null,
+    onJump: () -> Unit = {},
+    searchText: String = "",
+    onSearchText: (String) -> Unit = {},
     /** 内容区（非顶栏）交互计数：>0 时顶栏升到中档透明度 */
     contentTick: Int = 0,
     /** 开启后：完全静止时顶栏淡到全透明（关=停在半透明 30%） */
@@ -458,15 +512,33 @@ private fun DeckTopBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 标题：与主界面上栏同款 —— IRIS(primary) + MUSIC(secondary)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // 标题：与主界面上栏同款 —— IRIS(primary) + MUSIC(secondary)；点标题开/关搜索
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clip(IrisShape.item).clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) {
+                    Haptics.tap()
+                    onToggleSearch()
+                }
+            ) {
                 val wordPrimary = colors.primary.readableOn(colors.surface)
                 val wordSecondary = colors.secondary.readableOn(colors.surface)
                 Text("IRIS", color = wordPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.width(4.dp))
                 Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                // 搜索开启指示点
+                if (searchOpen) {
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        Modifier
+                            .size(6.dp)
+                            .background(colors.primary, androidx.compose.foundation.shape.CircleShape)
+                    )
+                }
             }
-            // 按钮组：与主界面上栏完全同款同序（无搜索框、无刷新——刷新走下拉手势）
+            // 按钮组：与主界面上栏完全同款同序（无刷新——刷新走下拉手势）
             Row(verticalAlignment = Alignment.CenterVertically) {
                 PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = activePlaylist)
                 Spacer(Modifier.width(8.dp))
@@ -475,6 +547,91 @@ private fun DeckTopBar(
                 ReportButton(onClick = onOpenReport, colors = colors)
                 Spacer(Modifier.width(8.dp))
                 SettingsButton(onClick = onOpenSettings, colors = colors)
+            }
+        }
+        // ---- Deck 本地搜索面板：顶栏正下方浮现；只在当前队列内匹配，不重写播放队列 ----
+        androidx.compose.animation.AnimatedVisibility(
+            visible = searchOpen,
+            enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) +
+                androidx.compose.animation.expandVertically(androidx.compose.animation.core.tween(240)),
+            exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)) +
+                androidx.compose.animation.shrinkVertically(androidx.compose.animation.core.tween(200)),
+            modifier = Modifier.align(Alignment.TopCenter)
+        ) {
+            Column(
+                Modifier
+                    .padding(top = 64.dp)
+                    .padding(horizontal = 22.dp)
+                    .fillMaxWidth()
+                    .irisSurface(GlassLevel.CARD, colors, IrisShape.item, solid = colors.surface)
+            ) {
+                val panelFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+                androidx.compose.material3.TextField(
+                    value = searchText,
+                    onValueChange = onSearchText,
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(panelFocus),
+                    placeholder = { Text(L.searchHint, color = colors.subText, fontSize = 12.sp) },
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        color = colors.text,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    colors = androidx.compose.material3.TextFieldDefaults.colors(
+                        focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                    )
+                )
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(120)
+                    runCatching { panelFocus.requestFocus() }
+                }
+                if (searchActive && matchedTitle != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(IrisShape.chip)
+                            .clickable {
+                                Haptics.tap()
+                                onJump()
+                            }
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            "→ ",
+                            color = colors.primary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            matchedTitle,
+                            color = colors.text,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "#${matchedIndex + 1}",
+                            color = colors.subText,
+                            fontSize = 11.sp
+                        )
+                    }
+                } else if (searchActive) {
+                    Text(
+                        L.noMatchInQueue,
+                        color = colors.subText,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
             }
         }
     }

@@ -849,6 +849,8 @@ internal fun DeckPosterWall(
     onNext: () -> Unit,
     onSeek: (Float) -> Unit,
     onSelect: (Int) -> Unit,
+    /** 搜索定位请求（透传给墙体） */
+    locateTarget: Pair<com.iris.music.data.Song, Int>? = null,
     jelly: Boolean = false
 ) {
     // 全局快照刷新：普通 var 写入不触发任何重组，供歌词轮询/播放按钮读取。
@@ -868,7 +870,6 @@ internal fun DeckPosterWall(
     val stablePrev = remember { { prevRef.value() } }
     val stableNext = remember { { nextRef.value() } }
     val stableSeek = remember { { f: Float -> seekRef.value(f) } }
-
     PosterWallBody(
         queue = state.queue,
         currentIndex = state.currentIndex,
@@ -879,7 +880,8 @@ internal fun DeckPosterWall(
         onPrev = stablePrev,
         onNext = stableNext,
         onSeek = stableSeek,
-        onSelect = stableSelect
+        onSelect = stableSelect,
+        locateRequest = locateTarget
     )
 }
 
@@ -894,7 +896,9 @@ private fun PosterWallBody(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onSeek: (Float) -> Unit,
-    onSelect: (Int) -> Unit
+    onSelect: (Int) -> Unit,
+    /** 搜索定位请求：把相机平移到目标磁贴，不清墙、不改队列 */
+    locateRequest: Pair<com.iris.music.data.Song, Int>? = null
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -989,6 +993,19 @@ private fun PosterWallBody(
             else offsetX.floatValue = (viewW - canvasW) / 2f
             if (canvasH > viewH) offsetY.floatValue = (viewH / 2f - cy).coerceIn(viewH - canvasH, 0f)
             else offsetY.floatValue = (viewH - canvasH) / 2f
+        }
+        // 搜索定位：把目标歌的磁贴平移到视口中心（不清墙、不动队列、不切歌）
+        LaunchedEffect(locateRequest, allTiles) {
+            val (song, nonce) = locateRequest ?: return@LaunchedEffect
+            val tile = allTiles.firstOrNull { queue.getOrNull(it.index)?.id == song.id }
+                ?: return@LaunchedEffect
+            val cx = (tile.col + tile.spanW / 2f) * step
+            val cy = (tile.row + tile.spanH / 2f) * step
+            if (canvasW > viewW) offsetX.floatValue = (viewW / 2f - cx).coerceIn(viewW - canvasW, 0f)
+            else offsetX.floatValue = (viewW - canvasW) / 2f
+            if (canvasH > viewH) offsetY.floatValue = (viewH / 2f - cy).coerceIn(viewH - canvasH, 0f)
+            else offsetY.floatValue = (viewH - canvasH) / 2f
+            Haptics.click()
         }
 
         // 可见集合的驱动量：把相机位移量化到整格。
