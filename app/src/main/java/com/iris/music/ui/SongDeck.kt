@@ -591,15 +591,6 @@ private fun DeckTopBar(
                 Text("IRIS", color = wordPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.width(4.dp))
                 Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
-                // 搜索开启指示点
-                if (searchOpen) {
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        Modifier
-                            .size(6.dp)
-                            .background(colors.primary, androidx.compose.foundation.shape.CircleShape)
-                    )
-                }
             }
             // 按钮组：与主界面上栏完全同款同序（无刷新——刷新走下拉手势）
             Row(verticalAlignment = Alignment.CenterVertically) {
