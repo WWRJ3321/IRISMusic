@@ -28,6 +28,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -55,6 +65,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -178,8 +192,14 @@ fun SongDeck(
 // 顶栏三档透明度联动：deck 内容区（非顶栏）任意按下 → contentTick++，顶栏升到中档。
     var contentTick by remember { mutableIntStateOf(0) }
     // ============ Deck 本地搜索（只在当前队列内定位，不改队列、不清其他歌） ============
+    // 弹出逻辑与主页上栏对齐：搜索框在顶栏玻璃内展开、展开自动聚焦、
+    // 点框外收键盘、失焦无字 4 秒自动收起、再点标题收起并清词。
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
+    val searchInteraction = remember { MutableInteractionSource() }
+    val searchFocusRequester = remember { FocusRequester() }
+    val searchBounds = remember { mutableStateOf(Rect.Zero) }
+    val deckFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
     // 定位请求：三布局各自消费。Song=目标歌；nonce 保证同歌重复搜索也能再触发
     var locateTarget by remember { mutableStateOf<Pair<com.iris.music.data.Song, Int>?>(null) }
     var locateNonce by remember { mutableIntStateOf(0) }
@@ -196,6 +216,21 @@ fun SongDeck(
         locateNonce++
         searchOpen = false
         searchText = ""
+        deckFocusManager.clearFocus()
+    }
+    // 点框外收键盘（主页同款）：聚焦期间任何落在搜索框矩形外的按下 → clearFocus
+    val deckSearchFocused by searchInteraction.collectIsFocusedAsState()
+    // 标题点击（主页同款）：展开；已展开时再点收起（有词先清词 + 收键盘）
+    val toggleDeckSearch: () -> Unit = {
+        if (searchOpen) {
+            if (searchText.isNotBlank()) {
+                searchText = ""
+                deckFocusManager.clearFocus()
+            }
+            searchOpen = false
+        } else {
+            searchOpen = true
+        }
     }
     // Carousel/Stack 跳转：直接调 onSelect（切到那首，队列不动）
     LaunchedEffect(locateTarget) {
@@ -203,7 +238,25 @@ fun SongDeck(
         val idx = state.queue.indexOfFirst { it.id == song.id }
         if (idx >= 0 && state.layout != IrisLayout.COMPACT && nonce >= 0) onSelect(idx)
     }
-    Box(modifier.fillMaxSize()) {
+    // 闲置自动收起（主页同款）：展开期、未聚焦、无查询词 → 4 秒后收起
+    LaunchedEffect(searchOpen, deckSearchFocused, searchText) {
+        if (searchOpen && !deckSearchFocused && searchText.isBlank()) {
+            delay(4000)
+            searchOpen = false
+        }
+    }
+    // 主页同款"点框外收键盘"：聚焦期间落在搜索框矩形外的按下 → clearFocus（不消费事件）
+    Box(
+        modifier
+            .fillMaxSize()
+            .pointerInput(deckSearchFocused) {
+                if (!deckSearchFocused) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (!searchBounds.value.contains(down.position)) deckFocusManager.clearFocus()
+                }
+            }
+    ) {
         if (state.layout == IrisLayout.COMPACT) {
             // 海报墙铺满整屏（延伸进状态栏），顶部按钮作为浮层叠在最上层
             Box(
@@ -238,13 +291,16 @@ fun SongDeck(
                 onOpenPlaylists = onOpenPlaylists,
                 onReload = onReload,
                 searchOpen = searchOpen,
-                onToggleSearch = { searchOpen = !searchOpen },
+                onToggleSearch = toggleDeckSearch,
                 searchActive = matchQuery.isNotEmpty(),
                 matchedIndex = matchedIndex,
                 matchedTitle = matchedSong?.title,
                 onJump = { requestLocate(matchedSong) },
                 onSearchText = { searchText = it },
                 searchText = searchText,
+                searchInteraction = searchInteraction,
+                searchFocusRequester = searchFocusRequester,
+                onSearchBounds = { searchBounds.value = it },
                 contentTick = contentTick,
                 autoHide = state.topBarAutoHide,
                 modifier = Modifier
@@ -274,13 +330,16 @@ fun SongDeck(
                     onOpenPlaylists = onOpenPlaylists,
                     onReload = onReload,
                     searchOpen = searchOpen,
-                    onToggleSearch = { searchOpen = !searchOpen },
+                    onToggleSearch = toggleDeckSearch,
                     searchActive = matchQuery.isNotEmpty(),
                     matchedIndex = matchedIndex,
                     matchedTitle = matchedSong?.title,
                     onJump = { requestLocate(matchedSong) },
                     onSearchText = { searchText = it },
                     searchText = searchText,
+                    searchInteraction = searchInteraction,
+                    searchFocusRequester = searchFocusRequester,
+                    onSearchBounds = { searchBounds.value = it },
                     autoHide = state.topBarAutoHide,
                     // 横屏窄化：顶栏玻璃与下方播放卡片同宽（用补偿值抵消 padding 差，
                     // 唱片墙分支不走这里）
@@ -431,7 +490,7 @@ private fun DeckTopBar(
     onOpenSettings: () -> Unit,
     onOpenPlaylists: () -> Unit,
     onReload: () -> Unit,
-    // ---- Deck 本地搜索（当前队列内定位，不改队列） ----
+    // ---- Deck 本地搜索（当前队列内定位，不改队列；弹出逻辑对齐主页上栏） ----
     searchOpen: Boolean = false,
     onToggleSearch: () -> Unit = {},
     /** 输入非空且有匹配 = 面板上显示"跳转到目标" */
@@ -441,6 +500,9 @@ private fun DeckTopBar(
     onJump: () -> Unit = {},
     searchText: String = "",
     onSearchText: (String) -> Unit = {},
+    searchInteraction: MutableInteractionSource = remember { MutableInteractionSource() },
+    searchFocusRequester: FocusRequester = remember { FocusRequester() },
+    onSearchBounds: (Rect) -> Unit = {},
     /** 内容区（非顶栏）交互计数：>0 时顶栏升到中档透明度 */
     contentTick: Int = 0,
     /** 开启后：完全静止时顶栏淡到全透明（关=停在半透明 30%） */
@@ -505,6 +567,7 @@ private fun DeckTopBar(
             ) { }
             .irisSurface(GlassLevel.CARD, colors, IrisShape.item, solid = colors.surface)
     ) {
+        Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -549,46 +612,70 @@ private fun DeckTopBar(
                 SettingsButton(onClick = onOpenSettings, colors = colors)
             }
         }
-        // ---- Deck 本地搜索面板：顶栏正下方浮现；只在当前队列内匹配，不重写播放队列 ----
-        androidx.compose.animation.AnimatedVisibility(
+        // ---- Deck 本地搜索框：与主页上栏同款——顶栏玻璃内 expand 展开、同款灰底+放大镜图标 ----
+        AnimatedVisibility(
             visible = searchOpen,
-            enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) +
-                androidx.compose.animation.expandVertically(androidx.compose.animation.core.tween(240)),
-            exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)) +
-                androidx.compose.animation.shrinkVertically(androidx.compose.animation.core.tween(200)),
-            modifier = Modifier.align(Alignment.TopCenter)
+            enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
+            exit = fadeOut(tween(180)) + shrinkVertically(tween(220, easing = EaseOutCubic))
         ) {
-            Column(
-                Modifier
-                    .padding(top = 64.dp)
-                    .padding(horizontal = 22.dp)
-                    .fillMaxWidth()
-                    .irisSurface(GlassLevel.CARD, colors, IrisShape.item, solid = colors.surface)
-            ) {
-                val panelFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-                androidx.compose.material3.TextField(
+            Column(Modifier.padding(horizontal = 12.dp)) {
+                Spacer(Modifier.height(8.dp))
+                val searchBg = if (isLiquidGlass) {
+                    if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+                } else {
+                    if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+                }
+                val iconTint = colors.subText
+                TextField(
                     value = searchText,
                     onValueChange = onSearchText,
                     singleLine = true,
+                    interactionSource = searchInteraction,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .focusRequester(panelFocus),
+                        .focusRequester(searchFocusRequester)
+                        .padding(horizontal = 4.dp)
+                        .onGloballyPositioned { onSearchBounds(it.boundsInRoot()) },
                     placeholder = { Text(L.searchHint, color = colors.subText, fontSize = 12.sp) },
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        color = colors.text,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    colors = androidx.compose.material3.TextFieldDefaults.colors(
-                        focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
-                        unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
-                        focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
-                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                    textStyle = TextStyle(color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                    leadingIcon = {
+                        Canvas(Modifier.size(15.dp)) {
+                            val r = size.minDimension * 0.32f
+                            val cx = size.width * 0.38f
+                            val cy = size.height * 0.38f
+                            drawCircle(
+                                color = iconTint,
+                                radius = r,
+                                center = Offset(cx, cy),
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(width = size.minDimension * 0.12f)
+                            )
+                            drawLine(
+                                color = iconTint,
+                                start = Offset(cx + r * 0.7f, cy + r * 0.7f),
+                                end = Offset(size.width * 0.88f, size.height * 0.88f),
+                                strokeWidth = size.minDimension * 0.12f,
+                                cap = StrokeCap.Round
+                            )
+                        }
+                    },
+                    shape = IrisShape.item,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = searchBg,
+                        unfocusedContainerColor = searchBg,
+                        disabledContainerColor = searchBg,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                        cursorColor = colors.primary,
+                        focusedTextColor = colors.text,
+                        unfocusedTextColor = colors.text,
                     )
                 )
-                LaunchedEffect(Unit) {
-                    kotlinx.coroutines.delay(120)
-                    runCatching { panelFocus.requestFocus() }
+                LaunchedEffect(searchOpen) {
+                    if (searchOpen) {
+                        delay(150)
+                        runCatching { searchFocusRequester.requestFocus() }
+                    }
                 }
                 if (searchActive && matchedTitle != null) {
                     Row(
@@ -634,6 +721,7 @@ private fun DeckTopBar(
                 Spacer(Modifier.height(6.dp))
             }
         }
+        } // 顶栏 Column（按钮行 + 搜索框）
     }
 }
 
