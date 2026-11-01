@@ -101,6 +101,8 @@ import androidx.compose.ui.zIndex
 import com.iris.music.audio.BassHaptics
 import com.iris.music.audio.EqualizerController
 import com.iris.music.data.MusicFolder
+import com.iris.music.data.BrowseFilter
+import com.iris.music.data.BrowseKind
 import com.iris.music.data.LyricLine
 import com.iris.music.data.LyricParser
 import com.iris.music.data.RepeatMode
@@ -388,7 +390,16 @@ visible = scrollerVisible,
                          }
                      },
                      labelForIndex = { i ->
-                        state.queue.getOrNull(i - headerOffset)?.title
+                        // 文字类排序时气泡带首字母分组（中文按拼音归入 A–Z），
+                        // 拖动时能看出"现在到 G 了"，而不是只有一串歌名。
+                        state.queue.getOrNull(i - headerOffset)?.let { song ->
+                            when (state.sortOrder) {
+                                SortOrder.TITLE -> "${indexLabel(song.title)}  ${song.title}"
+                                SortOrder.ARTIST -> "${indexLabel(song.artist)}  ${song.artist}"
+                                SortOrder.ALBUM -> "${indexLabel(song.album)}  ${song.album}"
+                                else -> song.title
+                            }
+                        }
                     },
                     onDraggingChange = { scrollerDragging.value = it }
                 )
@@ -442,7 +453,8 @@ visible = scrollerVisible,
                     onSelect = { viewModel.selectPlaylist(it) },
                     onCreate = { name -> viewModel.createPlaylist(name) },
                     onRename = { id, name -> viewModel.renamePlaylist(id, name) },
-                    onDelete = { viewModel.deletePlaylist(it) }
+                    onDelete = { viewModel.deletePlaylist(it) },
+                    onBrowseSections = { viewModel.setBrowseSections(it) }
                 )
             }
 
@@ -537,7 +549,10 @@ visible = scrollerVisible,
                         if (minutes > 0) viewModel.setSleepTimer(minutes)
                         else viewModel.cancelSleepTimer()
                     },
-                    colors = colors
+                    colors = colors,
+                    active = state.sleepTimerEndMs > 0L,
+                    lastMinutes = state.sleepLastMinutes,
+                    onExtend = { viewModel.extendSleepTimer(it) }
                 )
             }
 
@@ -581,37 +596,22 @@ private fun LibrarySortBar(
     onOrderChange: (SortOrder) -> Unit,
     onDirectionChange: (SortDirection) -> Unit
 ) {
+    // v4.9：排序键从 4 个扩到 6 个，继续"点一下循环"要连点五次才能回来。
+    // 改成一排可横滑的胶囊：所有键平铺、当前项主题色高亮，一次点击直达；
+    // 方向胶囊固定在最左，不随横滑滚走。仍然没有 Popup（玻璃折射问题同上）。
     val chipHeight = 30.dp
     val chipBg = if (glass) {
         if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
     } else {
         if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
     }
+    val accent = colors.primary.readableOn(chipBg, 3.2f)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .height(chipHeight)
-                .clip(IrisShape.item)
-                .background(chipBg)
-                .clickable {
-                    Haptics.tap()
-                    val next = SortOrder.entries[(order.ordinal + 1) % SortOrder.entries.size]
-                    onOrderChange(next)
-                }
-                .padding(horizontal = 12.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                order.label,
-                color = colors.text,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
+        // 方向：固定在左
         Box(
             modifier = Modifier
                 .height(chipHeight)
@@ -634,8 +634,51 @@ private fun LibrarySortBar(
                 fontWeight = FontWeight.Medium
             )
         }
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            SortOrder.entries.forEach { o ->
+                val selected = o == order
+                Box(
+                    modifier = Modifier
+                        .height(chipHeight)
+                        .clip(IrisShape.item)
+                        .background(if (selected) accent.copy(alpha = 0.18f) else chipBg)
+                        .clickable {
+                            if (!selected) { Haptics.tap(); onOrderChange(o) }
+                        }
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        o.label,
+                        color = if (selected) accent else colors.text,
+                        fontSize = 12.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
     }
 }
+
+/**
+ * 首字母分组索引（A–Z + #）。中文按拼音归桶：「周杰伦」→ Z。
+ * android.icu.text.AlphabeticIndex 自 API 24 起可用，与 minSdk 一致，零依赖。
+ */
+private val alphaIndex by lazy {
+    android.icu.text.AlphabeticIndex<String>(java.util.Locale.CHINA)
+        .addLabels(java.util.Locale.ENGLISH)
+        .buildImmutableIndex()
+}
+
+internal fun indexLabel(text: String): String =
+    runCatching { alphaIndex.getBucket(alphaIndex.getBucketIndex(text)).label }.getOrDefault("#")
 
 // ==================== 列表页 ====================
 @OptIn(ExperimentalFoundationApi::class)
@@ -1011,7 +1054,6 @@ private fun LibraryPage(
                     }
                 }
             }
-
             itemsIndexed(state.queue, key = { _, song -> "song-${song.id}" }) { index, song ->
                 SongRow(
                     song = song,
@@ -1192,7 +1234,7 @@ private fun LibraryPage(
                         Text("MUSIC", color = wordSecondary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = state.activePlaylistId != null)
+                        PlaylistButton(onClick = onOpenPlaylists, colors = colors, active = state.activePlaylistId != null || state.browse != null)
                         Spacer(Modifier.width(8.dp))
                         LayoutButton(onClick = onCycleLayout, colors = colors)
                         Spacer(Modifier.width(8.dp))
@@ -1300,6 +1342,8 @@ private fun LibraryPage(
                     Column {
                         Spacer(Modifier.height(6.dp))
                         val countLabel = when {
+                            state.browse != null ->
+                                L.browseLabel(state.browse.kind == com.iris.music.data.BrowseKind.ARTIST, state.browse.name, state.queue.size)
                             state.activePlaylistId == Playlists.LIKED_PLAYLIST_ID ->
                                 L.likedLabel(state.queue.size)
                             state.activePlaylistId != null ->
@@ -1416,12 +1460,15 @@ private fun PlayerPage(
         // 横屏窄化只在 PlayerCard 内部单层封顶（LANDSCAPE_PLAYER_MAX_WIDTH），
         // 外层不再封顶——双层套娃会把卡片压得比封顶值还窄一圈，
         // 和 CAROUSEL/STACK 横屏的宽度对不齐。列本身水平居中即可。
+        // 全屏卡片：外层不再留系统栏与 26dp 侧边距，卡片自己铺满并处理系统栏。
+        val fullCard = state.fullScreenCard
         Column(
             Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 26.dp)
+                .then(
+                    if (fullCard) Modifier
+                    else Modifier.statusBarsPadding().navigationBarsPadding().padding(horizontal = 26.dp)
+                )
                 .then(
                     if (glass) Modifier.irisBackdropSource(cardBackdrop)
                     else if (frosted) Modifier.haze(state = lyricsHazeState, style = HazeStyle(blurRadius = frostedBlur))
@@ -1465,7 +1512,9 @@ visualizerEnabled = state.visualizerEnabled,
                    tiltSpectrum = state.tiltSpectrum,
                    coverShakeEnabled = state.coverShake,
                    coverLyricEnabled = state.coverLyric,
-                   onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) }
+                   onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
+                   fullScreen = fullCard,
+                   onDoubleTapBlank = { viewModel.toggleFullScreenCard() }
               )
         }
 

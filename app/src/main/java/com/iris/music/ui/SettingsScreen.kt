@@ -573,6 +573,15 @@ internal fun SettingsPanel(
             subtitle = L.topBarIdleHideNote
         ) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
 
+        Spacer(Modifier.height(10.dp))
+
+        SettingToggleRow(
+            L.fullScreenCard,
+            state.fullScreenCard,
+            colors,
+            subtitle = L.fullScreenCardDesc
+        ) { viewModel.toggleFullScreenCard() }
+
         Spacer(Modifier.height(18.dp))
 
         } // 结束播放

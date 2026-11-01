@@ -95,6 +95,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import com.iris.music.data.BrowseFilter
+import com.iris.music.data.BrowseKind
+import androidx.compose.runtime.mutableIntStateOf
 // ==================== 歌单管理弹层 ====================
 
 /**
@@ -111,10 +114,12 @@ internal fun PlaylistSheet(
     onSelect: (Long?) -> Unit,
     onCreate: (String) -> Unit,
     onRename: (Long, String) -> Unit,
-    onDelete: (Long) -> Unit
+    onDelete: (Long) -> Unit,
+    /** 主页分类分区：null=关，非 null=列表按该维度归组重排 */
+    onBrowseSections: (BrowseKind?) -> Unit = {}
 ) {
     val accent = colors.primary.readableOn(colors.surface, 3.2f)
-    val onSheet = if (colors.isDark) Color.White else Color.Black
+val onSheet = if (colors.isDark) Color.White else Color.Black
 
     // 新建歌单输入框
     var newName by remember { mutableStateOf("") }
@@ -147,16 +152,20 @@ internal fun PlaylistSheet(
                     ) {
                         Text(L.playlists, color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
                         Text(
-                            if (state.activePlaylistId == null) L.folderView else L.playlistView,
+                            when {
+                                state.browse != null -> L.browseView
+                                state.activePlaylistId == null -> L.folderView
+                                else -> L.playlistView
+                            },
                             color = colors.subText,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
                     }
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(12.dp))
 
                     // 视图切换：全部音乐优先置顶
-                    val showAll = state.activePlaylistId == null
+                    val showAll = state.activePlaylistId == null && state.browse == null
                     FolderRow(L.allMusic, L.songs(state.allSongs.size), showAll, colors) {
                         onSelect(null)
                     }
@@ -255,6 +264,9 @@ internal fun PlaylistSheet(
                              Text(L.newPlaylist, color = accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                          }
                      }
+                    Spacer(Modifier.height(12.dp))
+                    // 分类分区：列表按艺术家/专辑归组重排
+                    BrowseSectionsPicker(state.browseSections, colors) { onBrowseSections(it) }
         }
 
         // 删除二次确认弹层：覆盖在歌单面板之上
@@ -577,5 +589,46 @@ internal fun AddToPlaylistSheet(
                             Text(L.newPlaylistAndAdd, color = accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                         }
                     }
+    }
+}
+
+/** 分类分区选择行：关 / 艺术家 / 专辑 三档 */
+@Composable
+internal fun BrowseSectionsPicker(
+    current: BrowseKind?,
+    colors: IrisColors,
+    onPick: (BrowseKind?) -> Unit
+) {
+    val onSheet = if (colors.isDark) Color.White else Color.Black
+    Column(Modifier.fillMaxWidth()) {
+        Text(L.browseSectionsTitle, color = onSheet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(2.dp))
+        Text(L.browseSectionsHint, color = colors.subText, fontSize = 10.sp, lineHeight = 13.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf<Pair<String, BrowseKind?>>(
+                L.browseSectionOff to null,
+                L.artistsLabel to BrowseKind.ARTIST,
+                L.albumsLabel to BrowseKind.ALBUM
+            ).forEach { (label, kind) ->
+                val sel = current == kind
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                        .clip(IrisShape.item)
+                        .background(if (sel) colors.primary.copy(alpha = 0.22f) else colors.card)
+                        .clickable { Haptics.tap(); onPick(kind) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        color = if (sel) colors.primary.readableOn(colors.surface, 3.2f) else colors.subText,
+                        fontSize = 12.sp,
+                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium
+                    )
+                }
+            }
+        }
     }
 }

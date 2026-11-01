@@ -47,6 +47,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -121,7 +122,14 @@ fun PlayerCard(
      * 给当前歌曲 seek。非活动卡只保留点击（点一下跳到那首）。
      */
     interactive: Boolean = true,
-    onAddToPlaylist: () -> Unit = {}
+    onAddToPlaylist: () -> Unit = {},
+    /**
+     * 全屏卡片（v4.9）：卡片铺满父容器、去圆角，自己吃掉状态栏/导航栏留白，
+     * 内容垂直居中。外层容器在全屏时也要去掉自己的 26dp 侧边距（见调用点）。
+     */
+    fullScreen: Boolean = false,
+    /** 双击卡片空白处（全屏切换入口）；null = 不响应双击，保持旧行为零延迟 */
+    onDoubleTapBlank: (() -> Unit)? = null
 ) {
     // 深色模式：深色卡片 + 白字 + 白图标；浅色模式：白色卡片 + 黑字 + 黑图标
     val cardColor = if (colors.isDark) Color(0xFF1E1E26) else Color(0xFFFFFFFF)
@@ -166,16 +174,32 @@ fun PlayerCard(
         modifier = modifier
             // 长按卡片空白处 →「加入歌单」。onClick 传空 lambda：不拦子级按钮的点击
             // （子级 clickable 优先消费事件），只有空白区域的长按会落到这里。
-            .combinedClickable(onClick = {}, onLongClick = { Haptics.click(); onAddToPlaylist() })
+            .combinedClickable(
+                onClick = {},
+                onDoubleClick = onDoubleTapBlank?.let { cb -> { Haptics.click(); cb() } },
+                onLongClick = { Haptics.click(); onAddToPlaylist() }
+            )
             // 横屏窄化：内容不再拉满整个横屏宽度，统一封顶后由外层 Column 居中。
             // 竖屏保持 fillMaxWidth 原样（竖屏宽度本就小于封顶值，但 tablet 竖屏
-            // 可能超过，所以只在横屏生效）。
+            // 可能超过，所以只在横屏生效）。全屏卡片两种朝向都铺满。
             .then(
-                if (isLandscape) Modifier.widthIn(max = LANDSCAPE_PLAYER_MAX_WIDTH)
-                else Modifier.fillMaxWidth()
+                when {
+                    fullScreen -> Modifier.fillMaxSize()
+                    isLandscape -> Modifier.widthIn(max = LANDSCAPE_PLAYER_MAX_WIDTH)
+                    else -> Modifier.fillMaxWidth()
+                }
             )
-            .irisSurface(GlassLevel.PLAYER, colors, IrisShape.card, solid = cardColor)
-            .padding(horizontal = 18.dp, vertical = 18.dp)
+            .irisSurface(
+                GlassLevel.PLAYER, colors,
+                if (fullScreen) androidx.compose.foundation.shape.RoundedCornerShape(0.dp) else IrisShape.card,
+                solid = cardColor
+            )
+            .then(
+                if (fullScreen) Modifier.statusBarsPadding().navigationBarsPadding()
+                    .padding(horizontal = 26.dp, vertical = 12.dp)
+                else Modifier.padding(horizontal = 18.dp, vertical = 18.dp)
+            ),
+        contentAlignment = Alignment.Center
     ) {
         if (isLandscape) {
             // 横屏：左封面 + 右控制，垂直居中，控制区高度克制不铺满
@@ -240,7 +264,10 @@ fun PlayerCard(
                 )
             }
         } else {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
                 PlayerCoverArt(
                     artworkPath = artworkPath,
                     positionMs = positionMs,
@@ -869,9 +896,15 @@ fun SleepTimerSheet(
     currentMinutes: Int,
     onDismiss: () -> Unit,
     onSetMinutes: (Int) -> Unit,
-    colors: IrisColors
+    colors: IrisColors,
+    /** 当前是否有定时在跑：有则显示「+10 分」延长快捷 */
+    active: Boolean = false,
+    /** 上次用过的时长（分钟），0 = 无；用于「上次 · N 分」一键复用 */
+    lastMinutes: Int = 0,
+    onExtend: (Int) -> Unit = {}
 ) {
-    val minutesOptions = listOf(5, 10, 15, 20, 30, 45, 60)
+    // 加 90 / 120：睡前听整张专辑、长播客，60 分钟上限经常不够
+    val minutesOptions = listOf(5, 10, 15, 20, 30, 45, 60, 90, 120)
     // 默认选中当前定时值；无定时时落在 5 分钟档
     var selectedIndex by remember { mutableIntStateOf(minutesOptions.indexOf(currentMinutes).coerceAtLeast(0)) }
     val selectedMinutes = minutesOptions[selectedIndex]
@@ -896,6 +929,54 @@ fun SleepTimerSheet(
             SheetDragHandle(drag, onDismiss, colors.card)
             Spacer(Modifier.height(14.dp))
                     Text(L.sleepTimer, color = onSheet, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.height(14.dp))
+
+                    // 快捷时间：点一下立即生效并关闭弹层，不用拖滑条再点「设置」。
+                    // 有定时在跑时首项换成「+10 分」；用过定时则补一个「上次」。
+                    val quick = buildList {
+                        if (active) add(-10)                    // -10 = 延长 10 分钟的标记
+                        if (lastMinutes > 0 && lastMinutes !in listOf(15, 30, 45, 60)) add(lastMinutes)
+                        addAll(listOf(15, 30, 45, 60))
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        quick.forEach { m ->
+                            val label = when {
+                                m == -10 -> L.sleepPlus10
+                                m == lastMinutes && m !in listOf(15, 30, 45, 60) -> L.sleepAgain(m)
+                                else -> L.sleepMinutesChip(m)
+                            }
+                            val emphasize = m == -10
+                            Box(
+                                Modifier
+                                    .height(36.dp)
+                                    .clip(IrisShape.item)
+                                    .background(
+                                        if (emphasize) accent
+                                        else if (glass) onSheet.copy(alpha = 0.12f) else colors.card
+                                    )
+                                    .clickable {
+                                        Haptics.click()
+                                        if (m == -10) onExtend(10) else onSetMinutes(m)
+                                        onDismiss()
+                                    }
+                                    .padding(horizontal = 14.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    label,
+                                    color = if (emphasize) accent.readableTextOn() else onSheet,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(18.dp))
 
                     // 圆形进度环 + 分钟数（80dp 紧凑尺寸）

@@ -283,7 +283,7 @@ fun SongDeck(
             }
             DeckTopBar(
                 colors = colors,
-                activePlaylist = state.activePlaylistId != null,
+                activePlaylist = state.activePlaylistId != null || state.browse != null,
                 refreshing = state.refreshing,
                 onCycleLayout = onCycleLayout,
                 onOpenReport = onOpenReport,
@@ -322,7 +322,7 @@ fun SongDeck(
             ) {
                 DeckTopBar(
                     colors = colors,
-                    activePlaylist = state.activePlaylistId != null,
+                    activePlaylist = state.activePlaylistId != null || state.browse != null,
                     refreshing = state.refreshing,
                     onCycleLayout = onCycleLayout,
                     onOpenReport = onOpenReport,
@@ -1101,6 +1101,18 @@ private fun DeckStack(
         }
         val top = visualBase.coerceIn(0, queue.lastIndex.coerceAtLeast(0))
 
+        // 封面预热（v4.9）：每次推进后，把即将进场的卡（队尾补位、左侧新停泊卡）
+        // 的缩略图先解进内存缓存，左右邻卡再预解高清。否则新进组合的卡首帧
+        // peek 不中 → 先画空底、280ms 后 Crossfade 淡入，滑动时看着就是闪。
+        LaunchedEffect(top, queue) {
+            for (d in -2..STACK_DEPTH + 1) {
+                queue.getOrNull(top + d)?.filePath?.takeIf { it.isNotEmpty() }?.let { ArtworkLoader.load(it) }
+            }
+            for (d in intArrayOf(1, -1)) {
+                queue.getOrNull(top + d)?.filePath?.takeIf { it.isNotEmpty() }?.let { ArtworkLoader.loadHiRes(it) }
+            }
+        }
+
         // 用 draggable 而不是 detectHorizontalDragGestures：只有它在松手时给出速度。
         // 没有速度就只能靠位移判定，快速轻甩会被判成"没拖够"而弹回去。
         val dragState = rememberDraggableState { delta -> cardX += delta }
@@ -1280,7 +1292,11 @@ private fun DeckStack(
                                 // ——就是"中间那张突然闪现"的来源。
                                 if (cardX < 0f) {
                                     translationX = cardX
-                                    rotationZ = t * STACK_TILT
+                                    // 倾角随飞出行程收回到 0（v4.9）：原来飞到 -flyOut 时仍带 -6°，
+                                    // 600dp 高的卡转角会探回屏幕左缘约 30dp；提交 finally 里它变成
+                                    // d=-1 停泊卡（倾角 0），这一帧倾角突变，左缘那条边"闪"一下。
+                                    val far = (abs(cardX) / flyOut).coerceIn(0f, 1f)
+                                    rotationZ = t * STACK_TILT * (1f - far * far)
                                     return@graphicsLayer
                                 }
                             }

@@ -69,6 +69,8 @@ import com.iris.music.ui.theme.IrisColors
 import com.iris.music.ui.theme.IrisShape
 import com.iris.music.ui.theme.irisSurface
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -854,8 +856,14 @@ internal fun DeckPosterWall(
     jelly: Boolean = false
 ) {
     // 全局快照刷新：普通 var 写入不触发任何重组，供歌词轮询/播放按钮读取。
-    globalPositionMs = state.positionMs
+    // 位置变化时记下采样时刻：逐字扫光要在两次 positionMs 更新（约 500ms 一次）
+    // 之间按帧外推，否则光带一顿一顿地跳。
+    if (globalPositionMs != state.positionMs) {
+        globalPositionMs = state.positionMs
+        globalPosSampleAt = android.os.SystemClock.uptimeMillis()
+    }
     globalDurationMs = state.durationMs
+    globalKaraoke = state.karaokeLyric
     LaunchedEffect(state.isPlaying) { posterIsPlaying.value = state.isPlaying }
 
     // 回调稳定化必须在壳里做、墙体外面收：lambda 参数若每次传新实例，
@@ -1754,6 +1762,8 @@ private fun PosterTile(
                             if (i < 0 || i >= count) continue
                             LyricRow(
                                 text = ls.lines[i].text,
+                                line = ls.lines[i],
+                                lineEndMs = ls.lines.getOrNull(i + 1)?.timeMs ?: -1L,
                                 index = i.toFloat(),
                                 animIdx = animIdx,
                                 rowHeightPx = rowHPx,
@@ -1895,6 +1905,10 @@ private fun PosterIconBtn(
 @Composable
 private fun LyricRow(
     text: String,
+    /** 整行数据（含词级时间），逐字扫光用；null 时退回整行高亮 */
+    line: LyricLine? = null,
+    /** 下一行开始时间，作为本行最后一个词的结束；-1 = 未知 */
+    lineEndMs: Long = -1L,
     index: Float,
     animIdx: Animatable<Float, *>,
     rowHeightPx: Float,
@@ -1924,6 +1938,9 @@ private fun LyricRow(
             },
         contentAlignment = Alignment.CenterStart
     ) {
+        if (current && line != null && globalKaraoke && text.isNotEmpty()) {
+            PosterKaraokeText(text, line, lineEndMs, baseFontSp)
+        } else {
         Text(
             text,
             color = Color.White,
@@ -1935,6 +1952,93 @@ private fun LyricRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth()
+        )
+        }
+    }
+}
+
+/**
+ * 唱片墙当前句的逐字点亮（v4.9）。
+ *
+ * 与全屏歌词 KaraokeLine 同一套进度口径（LyricParser.wordProgressCharsF；无词级时间时
+ * 按行时长伪逐字），但实现换成"两层文字 + 裁剪"：
+ * - 底层未唱色、上层已唱色，上层只在 drawWithContent 里按进度 clipRect；
+ * - 进度存在 FloatState 里、只在绘制阶段读取，所以每帧只重绘、不重组不重排版——
+ *   唱片墙磁贴本来就重，不能因为逐字把整块拖进逐帧重组。
+ * - 进度→像素用 TextLayoutResult.getHorizontalPosition，按真实字宽推进
+ *   （中英混排时比"字符数比例"准）；单行 + 省略号，到省略处封顶。
+ */
+@Composable
+private fun PosterKaraokeText(
+    text: String,
+    line: LyricLine,
+    lineEndMs: Long,
+    baseFontSp: Float
+) {
+    val chars = remember(line) { mutableFloatStateOf(0f) }
+    var layout by remember(text) { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    LaunchedEffect(line, lineEndMs) {
+        while (true) {
+            androidx.compose.runtime.withFrameMillis { }
+            val drift = if (posterIsPlaying.value)
+                (android.os.SystemClock.uptimeMillis() - globalPosSampleAt).coerceIn(0L, 1500L) else 0L
+            val est = globalPositionMs + drift
+            val raw = if (line.hasWords) {
+                LyricParser.wordProgressCharsF(line, est, lineEndMs)
+            } else {
+                // 伪逐字：同 KaraokeLine 的估算（每字约 300ms，至少吃满行间隔的 92%）
+                val span = ((if (lineEndMs > line.timeMs) lineEndMs else line.timeMs + 4000L) - line.timeMs)
+                    .coerceAtLeast(1L)
+                val estSing = (text.length * 300L).coerceAtLeast(600L)
+                val singMs = minOf(estSing, span).coerceAtLeast((span * 0.92f).toLong())
+                ((est - line.timeMs).toFloat() / singMs).coerceIn(0f, 1f) * text.length
+            }
+            chars.floatValue = raw.coerceIn(0f, text.length.toFloat())
+        }
+    }
+    val style = androidx.compose.ui.text.TextStyle(
+        fontSize = baseFontSp.sp,
+        lineHeight = (baseFontSp * 1.15f).sp,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Start
+    )
+    Box(Modifier.fillMaxWidth()) {
+        // 底层：未唱
+        Text(
+            text,
+            color = Color.White.copy(alpha = 0.45f),
+            style = style,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { layout = it },
+            modifier = Modifier.fillMaxWidth()
+        )
+        // 上层：已唱，按进度裁剪
+        Text(
+            text,
+            color = Color.White,
+            style = style,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawWithContent {
+                    val l = layout ?: return@drawWithContent
+                    val c = chars.floatValue
+                    // 省略号之后的字不可见：进度封顶在可见末尾
+                    val visibleEnd = l.getLineEnd(0, visibleEnd = true).coerceAtMost(text.length)
+                    val x = if (c >= visibleEnd) {
+                        size.width
+                    } else {
+                        val i = c.toInt().coerceIn(0, visibleEnd)
+                        val f = c - i
+                        val x0 = l.getHorizontalPosition(i, usePrimaryDirection = true)
+                        val x1 = l.getHorizontalPosition((i + 1).coerceAtMost(visibleEnd), usePrimaryDirection = true)
+                        x0 + (x1 - x0) * f
+                    }
+                    if (x <= 0f) return@drawWithContent
+                    clipRect(right = x) { this@drawWithContent.drawContent() }
+                }
         )
     }
 }
@@ -1994,3 +2098,7 @@ private fun rememberPosterLyric(song: Song): androidx.compose.runtime.State<Post
 /** 全局快照：DeckPosterWall 进入组合时刷新，供歌词轮询读取 */
 private var globalPositionMs: Long = 0
 private var globalDurationMs: Long = 0
+/** globalPositionMs 最近一次变化时的 uptimeMillis，逐字扫光按它外推 */
+private var globalPosSampleAt: Long = 0
+/** 逐字扫光开关（跟随设置里的「逐字扫光」，与全屏歌词同一开关） */
+private var globalKaraoke: Boolean = true

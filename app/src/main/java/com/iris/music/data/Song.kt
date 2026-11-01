@@ -26,8 +26,34 @@ data class MusicFolder(
 
 enum class RepeatMode { OFF, ALL, ONE }
 
+/**
+ * 曲库排序键。顺序即上栏左胶囊的点按循环顺序。
+ * 枚举名会落盘（KEY_SORT_ORDER），只能追加/调整顺序，不能改名。
+ */
 enum class SortOrder {
-    TITLE, ARTIST, DURATION, RECENT
+    TITLE, ARTIST, ALBUM, DURATION, RECENT, PLAYS
+}
+
+/** 分类浏览维度：艺术家 / 专辑（与文件夹、歌单并列的第三种「看歌」方式） */
+enum class BrowseKind { ARTIST, ALBUM }
+
+/** 当前分类筛选：按某位艺术家或某张专辑看歌；null = 不按分类筛选 */
+data class BrowseFilter(val kind: BrowseKind, val name: String)
+
+/**
+ * 拆分多艺术家字段："周杰伦/费玉清"、"A; B"、"A、B" → 各自独立计入。
+ * 不按逗号和 & 拆：大量乐队名本身带这些符号（"Simon & Garfunkel"）。
+ */
+fun Song.artistNames(): List<String> =
+    artist.split('/', ';', '；', '、', '\\')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .ifEmpty { listOf(artist.trim()) }
+
+/** 分组键：该歌在某个分类维度下属于哪几个组 */
+fun Song.groupKeys(kind: BrowseKind): List<String> = when (kind) {
+    BrowseKind.ARTIST -> artistNames()
+    BrowseKind.ALBUM -> listOf(album.trim())
 }
 enum class SortDirection {
     ASCENDING, DESCENDING

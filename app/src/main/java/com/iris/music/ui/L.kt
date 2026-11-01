@@ -96,6 +96,37 @@ object L {
     val sortArtist get() = if (zh) "艺术家" else "Artist"
     val sortDuration get() = if (zh) "时长" else "Duration"
     val sortDateAdded get() = if (zh) "修改/添加时间" else "Date modified"
+    val sortAlbum get() = if (zh) "专辑" else "Album"
+    val sortPlays get() = if (zh) "播放次数" else "Play count"
+    val sortPickTitle get() = if (zh) "排序方式" else "Sort by"
+
+    // ==================== 分类浏览 ====================
+    val tabPlaylists get() = if (zh) "歌单" else "Playlists"
+    val tabArtists get() = if (zh) "艺术家" else "Artists"
+    val tabAlbums get() = if (zh) "专辑" else "Albums"
+    val browseView get() = if (zh) "分类视图" else "Browse"
+    val unknownAlbum get() = if (zh) "未知专辑" else "Unknown album"
+    val noGroups get() = if (zh) "曲库里还没有可分类的歌" else "Nothing to group yet"
+    fun browseLabel(isArtist: Boolean, name: String, n: Int) =
+        if (zh) (if (isArtist) "艺术家「$name」· ${songs(n)}" else "专辑「$name」· ${songs(n)}")
+        else (if (isArtist) "Artist \"$name\" · ${songs(n)}" else "Album \"$name\" · ${songs(n)}")
+    fun groupHeader(n: Int) = if (zh) "共 $n 组" else "$n groups"
+    val browseSectionsTitle get() = if (zh) "分类分区" else "Browse sections"
+    val browseSectionsHint get() = if (zh) "列表按艺术家 / 专辑归组重排，同组歌曲排在一起" else "Group the list by artist / album"
+    val browseSectionOff get() = if (zh) "关" else "Off"
+    val browseAll get() = if (zh) "全部" else "All"
+    val artistsLabel get() = if (zh) "艺术家" else "Artists"
+    val albumsLabel get() = if (zh) "专辑" else "Albums"
+
+    // ==================== 睡眠定时快捷 ====================
+    val sleepQuick get() = if (zh) "快捷" else "Quick"
+    fun sleepMinutesChip(m: Int) = if (zh) (if (m % 60 == 0 && m >= 60) "${m / 60} 小时" else "$m 分") else (if (m % 60 == 0 && m >= 60) "${m / 60} h" else "$m min")
+    fun sleepAgain(m: Int) = if (zh) "上次 · ${sleepMinutesChip(m)}" else "Last · ${sleepMinutesChip(m)}"
+    val sleepPlus10 get() = if (zh) "+10 分" else "+10 min"
+
+    // ==================== 全屏卡片 ====================
+    val fullScreenCard get() = if (zh) "全屏播放卡片" else "Full-screen player card"
+    val fullScreenCardDesc get() = if (zh) "卡片铺满屏幕、去掉圆角；也可双击卡片空白处切换" else "Card fills the screen without corners; double-tap empty card area to toggle"
     val sortAsc get() = if (zh) "正序" else "Ascending"
     val sortDesc get() = if (zh) "倒序" else "Descending"
     val sortAscArrow get() = if (zh) "正序 ↑" else "Asc ↑"
@@ -498,6 +529,8 @@ val com.iris.music.data.SortOrder.label: String
         com.iris.music.data.SortOrder.ARTIST -> L.sortArtist
         com.iris.music.data.SortOrder.DURATION -> L.sortDuration
         com.iris.music.data.SortOrder.RECENT -> L.sortDateAdded
+        com.iris.music.data.SortOrder.ALBUM -> L.sortAlbum
+        com.iris.music.data.SortOrder.PLAYS -> L.sortPlays
     }
 
 /** 曲库排序方向 */

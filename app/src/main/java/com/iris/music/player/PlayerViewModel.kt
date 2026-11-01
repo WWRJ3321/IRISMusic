@@ -36,6 +36,9 @@ import com.iris.music.data.Playlists
 import com.iris.music.data.Recommender
 import com.iris.music.data.RepeatMode
 import com.iris.music.data.ScanPath
+import com.iris.music.data.BrowseFilter
+import com.iris.music.data.BrowseKind
+import com.iris.music.data.groupKeys
 import com.iris.music.data.Song
 import com.iris.music.data.SortDirection
 import com.iris.music.data.SortOrder
@@ -130,6 +133,14 @@ data class PlayerUiState(
     val playlists: List<Playlist> = emptyList(),
     /** 当前选中的歌单 ID，null = 显示全部（文件夹/收藏视图） */
     val activePlaylistId: Long? = null,
+    /** 分类浏览（艺术家/专辑）。与歌单互斥：选了分类就不在歌单里，反之亦然 */
+    val browse: BrowseFilter? = null,
+    /** 主页分类分区：非 null 时列表按该维度归组重排（同组歌曲相邻，组间按拼音） */
+    val browseSections: BrowseKind? = null,
+    /** 播放卡全屏：去掉四周留白与圆角，卡片铺满屏幕（双击卡片空白处或设置里切换） */
+    val fullScreenCard: Boolean = false,
+    /** 上次使用的睡眠定时时长（分钟），用于「再来一次」快捷项；0 = 从未用过 */
+    val sleepLastMinutes: Int = 0,
     /** 播放页可视化频谱开关（点击音频格式徽章切换） */
     val visualizerEnabled: Boolean = false,
     /** 实验性：可视化随手机倾斜变化（向哪侧倾斜哪侧升幅加大） */
@@ -295,7 +306,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             customSecondaryArgb = prefs.getLong(KEY_CUSTOM_SECONDARY, 0xFFFF2E97L),
             customBackgroundUri = prefs.getString(KEY_CUSTOM_BG_URI, null),
             selectedFolders = readSelectedFolders(),
-            scanRoot = readScanRoot()
+            scanRoot = readScanRoot(),
+            browse = readBrowse(),
+            browseSections = readBrowseSections(),
+            fullScreenCard = prefs.getBoolean(KEY_FULLSCREEN_CARD, false),
+            sleepLastMinutes = prefs.getInt(KEY_SLEEP_LAST_MIN, 0)
         )
     )
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -391,7 +406,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             likedSongIds = PlayHistory.getLikes(),
             playlists = allPlaylists,
-            activePlaylistId = restoredActive
+            activePlaylistId = restoredActive,
+            // 歌单与分类互斥；旧数据里两者都在时以歌单为准
+            browse = if (restoredActive != null) null else _state.value.browse
         )
         // 频谱分析器状态跟随持久化开关（服务可能先于本次读取创建）
         SpectrumAnalyzer.enabled = _state.value.visualizerEnabled
@@ -444,14 +461,36 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 上一首。
+     *
+     * - 播放超过 3 秒：先回到本曲开头（常见播放器手感）。
+     * - 否则跳到时间线上的上一首；不用 seekToPrevious()：它内部也有一个
+     *   "超过 maxSeekToPreviousPosition 就回开头"的判断，和上面这条叠在一起，
+     *   在 3 秒附近会出现"按了两次才切走"的手感。直接用 seekToPreviousMediaItem。
+     * - 已在第一首（「关」档 / 单曲循环档没有上一首）：手动操作绕到最后一首，
+     *   而不是原地回到开头"像没反应"。自动播放的停止语义不受影响。
+     */
     fun previous() {
         val c = controller ?: return
-        // 播放超过 3 秒时“上一首”先回到开头，符合常见播放器手感
-        if (c.currentPosition > 3_000) c.seekTo(0L) else c.seekToPrevious()
+        if (c.mediaItemCount == 0) return
+        when {
+            c.currentPosition > PREV_RESTART_MS -> c.seekTo(0L)
+            c.hasPreviousMediaItem() -> c.seekToPreviousMediaItem()
+            else -> c.seekTo(c.mediaItemCount - 1, 0L)
+        }
+        if (c.playbackState == Player.STATE_IDLE) c.prepare()
     }
 
+    /**
+     * 下一首。最后一首（「关」档）时手动下一首绕回第一首——「关」档的含义是
+     * "自动播完就停"，用户亲手按下一首却毫无反应，体验上就是按钮坏了。
+     */
     fun next() {
-        controller?.seekToNext()
+        val c = controller ?: return
+        if (c.mediaItemCount == 0) return
+        if (c.hasNextMediaItem()) c.seekToNextMediaItem() else c.seekTo(0, 0L)
+        if (c.playbackState == Player.STATE_IDLE) c.prepare()
     }
 
     /** 按进度比例跳转，fraction 取值 0f..1f */
@@ -765,10 +804,71 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
      * 传 [Playlists.LIKED_PLAYLIST_ID] 即进入「我喜欢」虚拟歌单。
      */
     fun selectPlaylist(playlistId: Long?) {
-        _state.value = _state.value.copy(activePlaylistId = playlistId)
+        _state.value = _state.value.copy(activePlaylistId = playlistId, browse = null)
         prefs.edit().putLong(KEY_ACTIVE_PLAYLIST, playlistId ?: -1L).apply()
+        saveBrowse(null)
         applyFilters(resetToFirst = true)
     }
+
+    // ==================== 分类浏览（艺术家 / 专辑） ====================
+
+    /**
+     * 进入某位艺术家 / 某张专辑（null = 退出分类，回到全部）。
+     * 与歌单互斥：进分类即退出当前歌单；文件夹/收藏筛选此时不叠加
+     * （"看某位歌手的全部歌"不该被文件夹勾选悄悄截掉一半）。
+     */
+    fun selectBrowse(filter: BrowseFilter?) {
+        // 分类是叠加筛选，不清歌单选择：在"当前视图"内过滤
+        _state.value = _state.value.copy(browse = filter)
+        saveBrowse(filter)
+        applyFilters(resetToFirst = true)
+    }
+
+    /** 主页分类分区：null=关，非 null=列表按该维度归组重排 */
+    fun setBrowseSections(kind: BrowseKind?) {
+        prefs.edit().putString(KEY_BROWSE_SECTIONS, kind?.name).apply()
+        _state.value = _state.value.copy(browseSections = kind)
+        applyFilters(resetToFirst = true)
+    }
+
+    private fun readBrowseSections(): BrowseKind? =
+        runCatching { BrowseKind.valueOf(prefs.getString(KEY_BROWSE_SECTIONS, null) ?: return null) }.getOrNull()
+
+    /**
+     * 某个维度下的全部分组：名称 + 歌曲数，按拼音/字母排序。
+     * 纯计算，供分类弹层直接调用（数千首歌毫秒级）；UI 侧用 remember(allSongs) 缓存。
+     */
+    fun groups(kind: BrowseKind): List<Pair<String, Int>> {
+        val counts = HashMap<String, Int>()
+        _state.value.allSongs.forEach { song ->
+            song.groupKeys(kind).forEach { k -> counts[k] = (counts[k] ?: 0) + 1 }
+        }
+        val keyed = counts.entries.map { Triple(it.key, it.value, zhCollator.getCollationKey(it.key)) }
+        return keyed.sortedWith { a, b -> a.third.compareTo(b.third) }.map { it.first to it.second }
+    }
+
+    private fun saveBrowse(filter: BrowseFilter?) {
+        prefs.edit()
+            .putString(KEY_BROWSE_KIND, filter?.kind?.name)
+            .putString(KEY_BROWSE_NAME, filter?.name)
+            .apply()
+    }
+
+    private fun readBrowse(): BrowseFilter? {
+        val kind = runCatching { BrowseKind.valueOf(prefs.getString(KEY_BROWSE_KIND, null) ?: return null) }
+            .getOrNull() ?: return null
+        val name = prefs.getString(KEY_BROWSE_NAME, null) ?: return null
+        return BrowseFilter(kind, name)
+    }
+
+    // ==================== 全屏卡片 ====================
+
+    fun setFullScreenCard(on: Boolean) {
+        prefs.edit().putBoolean(KEY_FULLSCREEN_CARD, on).apply()
+        _state.value = _state.value.copy(fullScreenCard = on)
+    }
+
+    fun toggleFullScreenCard() = setFullScreenCard(!_state.value.fullScreenCard)
     /**
      * 把一首歌加入歌单。
      *
@@ -1219,7 +1319,26 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
         val totalMs = minutes * 60_000L
         val end = SleepTimer.set(app, minutes)
-        _state.value = _state.value.copy(sleepTimerMs = totalMs, sleepTimerEndMs = end)
+        prefs.edit().putInt(KEY_SLEEP_LAST_MIN, minutes).apply()
+        _state.value = _state.value.copy(
+            sleepTimerMs = totalMs,
+            sleepTimerEndMs = end,
+            sleepLastMinutes = minutes
+        )
+    }
+
+    /**
+     * 在当前定时基础上延长 [minutes] 分钟（快捷「+10」）。没有定时就等同新设。
+     * 剩余时间按墙钟算，向上取整到分钟，避免"+10 后显示 9 分 59 秒"。
+     */
+    fun extendSleepTimer(minutes: Int) {
+        val s = _state.value
+        if (s.sleepTimerEndMs <= 0L) { setSleepTimer(minutes); return }
+        val remainMs = (s.sleepTimerEndMs - System.currentTimeMillis()).coerceAtLeast(0L)
+        val remainMin = ((remainMs + 59_999L) / 60_000L).toInt()
+        val total = (remainMin + minutes).coerceAtMost(SLEEP_MAX_MIN)
+        val end = SleepTimer.set(getApplication(), total)
+        _state.value = s.copy(sleepTimerMs = total * 60_000L, sleepTimerEndMs = end)
     }
 
     fun cancelSleepTimer() {
@@ -1538,6 +1657,27 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 按文字键排序，先算 CollationKey 再比（Collator.compare 每次都要重新分解字符串，
+     * 5000 首 × log n 次比较会明显慢）。[then] 为并列时的次级键。
+     */
+    private fun List<Song>.sortedByText(
+        key: (Song) -> String,
+        then: ((Song) -> String)? = null
+    ): List<Song> {
+        val keyed = map { song ->
+            Triple(
+                song,
+                zhCollator.getCollationKey(key(song)),
+                then?.let { zhCollator.getCollationKey(it(song)) }
+            )
+        }
+        return keyed.sortedWith { a, b ->
+            val c = a.second.compareTo(b.second)
+            if (c != 0 || a.third == null || b.third == null) c else a.third!!.compareTo(b.third!!)
+        }.map { it.first }
+    }
+
+    /**
      * 按 文件夹 → 搜索 → 排序 重建队列。
      * 当前曲目仍在结果中时保留它的播放位置，否则按 resetToFirst 决定是否从头开始。
      */
@@ -1550,6 +1690,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         // 自定义歌单优先：选中歌单时只显示歌单内的歌（按加入顺序），与文件夹筛选互斥。
         // 「我喜欢」是同一入口下的虚拟歌单，数据源是红心集合。
         val activePid = _state.value.activePlaylistId
+        val browse = s.browse
         if (activePid == Playlists.LIKED_PLAYLIST_ID) {
             list = list.filter { it.id in _state.value.likedSongIds }
         } else if (activePid != null) {
@@ -1559,10 +1700,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             if (_state.value.onlyLiked) {
                 list = list.filter { it.id in _state.value.likedSongIds }
             }
-
             if (_state.value.selectedFolders.isNotEmpty()) {
                 list = list.filter { it.folderPath in _state.value.selectedFolders }
             }
+        }
+        // 分类是叠加筛选：在"当前视图"（全部/歌单/文件夹）内再按艺术家/专辑过滤
+        if (browse != null) {
+            list = list.filter { browse.name in it.groupKeys(browse.kind) }
         }
 
         val query = s.searchQuery.trim().lowercase()
@@ -1575,13 +1719,37 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         list = when (s.sortOrder) {
-            SortOrder.TITLE -> list.sortedBy { it.title.lowercase() }
-            SortOrder.ARTIST -> list.sortedBy { it.artist.lowercase() }
+            // 文字类排序走 Collator：中文按拼音、英文忽略大小写，中英混排时
+            // 中文不再统统挤到 Z 之后（旧实现按 Unicode 码位比较）。
+            SortOrder.TITLE -> list.sortedByText({ it.title }, { it.artist })
+            SortOrder.ARTIST -> list.sortedByText({ it.artist }, { it.album + "\u0000" + it.title })
+            SortOrder.ALBUM -> list.sortedByText({ it.album }, { it.title })
             SortOrder.DURATION -> list.sortedBy { it.durationMs }
             // 文件修改时间作为本地可用的“添加/修改时间”代理，先按旧到新排列。
             SortOrder.RECENT -> list.sortedBy { File(it.filePath).lastModified() }
+            // 播放次数：少→多（正序），倒序即"最常听"。同次数按标题稳定排列。
+            // 注意：只在 applyFilters 时取快照，播放中计数变化不会实时重排列表
+            // （否则每切一首歌主页就跳一次，违反"主页排序任何情景不乱"）。
+            SortOrder.PLAYS -> {
+                val counts = PlayHistory.getPlayCounts()
+                list.sortedByText({ it.title }).sortedBy { counts[it.id] ?: 0 }
+            }
         }
         if (s.sortDirection == SortDirection.DESCENDING) list = list.asReversed()
+
+        // 分类分区：在已排序结果上归组重排——同组歌曲相邻（组内保持上面的排序），
+        // 组间按拼音。多艺术家歌曲归入第一个名字所在的组。
+        if (s.browseSections != null) {
+            val kind = s.browseSections
+            val byGroup = LinkedHashMap<String, MutableList<Song>>()
+            list.forEach { song ->
+                val key = song.groupKeys(kind).firstOrNull()?.ifBlank { "\u0000" } ?: "\u0000"
+                byGroup.getOrPut(key) { mutableListOf() }.add(song)
+            }
+            list = byGroup.entries
+                .sortedWith { a, b -> zhCollator.getCollationKey(a.key).compareTo(zhCollator.getCollationKey(b.key)) }
+                .flatMap { it.value }
+        }
 
         val keptIndex = if (playing != null) list.indexOfFirst { it.id == playing.id } else -1
 
@@ -1809,5 +1977,25 @@ private const val KEY_THEME = "theme"
         const val KEY_SHOW_RECS = "show_recommendations"
         const val KEY_SHOW_SORT_BAR = "show_sort_bar"
         const val KEY_JELLY_ANIM = "jelly_anim"
+        const val KEY_BROWSE_KIND = "browse_kind"
+        const val KEY_BROWSE_NAME = "browse_name"
+        const val KEY_BROWSE_SECTIONS = "browse_sections"
+        const val KEY_FULLSCREEN_CARD = "fullscreen_card"
+        const val KEY_SLEEP_LAST_MIN = "sleep_last_minutes"
+        /** 「上一首」先回开头的阈值 */
+        const val PREV_RESTART_MS = 3_000L
+        /** 睡眠定时上限（分钟） */
+        const val SLEEP_MAX_MIN = 240
+
+        /**
+         * 中文按拼音、西文忽略大小写的比较器（Android ICU 实现）。
+         * 放 companion 而不是实例属性：实例属性按书写顺序初始化，init 块里
+         * 已经可能间接走到 applyFilters，届时实例属性还是 null。
+         * Collator 非线程安全——只在主线程（applyFilters / groups）使用。
+         */
+        val zhCollator: java.text.Collator =
+            java.text.Collator.getInstance(java.util.Locale.CHINA).apply {
+                strength = java.text.Collator.SECONDARY
+            }
     }
 }
