@@ -595,7 +595,24 @@ internal fun SettingsPanel(
             colors,
             subtitle = L.coverLyricNote
         ) { viewModel.setCoverLyric(!state.coverLyric) }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
+        if (state.coverLyric) {
+            Column {
+                Text(L.coverLyricLinesLabel, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModeSwatch(L.lines1, state.coverLyricLines == 1, colors,
+                        modifier = Modifier.weight(1f)) { viewModel.setCoverLyricLines(1) }
+                    ModeSwatch(L.lines2, state.coverLyricLines == 2, colors,
+                        modifier = Modifier.weight(1f)) { viewModel.setCoverLyricLines(2) }
+                    ModeSwatch(L.lines3, state.coverLyricLines == 3, colors,
+                        modifier = Modifier.weight(1f)) { viewModel.setCoverLyricLines(3) }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+        } else {
+            Spacer(Modifier.height(14.dp))
+        }
 
         SettingToggleRow(
             L.karaoke,

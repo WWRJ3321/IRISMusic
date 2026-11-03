@@ -907,6 +907,7 @@ private fun DeckCarousel(
                         vizAlpha = 0f,
                         shake = rememberShakeState(false),
                         coverLyricEnabled = state.coverLyric,
+                                                coverLyricLines = state.coverLyricLines,
                         interactive = page == state.currentIndex,
                         coverLyrics = emptyList(),
                         onClickArtwork = { if (page == state.currentIndex) onClickArtwork() else onSelect(page) },
@@ -1335,6 +1336,7 @@ private fun DeckStack(
                             vizAlpha = 0f,
                             shake = rememberShakeState(false),
                             coverLyricEnabled = state.coverLyric,
+                                                        coverLyricLines = state.coverLyricLines,
                             interactive = d == 0,
                             coverLyrics = emptyList(),
                             onClickArtwork = { if (d == 0) onClickArtwork() else onSelect(index) },
@@ -1830,6 +1832,7 @@ private fun DeckCard(
 tiltSpectrum = state.tiltSpectrum,
              coverShakeEnabled = state.coverShake,
              coverLyricEnabled = state.coverLyric,
+                          coverLyricLines = state.coverLyricLines,
              onToggleVisualizer = if (isCurrent) onToggleVisualizer else onActivate,
             interactive = isCurrent
         )

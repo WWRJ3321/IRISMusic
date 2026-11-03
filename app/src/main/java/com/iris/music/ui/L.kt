@@ -410,7 +410,11 @@ object L {
     // —— 歌词 ——
     val secLyrics get() = if (zh) "歌词" else "Lyrics"
     val coverLyric get() = if (zh) "封面歌词" else "Cover lyric"
-    val coverLyricNote get() = if (zh) "封面左下角单行歌词，换句时模糊渐隐渐出" else "A single lyric line in the cover's corner, blurring in and out between lines"
+    val coverLyricNote get() = if (zh) "封面左下角歌词，换句时模糊渐隐渐出" else "Lyrics in the cover's corner, blurring in and out between lines"
+    val coverLyricLinesLabel get() = if (zh) "显示行数" else "Lines shown"
+    val lines1 get() = if (zh) "1 行" else "1"
+    val lines2 get() = if (zh) "2 行" else "2"
+    val lines3 get() = if (zh) "3 行" else "3"
     val karaoke get() = if (zh) "逐字流光" else "Word glow"
     val karaokeNote get() = if (zh) "全屏歌词当前行按进度扫光点亮（无词级时间时按句长估算）" else "The current line lights up word by word with progress (estimated when word timings are absent)"
     val lyricAlign get() = if (zh) "歌词对齐" else "Lyric alignment"

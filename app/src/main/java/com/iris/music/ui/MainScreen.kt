@@ -1512,6 +1512,7 @@ visualizerEnabled = state.visualizerEnabled,
                    tiltSpectrum = state.tiltSpectrum,
                    coverShakeEnabled = state.coverShake,
                    coverLyricEnabled = state.coverLyric,
+                                      coverLyricLines = state.coverLyricLines,
                    onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
                    fullScreen = fullCard,
                    onDoubleTapBlank = { viewModel.toggleFullScreenCard() }

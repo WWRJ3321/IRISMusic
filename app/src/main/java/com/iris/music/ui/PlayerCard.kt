@@ -112,8 +112,10 @@ fun PlayerCard(
     tiltSpectrum: Boolean = false,
     /** 实验性：摇动手机封面跟着一晃一晃（duangduang） */
     coverShakeEnabled: Boolean = false,
-    /** 封面左下角单行歌词开关（锁在封面上，换词时模糊渐隐渐出） */
+    /** 封面左下角歌词开关（锁在封面上，换词时模糊渐隐渐出） */
     coverLyricEnabled: Boolean = false,
+    /** 封面歌词同时显示几行：1=只有当前行，2/3=带上后续行并淡化 */
+    coverLyricLines: Int = 1,
     /**
      * 是否是"活的"卡片。
      *
@@ -217,6 +219,7 @@ fun PlayerCard(
                     // 摇晃检测会误触发。整个物理效果横屏一律关掉。
                     shake = rememberShakeState(false),
                     coverLyricEnabled = coverLyricEnabled,
+                    coverLyricLines = coverLyricLines,
                     interactive = interactive,
                     coverLyrics = coverLyrics,
                     onClickArtwork = onClickArtwork,
@@ -275,6 +278,7 @@ fun PlayerCard(
                     vizAlpha = vizT.value,
                     shake = shake,
                     coverLyricEnabled = coverLyricEnabled,
+                    coverLyricLines = coverLyricLines,
                     interactive = interactive,
                     coverLyrics = coverLyrics,
                     onClickArtwork = onClickArtwork,
@@ -341,6 +345,7 @@ internal fun PlayerCoverArt(
     vizAlpha: Float,
     shake: CoverShake,
     coverLyricEnabled: Boolean,
+    coverLyricLines: Int = 1,
     interactive: Boolean,
     coverLyrics: List<LyricLine>,
     onClickArtwork: () -> Unit,
@@ -366,12 +371,16 @@ internal fun PlayerCoverArt(
                     .background(Color.Black.copy(alpha = 0.3f * vizAlpha))
             )
         }
-        // 封面左下角单行歌词：锁在封面上（随 shake 一起动），换词时模糊渐隐渐出。
+        // 封面左下角歌词：锁在封面上（随 shake 一起动），换词时模糊渐隐渐出。
+        // 多行模式下当前行白色，后续行按行号递减透明度。
         if (coverLyricEnabled && interactive) {
             val curIdx = LyricParser.currentIndex(coverLyrics, positionMs)
-            val curText = if (curIdx in coverLyrics.indices) coverLyrics[curIdx].text else ""
-            CoverLyricLine(
-                text = curText,
+            val n = coverLyricLines.coerceIn(1, 3)
+            val texts = if (curIdx in coverLyrics.indices)
+                (curIdx until minOf(curIdx + n, coverLyrics.size)).map { coverLyrics[it].text }
+            else listOf("")
+            CoverLyricLines(
+                texts = texts,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = 14.dp, bottom = 14.dp)
@@ -640,7 +649,23 @@ private fun PlayerControls(
  * 派生——淡出时 blur 0→峰值、淡入时峰值→0，中段最糊，正好是字切换的瞬间。
  */
 @Composable
-private fun CoverLyricLine(text: String, modifier: Modifier = Modifier) {
+private fun CoverLyricLines(texts: List<String>, modifier: Modifier = Modifier) {
+    // 当前行固定在最下、后续行向上排：Column 自上而下 = 逆序（最远的在最上）。
+    // 每行独立做模糊渐隐渐出；换行时整块会微上移（旧行先淡掉），视觉可接受。
+    Column(modifier = modifier, horizontalAlignment = Alignment.Start) {
+        texts.reversed().forEachIndexed { ri, t ->
+            val i = texts.lastIndex - ri
+            CoverLyricLine(
+                text = t,
+                dimAlpha = if (i == 0) 1f else if (i == 1) 0.6f else 0.38f,
+                modifier = if (ri == 0) Modifier else Modifier.padding(bottom = 3.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun CoverLyricLine(text: String, dimAlpha: Float = 1f, modifier: Modifier = Modifier) {
     var displayText by remember { mutableStateOf(text) }
     val visibility = remember { Animatable(1f) }
     // 短词切换不突兀、无词/首词直接落位不重复播过渡
@@ -668,7 +693,7 @@ private fun CoverLyricLine(text: String, modifier: Modifier = Modifier) {
             )
         ),
         modifier = modifier
-            .graphicsLayer { alpha = visibility.value }
+            .graphicsLayer { alpha = visibility.value * dimAlpha }
             .blur(blur.dp)
     )
 }

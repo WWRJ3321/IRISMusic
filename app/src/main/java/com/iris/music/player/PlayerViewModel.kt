@@ -149,6 +149,8 @@ data class PlayerUiState(
     val coverShake: Boolean = false,
     /** 封面左下角单行歌词（锁在封面上，换词时模糊渐隐渐出） */
     val coverLyric: Boolean = false,
+    /** 封面歌词同时显示几行：1=只有当前行，2/3=再带上后续行（淡化） */
+    val coverLyricLines: Int = 1,
     /** 全屏歌词当前行的伪逐字扫光（无词级时间时按行时长匀速扫过） */
     val karaokeLyric: Boolean = true,
     /** 全屏歌词对齐：0=靠左 1=居中 2=靠右 */
@@ -268,6 +270,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             tiltSpectrum = prefs.getBoolean(KEY_TILT_SPECTRUM, false),
             coverShake = prefs.getBoolean(KEY_COVER_SHAKE, false),
             coverLyric = prefs.getBoolean(KEY_COVER_LYRIC, false),
+            coverLyricLines = prefs.getInt(KEY_COVER_LYRIC_LINES, 1).coerceIn(1, 3),
             karaokeLyric = prefs.getBoolean(KEY_KARAOKE_LYRIC, true),
             lyricAlign = prefs.getInt(KEY_LYRIC_ALIGN, 1).coerceIn(0, 2),
             lyricFont = if (prefs.getInt(KEY_LYRIC_FONT, 0) == 1) 1 else 0,
@@ -1049,6 +1052,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setCoverLyric(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_COVER_LYRIC, enabled).apply()
         _state.value = _state.value.copy(coverLyric = enabled)
+    }
+    /** 封面歌词同时显示几行（1..3）。 */
+    fun setCoverLyricLines(lines: Int) {
+        val n = lines.coerceIn(1, 3)
+        prefs.edit().putInt(KEY_COVER_LYRIC_LINES, n).apply()
+        _state.value = _state.value.copy(coverLyricLines = n)
     }
     /** 全屏歌词伪逐字扫光开关。 */
     fun setKaraokeLyric(enabled: Boolean) {
@@ -1959,6 +1968,7 @@ private const val KEY_THEME = "theme"
         const val KEY_TILT_SPECTRUM = "tilt_spectrum"
         const val KEY_COVER_SHAKE = "cover_shake"
         const val KEY_COVER_LYRIC = "cover_lyric"
+        const val KEY_COVER_LYRIC_LINES = "cover_lyric_lines"
         const val KEY_KARAOKE_LYRIC = "karaoke_lyric"
         const val KEY_LYRIC_ALIGN = "lyric_align"
         const val KEY_LYRIC_FONT = "lyric_font"
