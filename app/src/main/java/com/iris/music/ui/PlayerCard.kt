@@ -66,6 +66,7 @@ import com.iris.music.ui.theme.GlassContent
 import com.iris.music.ui.theme.GlassLevel
 import com.iris.music.ui.theme.IrisColors
 import com.iris.music.ui.theme.IrisShape
+import com.iris.music.ui.theme.LocalCorners
 import com.iris.music.ui.theme.irisSurface
 import com.iris.music.ui.theme.isLiquidGlass
 import com.iris.music.ui.theme.readableOn
@@ -222,6 +223,7 @@ fun PlayerCard(
                     coverLyricLines = coverLyricLines,
                     interactive = interactive,
                     coverLyrics = coverLyrics,
+                    corner = (LocalCorners.current.card - 18.dp).coerceAtLeast(0.dp),
                     onClickArtwork = onClickArtwork,
                     modifier = Modifier
                         // 横屏按屏高定尺寸，正方形自然收窄宽度，不撑爆
@@ -281,6 +283,7 @@ fun PlayerCard(
                     coverLyricLines = coverLyricLines,
                     interactive = interactive,
                     coverLyrics = coverLyrics,
+                    corner = (LocalCorners.current.card - 18.dp).coerceAtLeast(0.dp),
                     onClickArtwork = onClickArtwork,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -349,12 +352,14 @@ internal fun PlayerCoverArt(
     interactive: Boolean,
     coverLyrics: List<LyricLine>,
     onClickArtwork: () -> Unit,
+    /** 封面圆角：应=外框圆角−内边距（同心圆角），由调用方算好传入 */
+    corner: Dp = LocalCorners.current.item,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
             .coverShake(shake)
-            .clip(IrisShape.item)
+            .clip(RoundedCornerShape(corner))
             .background(Color.hsv(
                 hue = (artworkPath?.hashCode()?.mod(360) ?: 0).toFloat(),
                 saturation = 0.35f,
@@ -439,7 +444,7 @@ private fun PlayerControls(
     val titleSize = if (compact) 17.sp else 22.sp
     val prevNextBtn = if (compact) 48.dp else 62.dp
     val prevNextIcon = if (compact) 26.dp else 34.dp
-    val playBtn = if (compact) 58.dp else 76.dp
+    val playBtn = if (compact) 64.dp else 86.dp
     val gapAfterCover = if (compact) 14.dp else 18.dp
     val gapAfterInfo = if (compact) 2.dp else 6.dp
     val gapBeforeMain = if (compact) 6.dp else 16.dp
@@ -791,11 +796,11 @@ private fun PlayPauseIcon(isPlaying: Boolean, tint: Color) {
         animationSpec = tween(260, easing = FastOutSlowInEasing),
         label = "playPauseFlip"
     )
-    Box(Modifier.size(39.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
         Icon(
             Icons.Play, contentDescription = null, tint = tint,
             modifier = Modifier
-                .size(39.dp)
+                .size(44.dp)
                 .graphicsLayer {
                     rotationZ = -90f * t
                     alpha = 1f - t
@@ -806,7 +811,7 @@ private fun PlayPauseIcon(isPlaying: Boolean, tint: Color) {
         Icon(
             Icons.Pause, contentDescription = null, tint = tint,
             modifier = Modifier
-                .size(39.dp)
+                .size(44.dp)
                 .graphicsLayer {
                     rotationZ = 90f * (1f - t)
                     alpha = t
