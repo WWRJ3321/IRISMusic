@@ -15,7 +15,14 @@ data class Song(
     /** 所在文件夹绝对路径，例如 /storage/emulated/0/Music/Anime */
     val folderPath: String,
     /** 文件夹显示名 */
-    val folderName: String
+    val folderName: String,
+    /**
+     * 文件修改时间（扫描时从 MetaEntry.mtime 带入，秒级）。
+     * 「最近添加」排序直接读它，不再对全库逐首 File.lastModified()（评审 P1-6：
+     * 5000 首 × 每次筛选 = 5000 次 stat 系统调用跑在主线程）。
+     * 文件移动/重命名后 ID 不变但路径会变，此值以最近一次扫描为准，足够作排序代理。
+     */
+    val modifiedAt: Long = 0L
 )
 
 data class MusicFolder(

@@ -9,7 +9,7 @@ import android.os.Environment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -198,7 +198,8 @@ object MusicRepository {
             albumArtUri = null,  // 封面由 ArtworkLoader 直接从文件读内嵌图
             filePath = path,
             folderPath = parent,
-            folderName = parent.substringAfterLast('/', L.rootFolder).ifEmpty { L.rootFolder }
+            folderName = parent.substringAfterLast('/', L.rootFolder).ifEmpty { L.rootFolder },
+            modifiedAt = mtime
         )
     }
 
@@ -310,19 +311,23 @@ object MusicRepository {
         val paths = collectAudioFiles(context, root)
         val cache = readCache()
         val sem = Semaphore(SCAN_CONCURRENCY)
-
-        val entries = coroutineScope {
+        // supervisorScope：单文件抛异常（权限被部分回收、FUSE 抖动等）只跳过该文件，
+        // 不许整个 awaitAll 结构化取消把全库扫成空（评审 P1-14）。
+        val entries = supervisorScope {
             paths.map { path ->
+                // 每个任务自带信号量限流（16 路 MMR 是重对象，不放开跑）
                 async {
                     sem.withPermit {
-                        val file = File(path)
-                        if (!file.exists()) return@withPermit null
-                        val cached = cache[path]
-                        // 指纹一致：直接用缓存，免开文件
-                        val meta = if (cached != null &&
-                            cached.size == file.length() && cached.mtime == file.lastModified()
-                        ) cached else readMeta(file)
-                        meta?.let { path to it }
+                        runCatching {
+                            val file = File(path)
+                            if (!file.exists()) return@withPermit null
+                            val cached = cache[path]
+                            // 指纹一致：直接用缓存，免开文件
+                            val meta = if (cached != null &&
+                                cached.size == file.length() && cached.mtime == file.lastModified()
+                            ) cached else readMeta(file)
+                            meta?.let { path to it }
+                        }.getOrNull()
                     }
                 }
             }.awaitAll().filterNotNull()
@@ -341,7 +346,8 @@ object MusicRepository {
         writeCache(merged)
 
         entries.map { (path, meta) -> meta.toSong(path) }
-            .sortedByDescending { File(it.filePath).lastModified() }
+            // 排序直接用缓存里的 mtime（扫盘时已 stat 过），不再对全库逐首 File.lastModified()
+            .sortedByDescending { it.modifiedAt }
     }
 
     /** 由歌曲列表聚合出文件夹清单，按歌曲数降序 */

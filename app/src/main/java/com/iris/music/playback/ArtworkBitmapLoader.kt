@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.media3.session.BitmapLoader
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import com.iris.music.ui.ArtworkLoader
@@ -27,6 +29,7 @@ import kotlinx.coroutines.runBlocking
  *   路径缓存（UI 看过的封面零成本）；content URI 才走 URI 解码回退。
  * - URI 回退优先取当前播放项的 filePath 换路径键，避免重复解码内嵌封面。
  */
+@OptIn(UnstableApi::class)
 class ArtworkBitmapLoader private constructor(private val appContext: Context) : BitmapLoader {
 
     companion object {

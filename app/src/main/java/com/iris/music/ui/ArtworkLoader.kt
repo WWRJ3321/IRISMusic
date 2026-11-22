@@ -337,6 +337,8 @@ object ArtworkLoader {
                 extractor.setDataSource(filePath)
                 (0 until extractor.trackCount).forEach { i ->
                     val format = extractor.getTrackFormat(i)
+                    // MediaFormat.getKeys() 是 API 29+；低版本上 keys 直接为 null（少个封面来源而已）
+                    if (android.os.Build.VERSION.SDK_INT < 29) return@forEach
                     format.keys?.forEach { key ->
                         val value = format.getByteBuffer(key)
                         if (value != null && value.remaining() > 4) {

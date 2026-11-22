@@ -217,7 +217,7 @@ val onSheet = if (colors.isDark) Color.White else Color.Black
                         ) {
                             TextField(
                                 value = newName,
-                                onValueChange = { newName = it },
+                                onValueChange = { newName = it.take(60) },
                                 singleLine = true,
                                 placeholder = { Text(L.playlistName, color = colors.subText, fontSize = 13.sp) },
                                 textStyle = TextStyle(color = colors.text, fontSize = 13.sp),
@@ -546,7 +546,7 @@ internal fun AddToPlaylistSheet(
                         ) {
                             TextField(
                                 value = newName,
-                                onValueChange = { newName = it },
+                                onValueChange = { newName = it.take(60) },
                                 singleLine = true,
                                 placeholder = { Text(L.playlistName, color = colors.subText, fontSize = 13.sp) },
                                 textStyle = TextStyle(color = colors.text, fontSize = 13.sp),

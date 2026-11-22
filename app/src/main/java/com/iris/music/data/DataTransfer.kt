@@ -137,7 +137,8 @@ object DataTransfer {
         val prefs = context.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
         val out = JSONObject()
         prefs.all.forEach { (key, value) ->
-            if (key in EXCLUDED_SETTING_KEYS) return@forEach
+            // 导出侧同样走白名单：未知键（历史遗留/误写入）不外泄到导出文件
+            if (key in EXCLUDED_SETTING_KEYS || key !in ALLOWED_SETTING_KEYS) return@forEach
             val entry = JSONObject()
             when (value) {
                 null -> return@forEach
@@ -197,51 +198,138 @@ object DataTransfer {
     private fun applySettings(context: Context, settings: JSONObject) {
         val prefs = context.getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
         val edit = prefs.edit()
+        var skipped = 0
         settings.keys().forEach { key ->
+            val t = ALLOWED_SETTING_KEYS[key]
+            // 白名单闸门（评审 P1-13）：导入文件里出现未知键一律丢弃——
+            // 否则任意 key + 任意类型能写进 iris_prefs（{"t":"string"} 写进 Long 键，
+            // 下次启动 getLong 直接 ClassCastException，App 永久起不来）。
+            if (t == null) { skipped++; return@forEach }
             val raw = settings.opt(key)
-            // 新格式：{t,v}
-            if (raw is JSONObject && raw.has("t")) {
-                when (raw.optString("t")) {
-                    "bool" -> edit.putBoolean(key, raw.optBoolean("v"))
-                    "int" -> edit.putInt(key, raw.optInt("v"))
-                    "long" -> edit.putLong(key, raw.optLong("v"))
-                    "float" -> edit.putFloat(key, raw.optDouble("v").toFloat())
-                    "string" -> edit.putString(key, raw.optString("v"))
-                    "set" -> {
-                        val arr = raw.optJSONArray("v") ?: JSONArray()
-                        edit.putStringSet(key, HashSet<String>().apply {
-                            for (i in 0 until arr.length()) arr.optString(i, "").takeIf { it.isNotEmpty() }?.let { add(it) }
-                        })
-                    }
+            when (t) {
+                "bool" -> if (raw is Boolean) edit.putBoolean(key, raw) else skipped++
+                "int" -> when (raw) {
+                    is Int -> edit.putInt(key, raw)
+                    is Long -> edit.putInt(key, raw.toInt())
+                    else -> skipped++
                 }
-                return@forEach
-            }
-            // 旧格式兼容：值直接是原始类型（无类型标记，尽力而为）
-            when (raw) {
-                null -> {}
-                is Boolean -> edit.putBoolean(key, raw)
-                // JSON 不分 Int/Long，已知的 Long 键强制 putLong，避免 app 端 getLong 崩溃
-                is Int -> if (key in KNOWN_LONG_KEYS) edit.putLong(key, raw.toLong()) else edit.putInt(key, raw)
-                is Long -> edit.putLong(key, raw)
-                is Double -> edit.putFloat(key, raw.toFloat())
-                is String -> edit.putString(key, raw)
-                is JSONArray -> edit.putStringSet(key, HashSet<String>().apply {
-                    for (i in 0 until raw.length()) raw.optString(i, "").takeIf { it.isNotEmpty() }?.let { add(it) }
-                })
+                "long" -> when (raw) {
+                    is Long -> edit.putLong(key, raw)
+                    is Int -> edit.putLong(key, raw.toLong())
+                    else -> skipped++
+                }
+                "float" -> if (raw is Number) edit.putFloat(key, raw.toFloat()) else skipped++
+                "string" -> if (raw is String) edit.putString(key, raw) else skipped++
+                "set" -> {
+                    val arr = raw as? JSONArray
+                    if (arr != null) edit.putStringSet(key, HashSet<String>().apply {
+                        for (i in 0 until arr.length()) arr.optString(i, "").takeIf { it.isNotEmpty() }?.let { add(it) }
+                    }) else skipped++
+                }
             }
         }
         edit.apply()
     }
 
+    /**
+     * 设置导入白名单：键 → 期望类型（与 app 端 getXxx 一致）。
+     * 由全项目 KEY_ 常量机械提取生成（v4.9.6）；新增设置键时需同步补这里。
+     * 行为数据键（play_counts 等）不在此列——它们走 [PlayHistory.mergeImported] 合并；
+     * 歌单体系（playlist_names/next_id）属 iris_playlists 文件，不通过设置通道恢复。
+     */
+    private val ALLOWED_SETTING_KEYS: Map<String, String> = mapOf(
+        "active_playlist_id" to "long",
+        "app_lang" to "string",
+        "bass_haptics_adaptive" to "bool",
+        "bass_haptics_enabled" to "bool",
+        "bass_haptics_intensity" to "int",
+        "bass_haptics_low_cutoff" to "int",
+        "bass_haptics_pulse_ms" to "int",
+        "bass_haptics_sensitivity" to "int",
+        "bg_blur" to "float",
+        "browse_kind" to "string",
+        "browse_name" to "string",
+        "browse_sections" to "string",
+        "corner_base" to "float",
+        "cover_lyric" to "bool",
+        "cover_lyric_lines" to "int",
+        "cover_shake" to "bool",
+        "custom_bg_uri" to "string",
+        "custom_primary" to "long",
+        "custom_secondary" to "long",
+        "end_ms" to "long",
+        "eq_anchors" to "string",
+        "eq_boost" to "string",
+        "eq_edit_mode" to "string",
+        "eq_levels" to "string",
+        "eq_loudness" to "bool",
+        "eq_loudness_strength" to "int",
+        "exploration" to "float",
+        "fade_enabled" to "bool",
+        "fade_ms" to "long",
+        "float_lyric_bg" to "float",
+        "float_lyric_enabled" to "bool",
+        "float_lyric_font" to "float",
+        "float_lyric_width" to "float",
+        "float_lyric_x" to "int",
+        "float_lyric_y" to "int",
+        "font_scale" to "float",
+        "fullscreen_card" to "bool",
+        "glass_blur" to "float",
+        "haptics_drag_enabled" to "bool",
+        "haptics_enabled" to "bool",
+        "haze_enabled" to "bool",
+        "jelly_anim" to "bool",
+        "karaoke_lyric" to "bool",
+        "last_position_ms" to "long",
+        "last_song_id" to "long",
+        "liked_badge" to "bool",
+        "loudnorm_enabled" to "bool",
+        "loudnorm_strength" to "int",
+        "lyric_align" to "int",
+        "lyric_font" to "int",
+        "lyric_font_size" to "float",
+        "mode" to "string",
+        "playlist_songs_" to "string",
+        "range_enhancer_enabled" to "bool",
+        "range_enhancer_strength" to "int",
+        "repeat_mode" to "string",
+        "row_artist" to "bool",
+        "row_cover" to "bool",
+        "row_playlist" to "bool",
+        "row_size" to "int",
+        "safe_limiter_enabled" to "bool",
+        "safe_limiter_strength" to "int",
+        "scan_root" to "string",
+        "search_persistent" to "bool",
+        "selected_folders" to "string",
+        "show_recommendations" to "bool",
+        "show_sort_bar" to "bool",
+        "shuffle_enabled" to "bool",
+        "silence_skip_enabled" to "bool",
+        "sleep_last_minutes" to "int",
+        "sort_direction" to "string",
+        "sort_order" to "string",
+        "spatial_wide_enabled" to "bool",
+        "spatial_wide_strength" to "int",
+        "surface_style" to "string",
+        "theme" to "string",
+        "tilt_spectrum" to "bool",
+        "topbar_autohide" to "bool",
+        "total_ms" to "long",
+        "ui_font" to "int",
+        "ui_layout" to "string",
+        "update_check_enabled" to "bool",
+        "virtual_bass_enabled" to "bool",
+        "virtual_bass_strength" to "int",
+        "virtual_surround_enabled" to "bool",
+        "virtual_surround_strength" to "int",
+        "visualizer_enabled" to "bool",
+    )
+
     /** 行为数据键：导入时走 [PlayHistory.mergeImported] 精细合并，不走设置原样恢复 */
     private val EXCLUDED_SETTING_KEYS = setOf(
         "play_counts", "skip_counts", "last_played", "likes", "total_played_ms", "incomplete_counts"
-    )
-
-    /** 旧格式导入兼容：这些键在 app 里用 getLong 读，JSON 里退化成 Int 时要强制 putLong，否则崩溃 */
-    private val KNOWN_LONG_KEYS = setOf(
-        "fade_ms", "custom_primary", "custom_secondary",
-        "active_playlist_id", "last_song_id", "last_position_ms"
     )
 
     /** 写出到用户选定的 Uri（SAF）。IO 线程执行。 */
@@ -277,16 +365,30 @@ object DataTransfer {
         withContext(Dispatchers.IO) {
             val text = runCatching {
                 context.contentResolver.openInputStream(uri)?.use { input ->
-                    // 大小护栏：坏文件/超大文件不许整读进内存（32MB 上限，正常导出远小于此）
-                    if (input.available() > 32 * 1024 * 1024) return@use null
-                    val buf = input.readBytes()
-                    if (buf.size > 32 * 1024 * 1024) null else buf.decodeToString()
+                    // 大小护栏 v2（评审 P1-13）：available() 对 content URI 基本返回 0，
+                    // 原第一道护栏形同虚设。改限长读取：最多读 32MB+1，超限即拒绝，
+                    // 坏文件永远不会整块进内存。
+                    val cap = 32 * 1024 * 1024
+                    // readNBytes 是 API 33+，minSdk 24 上手写限长循环（语义一致）
+                    val out = java.io.ByteArrayOutputStream(minOf(cap, 1 shl 20))
+                    val chunk = ByteArray(64 * 1024)
+                    var over = false
+                    while (true) {
+                        val n = input.read(chunk)
+                        if (n < 0) break
+                        if (out.size() + n > cap) { over = true; break }
+                        out.write(chunk, 0, n)
+                    }
+                    if (over) null else out.toByteArray().decodeToString()
                 }
             }.getOrNull() ?: return@withContext ImportResult.Failed
 
             val root = runCatching { JSONObject(text) }.getOrNull()
                 ?: return@withContext ImportResult.BadFormat
             if (!root.has("songs") || !root.has("format")) return@withContext ImportResult.BadFormat
+            // 版本闸门：只认已知格式。未来 format=2 的文件落到旧版 app 上在这里拒绝，
+            // 而不是把未知结构当 v1 乱灌。
+            if (root.optInt("format", -1) != FORMAT_VERSION) return@withContext ImportResult.BadFormat
 
             runCatching {
                 val settingsJson = root.optJSONObject("settings")
@@ -338,7 +440,7 @@ object DataTransfer {
                 val playlistArray = root.optJSONArray("playlists") ?: JSONArray()
                 for (i in 0 until playlistArray.length()) {
                     val o = playlistArray.optJSONObject(i) ?: continue
-                    val name = o.optString("name").trim()
+                    val name = Playlists.sanitizeName(o.optString("name"))
                     if (name.isEmpty()) continue
                     val idsJson = o.optJSONArray("songIds") ?: continue
                     val rawIds = ArrayList<Long>(idsJson.length())
@@ -456,14 +558,12 @@ object DataTransfer {
             val incompletes = HashMap<Long, Int>()
             val totals = HashMap<Long, Long>()
             val lasts = HashMap<Long, Long>()
-            var matched = 0
 
             val songArr = root.optJSONArray("songs") ?: JSONArray()
             for (i in 0 until songArr.length()) {
                 val o = songArr.optJSONObject(i) ?: continue
                 val key = nameKey(o.optString("title"), o.optString("artist"))
                 val id = byName[key] ?: continue
-                matched++
                 if (o.optBoolean("liked")) likes.add(id)
                 o.optInt("playCount").let { if (it > 0) plays[id] = maxOf(plays[id] ?: 0, it) }
                 o.optInt("incompleteCount").let { if (it > 0) incompletes[id] = maxOf(incompletes[id] ?: 0, it) }
@@ -495,7 +595,6 @@ object DataTransfer {
             }
 
             PlayHistory.mergeImported(likes, plays, incompletes, totals, lasts)
-            matched
             clearOrphans(context)
         }
     }

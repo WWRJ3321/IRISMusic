@@ -294,7 +294,7 @@ fun Modifier.glassSurface(
             // 取整避免半像素错位——错半格边缘就会出现一条重影。
             val pad = if (layer != null) ceil(blurPx + refractionPx).toInt() else 0
 
-            if (layer != null) {
+            if (layer != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 layer.renderEffect = buildGlassEffect(
                     shaders = shaders,
                     spec = spec,

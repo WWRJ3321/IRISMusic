@@ -77,6 +77,16 @@ object TrackGain : BaseAudioProcessor() {
         store = loadStore(p)
     }
 
+    /**
+     * 响度库落盘专用单线程。评审 P0-3：putLufs 原来直接跑在音频线程的调用栈上
+     * （序列化几百条 + 拿 prefs 锁），且与主线程 setCurrentSong 共享 @Synchronized
+     * 这一把锁——音频线程等主线程 = 优先级反转，正是爆音最喜欢出现的位置。
+     * 现在音频线程只把 (path, lufs, peak) 投递进来，序列化与写盘都在这边做。
+     */
+    private val storeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "TrackGainStore").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }
+    }
+
     fun setEnabled(v: Boolean) {
         enabled = v
     }
@@ -360,16 +370,24 @@ object TrackGain : BaseAudioProcessor() {
         return 10f.pow(db / 20f)
     }
 
-    // 库存取（切换时才发生，非实时路径；同步方法保护 Map）
-    @Synchronized private fun putLufs(path: String, lufs: Float, peak: Float) {
+    // 库存取（切换时才发生，非实时路径；@Volatile 引用交换 + 落盘走 [storeExecutor]）
+    /** 只改内存 + 投递落盘。序列化/写 prefs 全在 [storeExecutor] 做，不占音频线程 */
+    private fun putLufs(path: String, lufs: Float, peak: Float) {
         val m = store.toMutableMap()
+        m.remove(path)
         m[path] = floatArrayOf(lufs, peak)
-        // 超限删最旧（插入序近似访问序，够用）
+        // 超限删最旧（LinkedHashMap 插入序近似访问序，够用）
         while (m.size > STORE_MAX) {
             val eldest = m.keys.firstOrNull() ?: break
             m.remove(eldest)
         }
         store = m
+        val snapshot = HashMap(m)
+        runCatching { storeExecutor.execute { persistStore(snapshot) } }
+    }
+
+    /** 仅在 [storeExecutor] 线程执行：序列化 + 写 prefs（可能几十 KB，慢） */
+    private fun persistStore(m: Map<String, FloatArray>) {
         prefs?.edit()?.putString(KEY_STORE, encodeStore(m))?.apply()
     }
 

@@ -40,6 +40,7 @@ import android.os.SystemClock
  * 前台播放服务：持有 ExoPlayer 与 MediaSession。
  * UI 侧通过 MediaController 连接本服务进行控制，保证后台/通知栏播放。
  */
+@OptIn(UnstableApi::class)
 class MusicService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null

@@ -12,11 +12,62 @@ import android.content.SharedPreferences
  * 只记歌单名 + 歌曲 ID 列表（有序，保持加入顺序）。
  *
  * 存储格式：
- * - playlist_names:   "自增ID:名称;自增ID:名称;..."
- * - playlist_songs_<id>:  "songId,songId,songId,..."
+ * - playlist_names:   JSON 数组 [{"id":1,"name":"..."},...]（v4.9.6 起）。
+ *   旧版是 "自增ID:名称;自增ID:名称;..." 裸拼接——名字里含 : 或 ; 会被截断，
+ *   甚至能借导入改写别的歌单（评审 P0-2）。读取时自动识别旧格式并就地迁移。
+ * - playlist_songs_<id>:  "songId,songId,songId,..."（纯数字，无注入面，保持不变）
  * - playlist_next_id: 下一个自增 ID
  */
 object Playlists {
+
+    private const val MAX_NAME_LEN = 60
+
+    /**
+     * 名字清洗：去控制字符、限长。JSON 存储本身不怕特殊字符，这里是为了
+     * UI 整洁与导出文件干净；导入路径（DataTransfer）也走这一道。
+     */
+    internal fun sanitizeName(raw: String): String {
+        val s = raw.replace(Regex("[\u0000-\u001f\u007f]"), " ").trim()
+        return if (s.length > MAX_NAME_LEN) s.take(MAX_NAME_LEN).trimEnd() else s
+    }
+
+    /** 序列化：id→name 有序表 → JSON 数组文本。纯函数，供单测 */
+    internal fun encodeNames(map: Map<Long, String>): String {
+        val arr = org.json.JSONArray()
+        for ((id, name) in map) arr.put(org.json.JSONObject().put("id", id).put("name", name))
+        return arr.toString()
+    }
+
+    /**
+     * 反序列化：同时接受新 JSON 格式与旧 "id:name;id:name" 格式（自动迁移）。
+     * 纯函数，供单测。旧格式按【第一个】冒号切分——名字里后续的冒号保留，
+     * 尽量少丢用户数据（旧版是 split(':') 取 [1]，冒号后全丢）。
+     */
+    internal fun decodeNames(raw: String): LinkedHashMap<Long, String> {
+        val map = LinkedHashMap<Long, String>()
+        val t = raw.trim()
+        if (t.isEmpty()) return map
+        if (t.startsWith("[")) {
+            runCatching {
+                val arr = org.json.JSONArray(t)
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optLong("id", -1L)
+                    val name = o.optString("name")
+                    if (id >= 0 && name.isNotEmpty()) map[id] = name
+                }
+            }
+            return map
+        }
+        for (part in t.split(';')) {
+            val idx = part.indexOf(':')
+            if (idx <= 0) continue
+            val id = part.substring(0, idx).trim().toLongOrNull() ?: continue
+            val name = part.substring(idx + 1)
+            if (name.isNotEmpty()) map[id] = name
+        }
+        return map
+    }
 
     private const val PREFS = "iris_playlists"
     private const val KEY_NAMES = "playlist_names"
@@ -52,7 +103,7 @@ object Playlists {
     fun create(name: String): Long = synchronized(writeLock) {
         val id = prefs.getLong(KEY_NEXT_ID, 1L)
         val cur = readNamesMap()
-        cur[id] = name.trim().ifBlank { L.autoPlaylistName(id) }
+        cur[id] = sanitizeName(name).ifBlank { L.autoPlaylistName(id) }
         writeNames(cur)
         prefs.edit().putLong(KEY_NEXT_ID, id + 1).apply()
         cachedPlaylists = null
@@ -63,7 +114,7 @@ object Playlists {
     fun rename(playlistId: Long, newName: String): Boolean = synchronized(writeLock) {
         val cur = readNamesMap()
         if (playlistId !in cur) return@synchronized false
-        cur[playlistId] = newName.trim().ifBlank { L.autoPlaylistName(playlistId) }
+        cur[playlistId] = sanitizeName(newName).ifBlank { L.autoPlaylistName(playlistId) }
         writeNames(cur)
         cachedPlaylists = null
         true
@@ -158,20 +209,16 @@ object Playlists {
 
     private fun readNamesMap(): MutableMap<Long, String> {
         val raw = prefs.getString(KEY_NAMES, "") ?: ""
-        val map = linkedMapOf<Long, String>()
-        if (raw.isBlank()) return map
-        for (part in raw.split(';')) {
-            val kv = part.split(':')
-            val id = kv.getOrNull(0)?.trim()?.toLongOrNull() ?: continue
-            val name = kv.getOrNull(1) ?: continue
-            map[id] = name
+        val map = decodeNames(raw)
+        // 旧格式读出后立即按新格式回写（就地迁移；幂等，重入无害）
+        if (raw.isNotBlank() && !raw.trim().startsWith("[")) {
+            runCatching { prefs.edit().putString(KEY_NAMES, encodeNames(map)).apply() }
         }
         return map
     }
 
     private fun writeNames(map: Map<Long, String>) {
-        val raw = map.entries.joinToString(";") { "${it.key}:${it.value}" }
-        prefs.edit().putString(KEY_NAMES, raw).apply()
+        prefs.edit().putString(KEY_NAMES, encodeNames(map)).apply()
     }
 }
 

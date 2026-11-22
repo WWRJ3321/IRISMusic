@@ -1735,7 +1735,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             SortOrder.ALBUM -> list.sortedByText({ it.album }, { it.title })
             SortOrder.DURATION -> list.sortedBy { it.durationMs }
             // 文件修改时间作为本地可用的“添加/修改时间”代理，先按旧到新排列。
-            SortOrder.RECENT -> list.sortedBy { File(it.filePath).lastModified() }
+            // 读内存字段（扫描时由 MetaEntry.mtime 带入），旧数据未重扫前 modifiedAt=0 排最前，
+            // 下次全量扫描后自动归位。
+            SortOrder.RECENT -> list.sortedBy { it.modifiedAt }
             // 播放次数：少→多（正序），倒序即"最常听"。同次数按标题稳定排列。
             // 注意：只在 applyFilters 时取快照，播放中计数变化不会实时重排列表
             // （否则每切一首歌主页就跳一次，违反"主页排序任何情景不乱"）。

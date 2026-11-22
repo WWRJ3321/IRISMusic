@@ -46,8 +46,8 @@ android {
         applicationId = "com.iris.music"
         minSdk = 24
         targetSdk = 34
-        versionCode = 49005
-        versionName = "4.9.5"
+        versionCode = 49006
+        versionName = "4.9.6"
 
         // 只保留中英文资源，去掉其它语言的 Compose/AndroidX 字符串，减小体积
         resourceConfigurations += listOf("en", "zh")
@@ -121,4 +121,8 @@ dependencies {
     // Coil + okhttp removed: ~8MB installed size saved.
     // Album art loaded via ContentResolver + ThumbnailUtils instead.
     // palette-ktx removed: not used anywhere.
+
+    // 单元测试（v4.9.6 起补测试基建，只进 test classpath，不进 APK）
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
