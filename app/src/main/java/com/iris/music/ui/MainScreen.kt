@@ -546,7 +546,11 @@ visible = scrollerVisible,
                     onCommitAnchors = { EqualizerController.commitAnchors() },
                     onAddAnchor = { freq, gain -> EqualizerController.addAnchor(freq, gain) },
                     onRemoveAnchor = { EqualizerController.removeAnchor(it) },
-                    onReset = { EqualizerController.reset() },
+                    onReset = {
+                        // Reset = 全量复位：EQ 曲线 + 面板内全部独立音效一并回到默认
+                        EqualizerController.reset()
+                        viewModel.resetAllEffects()
+                    },
                     colors = colors
                 )
             }
@@ -1075,6 +1079,7 @@ private fun LibraryPage(
                 SongRow(
                     song = song,
                     active = index == state.currentIndex,
+                    index = index,
                     colors = colors,
                     rowSize = state.rowSize,
                     showCover = state.showRowCover,
@@ -2152,6 +2157,7 @@ internal fun RefreshButton(onClick: () -> Unit, colors: IrisColors, isRefreshing
 private fun SongRow(
     song: Song,
     active: Boolean,
+    index: Int,
     colors: IrisColors,
     rowSize: Int,
     showCover: Boolean = false,
@@ -2197,14 +2203,29 @@ private fun SongRow(
             .padding(start = 14.dp, end = 14.dp, top = vPad, bottom = vPad),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 行内指示条：当前播放行显示主色胶囊，天然钉在歌单上，滚动跟随、开APP必显示
+        // 左侧槽位：当前播放行显示主色胶囊（动画生长），非播放行显示序号
         Box(
-            Modifier
-                .width(4.dp)
-                .height(barH)
-                .clip(RoundedCornerShape(2.dp))
-                .background(colors.primary)
-        )
+            Modifier.width(22.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (active) {
+                Box(
+                    Modifier
+                        .width(4.dp)
+                        .height(barH)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(colors.primary)
+                )
+            } else {
+                Text(
+                    "${index + 1}",
+                    color = colors.subText,
+                    fontSize = if (rowSize == 0) 10.sp else 11.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1
+                )
+            }
+        }
         Spacer(Modifier.width(10.dp))
         if (showCover) {
             SongArtwork(

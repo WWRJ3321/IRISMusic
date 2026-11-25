@@ -2091,7 +2091,10 @@ private fun rememberPosterLyric(song: Song): androidx.compose.runtime.State<Post
     LaunchedEffect(path) {
         var lines = posterLyricCache[path]
         if (lines == null) {
-            lines = withContext(Dispatchers.IO) { LyricParser.loadLyrics(path, globalDurationMs) }
+            // 防御：解析任何一处抛出异常都不能崩掉唱片墙（#6 闪退候选点），失败即视为无歌词
+            lines = withContext(Dispatchers.IO) {
+                runCatching { LyricParser.loadLyrics(path, globalDurationMs) }.getOrDefault(emptyList())
+            }
             posterLyricCache[path] = lines
         }
         val allLines = lines

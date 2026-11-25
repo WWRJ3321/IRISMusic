@@ -2,7 +2,7 @@
 
 > 写给未来的自己和 AI 协作者：改代码前先读这份，避免走弯路。
 >
-> 对应版本：v4.5.1 · 最后更新：2026-10-04 · 规模：51 个 Kotlin 文件 / ~24000 行
+> 对应版本：v4.9.6 · 最后更新：2026-11-22 · 规模：56 个 Kotlin 文件 / ~27000 行
 
 ## 1. 技术栈与总体形态
 
@@ -88,7 +88,7 @@ PlayerViewModel  ──  PlayerUiState   ← 唯一真相源（StateFlow）
 
 ### 3.5 `data/`
 
-`MusicRepository`（MediaStore 扫描）、`LyricParser`（LRC 含逐字时间轴）、
+`MusicRepository`（直扫文件系统，不依赖 MediaStore）、`LyricParser`（LRC 含逐字时间轴）、
 `Playlists` / `PlayHistory` / `ListenStats`（JSON 落盘）、
 `Recommender`（本地加权推荐）、`DataTransfer`（导入导出）、`UpdateChecker`（唯一联网点）。
 
@@ -171,8 +171,8 @@ git 里最新只有 3.9.1，GitHub 最新只有 4.5.0 —— 源码彻底丢失�
 
 ### 已具备（不是债务）
 
-- **CI 已存在**：`.github/workflows/build.yml`，tag 推送触发，含三项有价值的设计——
-  自动剥离设备专属的 `gradle.properties` 覆盖项、**manifest 权限白名单审计**（新增权限会让 CI 失败）、
+- **CI 已存在且真实可用（v4.9.6 run #50 首绿）**：`.github/workflows/build.yml`，tag 推送触发，含——
+  **GPL 头校验**（v4.9.6 曾真实拦下 53 个缺头文件）、**lint+单测**、**Verify APK**（产物存在+含 dex）、**manifest 权限白名单审计**（新增权限会让 CI 失败）；设备专属 gradle 覆盖项在本机 ~/.gradle/gradle.properties，版本库是干净配置（旧描述与事实不符已更正）——
   产出 SHA256SUMS 作为可复现构建证据。CI 用临时 debug 签名，不作为发布包。
 - **代码卫生良好**：零 TODO/FIXME、零 `println` 调试残留、零空 `catch` 块、`@Suppress` 仅 10 处。
 - **ProGuard 规则**：`app/proguard-rules.pro` 存在，R8 全模式已开。

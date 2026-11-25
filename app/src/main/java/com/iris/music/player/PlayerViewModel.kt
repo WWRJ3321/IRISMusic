@@ -1304,6 +1304,28 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(loudnormStrength = x)
     }
 
+    /** 一键复位全部音效：面板里 7 个独立音效全部关停、强度回到默认（配合 EQ 曲线 reset 构成完整 Reset） */
+    fun resetAllEffects() {
+        setBassHaptics(false)
+        setBassHapticsIntensity(1)
+        setBassHapticsPulseMs(20)
+        setBassHapticsSensitivity(5)
+        setBassHapticsLowCutoff(250)
+        setBassHapticsAdaptive(false)
+        setVirtualBass(false)
+        setVirtualBassStrength(50)
+        setRangeEnhancer(false)
+        setRangeEnhancerStrength(70)
+        setVirtualSurround(false)
+        setVirtualSurroundStrength(40)
+        setSpatialWide(false)
+        setSpatialWideStrength(50)
+        setSafeLimiter(false)
+        setSafeLimiterStrength(30)
+        setLoudnorm(false)
+        setLoudnormStrength(70)
+    }
+
     // ==================== 点赞 ====================
     fun toggleLike(songId: Long) {
         setLiked(songId, songId !in _state.value.likedSongIds)
