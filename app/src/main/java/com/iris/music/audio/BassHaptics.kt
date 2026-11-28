@@ -20,7 +20,6 @@ package com.iris.music.audio
 import android.content.Context
 import android.os.Build
 import android.os.Handler
-import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -147,7 +146,48 @@ object BassHaptics {
     /** 鼓点类型：决定用哪种触感原语（脆/中/闷）与节流间隔 */
     private enum class Hit { LOW, MID, HIGH }
 
-    private val handler = Handler(Looper.getMainLooper())
+    // v5.0 r4：检测 + 震动挪到独立线程。旧版在主线程 8ms 轮询一次并在主线程发 vibrate（Binder 调用），
+    // 播放期间每秒 125 次挤占 UI 帧；界面一忙（切布局、滚列表）震动就跟着迟到、扎堆。
+    private val handler: Handler by lazy {
+        val t = android.os.HandlerThread("iris-haptics", android.os.Process.THREAD_PRIORITY_DISPLAY)
+        t.start(); Handler(t.looper)
+    }
+    private val fireToken = Any()
+    private var appContext: Context? = null
+    private var btCheckedAt = 0L
+    private var btOut = false
+
+    /** 用户同步微调（ms，−250…+250，正值 = 震动更晚） */
+    const val KEY_SYNC_OFFSET = "bass_haptics_sync_offset"
+    @Volatile
+    var syncOffsetMs: Int = 0
+        private set
+    fun setSyncOffsetMs(ms: Int) { syncOffsetMs = ms.coerceIn(-250, 250) }
+
+    /**
+     * 声画（声触）对齐：频谱旁路挂在音频链末端，PCM 在这里被分析时还要先进 AudioTrack 缓冲
+     * （ExoPlayer 默认约 250ms）才真正出声，所以旧版的震动整体比鼓点早——手先到、耳后到。
+     * 这里按输出延迟把每一下往后推：扬声器/有线约 320ms，蓝牙约 480ms（r4.1 实机反馈仍偏早，从 230/400 上调），叠加用户微调。
+     */
+    private fun outputDelayMs(): Long {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - btCheckedAt > 3000L) {
+            btCheckedAt = now
+            btOut = runCatching {
+                val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+                am?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)?.any {
+                    it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                        it.type == 26 /* TYPE_BLE_HEADSET */ || it.type == 27 /* TYPE_BLE_SPEAKER */
+                } ?: false
+            }.getOrDefault(false)
+        }
+        val base = if (btOut) 480 else 320
+        return (base + syncOffsetMs).coerceAtLeast(0).toLong()
+    }
+
+    private fun scheduleFire(block: () -> Unit) {
+        handler.postAtTime(block, fireToken, android.os.SystemClock.uptimeMillis() + outputDelayMs())
+    }
     private var vibrator: Vibrator? = null
     private var lastPulseAt = 0L
     /** 上一次实际触发的击打强度 0-1，用于听觉掩蔽判定 */
@@ -180,7 +220,9 @@ object BassHaptics {
     private const val WARMUP_FRAMES = 50
 
     fun init(context: Context) {
+        appContext = context.applicationContext
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        syncOffsetMs = prefs.getInt(KEY_SYNC_OFFSET, 0).coerceIn(-250, 250)
         enabled = prefs.getBoolean(KEY_ENABLED, false)
         intensity = prefs.getInt(KEY_INTENSITY, 1).coerceIn(0, 2)
         pulseMs = prefs.getInt(KEY_PULSE_MS, 20).coerceIn(1, 30)
@@ -202,7 +244,10 @@ object BassHaptics {
     fun setEnabled(value: Boolean) {
         enabled = value
         refreshSidechain()
-        if (value) startPolling() else handler.removeCallbacks(poll)
+        if (value) startPolling() else {
+            handler.removeCallbacks(poll)
+            handler.removeCallbacksAndMessages(fireToken)
+        }
     }
 
     fun setIntensity(level: Int) {
@@ -326,9 +371,14 @@ object BassHaptics {
         val amp = (base * f).toInt().coerceIn(45, 255)
         // 底鼓时长：短档也要保底 8ms。马达有惯性，4ms 还没振起来就结束了，
         // 强弱对比要靠幅度做，不能靠把时长压到马达响应不了的区间。
-        val ms = durationMs.coerceIn(8, 32).toLong()
+        val ms = durationMs.coerceIn(8, 60).toLong()
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && v.hasAmplitudeControl()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && v.hasAmplitudeControl() && ms > 28) {
+                // 长低音（808 拖尾）：前段满幅、后段半幅，做出"咚——"的下沉回落
+                val head = (ms * 0.55f).toLong()
+                v.vibrate(VibrationEffect.createWaveform(
+                    longArrayOf(head, ms - head), intArrayOf(amp, (amp * 0.5f).toInt().coerceAtLeast(45)), -1))
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && v.hasAmplitudeControl()) {
                 v.vibrate(VibrationEffect.createOneShot(ms, amp))
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // 无幅度控制的机器：退而用最重的预设脆震，至少档位上区分开
@@ -363,6 +413,7 @@ object BassHaptics {
 
     private fun refreshSidechain() {
         SpectrumAnalyzer.sidechainEnabled = SilenceSkipper.enabled || enabled
+        SpectrumAnalyzer.hapticBands = enabled
     }
 
     private fun startPolling() {
@@ -379,6 +430,123 @@ object BassHaptics {
         lastLowAt = 0L; lastMidAt = 0L; lastHighAt = 0L
         lastPulseStrength = 0f
         warmup = 0
+        tL.pk = 0f; tM.pk = 0f; tH.pk = 0f
+        refTotal = -200f
+        lowAt = -1_000_000L; anyAt = -1_000_000L; anyStrength = 0f
+        pendingMh = null; pendingMhAt = -1_000_000L
+        // 暂停/切歌：还排在输出延迟里的震动作废，不在静音后补震
+        handler.removeCallbacksAndMessages(fireToken)
+    }
+
+    // ================= v5.0 r6 检测器：时域分频起拍 =================
+    // 旧检测用 FFT 谱通量，其"低音"实际覆盖 43–560Hz（见 SpectrumAnalyzer 注释），
+    // 人声/旋律起伏抢先触发中频轻震，紧随其后的底鼓又被 100ms 节流与掩蔽吞掉。
+    // 用户两首测试曲离线回放（XZ 前奏 4–16s）：参考低音起拍 41 个，旧版低音震只命中 10 个，
+    // 新版命中 30 个且全部落在 0.47s 的鼓点网格上。
+    //
+    // 规则：
+    // 1. 三路各自取 dB 包络的 2 帧上升量（~23ms），阈值 = max(最小上升, 均值 + k×标准差)，且须为局部峰。
+    // 2. 底鼓优先：底鼓不受中高频节流/掩蔽；底鼓到来时撤销 60ms 内排队的中高频震动。
+    // 3. 力度 = 上升陡度 × 一半 + 低音占全频比重 × 一半——低音越"顶"的歌震得越实。
+    // 4. 时长随低音拖尾：输出延迟期间回看拖尾长度，808 长尾给到最长 40ms 的"咚——"。
+    // r8：按"这首歌的重拍"来判。旧做法（均值 + k×标准差）是相对阈值，任何歌都会被它
+    // 自己找出一串"起拍"，安静段、前奏、尾奏也照震不误（模拟 春を連れて 全曲恒定 2.7 下/秒）。
+    // 现在每路维护一个"近期大击打的典型上升量" pk（软上升、10s 衰减、单次计入封顶 26dB），
+    // 只有上升量达到 pk 的 62% 以上才算重拍；整体响度低于近期峰值 12dB 视为安静段，不震。
+    private class Track { var pk = 0f }
+    private val tL = Track(); private val tM = Track(); private val tH = Track()
+    private var refTotal = -200f
+    private var lowAt = -1_000_000L
+    private var anyAt = -1_000_000L
+    private var anyStrength = 0f
+    private var pendingMh: Runnable? = null
+    private var pendingMhAt = -1_000_000L
+
+    private fun ring(arr: FloatArray, f: Long): Float = arr[(f % SpectrumAnalyzer.RING).toInt()]
+
+    /** 候选帧 f-1 的上升量；非局部峰返回 −1。顺带更新该路 pk。 */
+    private fun riseAt(t: Track, arr: FloatArray, f: Long, pkDecay: Float): Float {
+        t.pk *= pkDecay
+        val r0 = ring(arr, f - 1) - ring(arr, f - 3)
+        val rp = ring(arr, f - 2) - ring(arr, f - 4)
+        val rn = ring(arr, f) - ring(arr, f - 2)
+        if (r0 < rp || r0 < rn || r0 <= 0f) return -1f
+        val rc = minOf(r0, 26f)
+        if (rc > t.pk) t.pk += 0.3f * (rc - t.pk)
+        return r0
+    }
+
+    /** 从 onset 帧起，kick 包络维持在峰值 −6dB 以内的帧数（上限 20 帧 ≈ 230ms） */
+    private fun sustainFrames(onset: Long): Int {
+        val cur = SpectrumAnalyzer.analysisFrame
+        val pk = ring(SpectrumAnalyzer.kickDbRing, onset)
+        var n = 0
+        while (n < 20 && onset + n <= cur && cur - (onset + n) < SpectrumAnalyzer.RING - 1 &&
+            ring(SpectrumAnalyzer.kickDbRing, onset + n) > pk - 6f) n++
+        return n
+    }
+
+    private fun ampFor(strength: Float): Float {
+        val st = kotlin.math.tanh(strength * AMP_CURVE)
+        val loudAdj = (SpectrumAnalyzer.relativeLoudnessDb * LOUDNESS_GAIN_PER_DB)
+            .coerceIn(LOUDNESS_ADJ_MIN, LOUDNESS_ADJ_MAX)
+        return (AMP_MIN + (1f - AMP_MIN) * st + loudAdj).coerceIn(0.2f, 1f)
+    }
+
+    private fun processFrame(v: Vibrator, f: Long, cur: Long, now: Long) {
+        val fm = SpectrumAnalyzer.frameMs
+        val pkDecay = kotlin.math.exp(-fm / 10_000f)
+        val live = warmup >= WARMUP_FRAMES
+        if (!live) warmup++
+        val onset = f - 1
+        val kickDb = ring(SpectrumAnalyzer.kickDbRing, onset)
+        val totDb = ring(SpectrumAnalyzer.totalDbRing, onset)
+        refTotal = maxOf(refTotal - fm / 1000f, totDb)
+        val rL = riseAt(tL, SpectrumAnalyzer.kickDbRing, f, pkDecay)
+        val rM = riseAt(tM, SpectrumAnalyzer.midDbRing, f, pkDecay)
+        val rH = riseAt(tH, SpectrumAnalyzer.highDbRing, f, pkDecay)
+        if (!live || totDb < refTotal - 12f) return
+        // 灵敏度：5 档 = 55%；10 档 = 40%（更多）；1 档 = 67%（更少）。r11 由 62% 下调：r9 实机"太少"、r6"太多"，取中
+        val ratio = 0.55f + (5 - sensitivity) * 0.03f
+        val onsetAt = now - ((cur - f + 1) * fm).toLong()
+        val fireAt = onsetAt + outputDelayMs()
+
+        // ---- 底鼓 ----
+        if (rL >= maxOf(7f, ratio * tL.pk) && kickDb >= totDb - 15f && onsetAt - lowAt >= 170L) {
+            val rel = ((rL / tL.pk.coerceAtLeast(1f) - ratio) / 0.6f).coerceIn(0f, 1f)
+            val weight = ((kickDb - totDb + 12f) / 12f).coerceIn(0f, 1f)
+            val strength = 0.5f * rel + 0.5f * weight
+            if (pendingMh != null && onsetAt - pendingMhAt < 60L) {
+                handler.removeCallbacks(pendingMh!!)
+                pendingMh = null
+            }
+            lowAt = onsetAt; anyAt = onsetAt; anyStrength = strength
+            val amp = ampFor(strength)
+            val lv = intensity
+            val base = if (adaptive) (18f * (0.7f + 0.3f * strength)).toInt() else pulseMs
+            handler.postAtTime({
+                val extra = ((sustainFrames(onset) * 2.5f - 10f) * 0.5f).coerceIn(0f, 15f).toInt()
+                firePulse(v, Hit.LOW, lv, (base + extra).coerceIn(8, 40), amp)
+            }, fireToken, fireAt)
+            return
+        }
+        // ---- 敲击/军鼓/镲：底鼓后 300ms 起可补位（r9：600ms 把 永久の宴 这类底鼓被压、靠拍手/镲推动的电音全挡掉了）----
+        if (onsetAt - lowAt < 200L || onsetAt - anyAt < 170L) return
+        val mOk = rM >= maxOf(9f, 0.80f * tM.pk)
+        val hOk = rH >= maxOf(9f, 0.80f * tH.pk)
+        if (!mOk && !hOk) return
+        val sM = if (mOk) rM / tM.pk.coerceAtLeast(1f) else 0f
+        val sH = if (hOk) rH / tH.pk.coerceAtLeast(1f) else 0f
+        val isMid = sM >= sH
+        val sMh = (0.8f * ((if (isMid) sM else sH) - 0.80f) / 0.5f + 0.4f).coerceIn(0.3f, 1f)
+        anyAt = onsetAt; anyStrength = sMh
+        val hit = if (isMid) Hit.MID else Hit.HIGH
+        val amp = ampFor(sMh)
+        val lv = intensity
+        val dur = if (adaptive) ((if (isMid) 11f else 6f) * (0.7f + 0.3f * sMh)).toInt() else pulseMs
+        val r = Runnable { firePulse(v, hit, lv, dur, amp) }
+        pendingMh = r; pendingMhAt = onsetAt
+        handler.postAtTime(r, fireToken, fireAt)
     }
 
     private val poll = object : Runnable {
@@ -386,169 +554,24 @@ object BassHaptics {
             if (!enabled) { resetState(); return }
             val v = vibrator ?: return
             if (!v.hasVibrator()) return
-
-            // 数据过期（没在播放）：状态归零，等下次播放从头建立基线
             if (!SpectrumAnalyzer.isFresh()) {
                 resetState()
-                handler.postDelayed(this, 20L)
+                handler.postDelayed(this, 500L)
                 return
             }
-
-            // 只在有新 FFT 帧时处理，避免同一帧被 20ms 轮询重复消费（会虚增触发）
-            val frame = SpectrumAnalyzer.analysisFrame
-            if (frame == lastFrame) {
-                handler.postDelayed(this, 8L)
-                return
+            val cur = SpectrumAnalyzer.analysisFrame
+            if (lastFrame == 0L || cur - lastFrame > SpectrumAnalyzer.RING / 2 || cur < lastFrame) {
+                // 首帧或落后太多：从当前帧起步，不回放积压
+                lastFrame = cur
             }
-            lastFrame = frame
-
-            val low = SpectrumAnalyzer.lowFlux
-            val mid = SpectrumAnalyzer.midFlux
-            val high = SpectrumAnalyzer.highFlux
-            val energy = SpectrumAnalyzer.beatLevel
-            val rising = SpectrumAnalyzer.bandsRising
-
-            // 预热：起播/切歌后的头 ~0.6 秒只累积三路 EMA 基线，不触发。
-            // 这几帧里均值/方差刚从 0 起步，阈值极低，起播瞬态极易误触——
-            // "没放歌也震一下"多半就是这里。等基线建立起来再放行。
-            if (warmup < WARMUP_FRAMES) {
-                warmup++
-                val dLow = low - lowMean; lowMean += FLUX_BG_K * dLow; lowVar += FLUX_BG_K * (dLow * dLow - lowVar)
-                val dMid = mid - midMean; midMean += FLUX_BG_K * dMid; midVar += FLUX_BG_K * (dMid * dMid - midVar)
-                val dHigh = high - highMean; highMean += FLUX_BG_K * dHigh; highVar += FLUX_BG_K * (dHigh * dHigh - highVar)
-                handler.postDelayed(this, 8L)
-                return
+            if (cur > lastFrame) {
+                val now = android.os.SystemClock.uptimeMillis()
+                var f = lastFrame + 1
+                while (f <= cur) { if (f >= 4) processFrame(v, f, cur, now); f++ }
+                lastFrame = cur
             }
-
-            // ---- 谱通量起拍：三路各自"均值 + k×标准差"自适应阈值 ----
-            // 灵敏度线性缩放阈值倍数：档位越高 mult 越小（越易触发）。
-            // sensitivity 1→3.0，5→2.2，10→1.2，整体比旧版收紧，避免稳态段狂震。
-            val mult = FLUX_STD_MULT + (5 - sensitivity) * 0.2f
-
-            // 宽频一致性门控：本帧有多少比例的频段同时上涨。
-            // 宽频（鼓/拍手/镲/带空气感的打击）→ 放宽阈值，让它们震得出来；
-            // 窄带（持续音抖动、包络起伏）→ 抬高阈值，压掉过敏的小震动。
-            // 这一个系数同时治"空气感打击不震"和"小波动太敏感"两头。
-            val gate = when {
-                rising >= WIDEBAND_RATIO -> WIDEBAND_RELAX
-                rising <= NARROWBAND_RATIO -> NARROWBAND_PENALTY
-                else -> {
-                    // 两者之间线性过渡，避免占比在边界抖动时触发状态跳变
-                    val t = (rising - NARROWBAND_RATIO) / (WIDEBAND_RATIO - NARROWBAND_RATIO)
-                    NARROWBAND_PENALTY + t * (WIDEBAND_RELAX - NARROWBAND_PENALTY)
-                }
-            }
-            val effMult = mult * gate
-
-            val now = android.os.SystemClock.uptimeMillis()
-
-            // 依次判定三路；一帧内只发一次（取最强的一路），避免叠加成糊
-            var fired = false
-            var bestHit = Hit.LOW
-            var bestStrength = 0f
-
-            // LOW —— 底鼓
-            run {
-                // 标准差地板取"相对均值的比例"与绝对兜底的大者：线性能量域下
-                // 不同歌曲音量差异极大，固定地板会在小音量歌里高到永远触发不了。
-                val floor = maxOf(lowMean * FLUX_STD_FLOOR_RATIO, FLUX_STD_FLOOR_ABS)
-                val std = kotlin.math.sqrt(lowVar).coerceAtLeast(floor)
-                val thr = lowMean + effMult * std
-                val fluxMin = lowMean * FLUX_MIN_RATIO
-                if (lowArmed && low > thr && low >= fluxMin && energy >= TRIGGER &&
-                    now - lastLowAt >= MIN_INTERVAL_MS) {
-                    val s = ((low - thr) / std).coerceIn(0f, 3f) / 3f
-                    if (s > bestStrength) { bestStrength = s; bestHit = Hit.LOW; fired = true }
-                    lowArmed = false; lastLowAt = now
-                } else if (low < thr * REARM_RATIO || now - lastLowAt >= MIN_INTERVAL_MS) {
-                    // 重新武装：通量跌回低点，或距上次触发已过最小间隔（时间兜底）。
-                    // 少了时间兜底，连续鼓点段落里通量一直高、永远跌不到 0.5×阈值以下，
-                    // 武装标志一关就再打不开——表现为"响一下后整段不再震"。
-                    lowArmed = true
-                }
-                // 背景 EMA（含方差）——只在未触发帧更新，避免鼓点本身把均值/方差顶飞
-                val dLow = low - lowMean
-                lowMean += FLUX_BG_K * dLow
-                lowVar += FLUX_BG_K * (dLow * dLow - lowVar)
-            }
-            // MID —— 军鼓
-            run {
-                val floor = maxOf(midMean * FLUX_STD_FLOOR_RATIO, FLUX_STD_FLOOR_ABS)
-                val std = kotlin.math.sqrt(midVar).coerceAtLeast(floor)
-                val thr = midMean + effMult * std
-                val fluxMin = midMean * FLUX_MIN_RATIO
-                if (midArmed && mid > thr && mid >= fluxMin && energy >= TRIGGER &&
-                    now - lastMidAt >= MIN_INTERVAL_MS) {
-                    val s = ((mid - thr) / std).coerceIn(0f, 3f) / 3f
-                    if (s > bestStrength) { bestStrength = s; bestHit = Hit.MID; fired = true }
-                    midArmed = false; lastMidAt = now
-                } else if (mid < thr * REARM_RATIO || now - lastMidAt >= MIN_INTERVAL_MS) {
-                    midArmed = true
-                }
-                val dMid = mid - midMean
-                midMean += FLUX_BG_K * dMid
-                midVar += FLUX_BG_K * (dMid * dMid - midVar)
-            }
-            // HIGH —— 踩镲（允许更密的节流）
-            run {
-                val floor = maxOf(highMean * FLUX_STD_FLOOR_RATIO, FLUX_STD_FLOOR_ABS)
-                val std = kotlin.math.sqrt(highVar).coerceAtLeast(floor)
-                val thr = highMean + effMult * std
-                val fluxMin = highMean * FLUX_MIN_RATIO
-                if (highArmed && high > thr && high >= fluxMin && energy >= TRIGGER &&
-                    now - lastHighAt >= MIN_INTERVAL_FAST_MS) {
-                    val s = ((high - thr) / std).coerceIn(0f, 3f) / 3f
-                    // 高频只在没有更强低/中频击时才作为主击，避免踩镲盖过底鼓
-                    if (s * 0.7f > bestStrength) { bestStrength = s * 0.7f; bestHit = Hit.HIGH; fired = true }
-                    highArmed = false; lastHighAt = now
-                } else if (high < thr * REARM_RATIO || now - lastHighAt >= MIN_INTERVAL_FAST_MS) {
-                    highArmed = true
-                }
-                val dHigh = high - highMean
-                highMean += FLUX_BG_K * dHigh
-                highVar += FLUX_BG_K * (dHigh * dHigh - highVar)
-            }
-
-            // 全局节流：任意两次震动至少间隔一个下限，从根上杜绝"连成一片"的糊震。
-            // 踩镲用更短的下限（MIN_INTERVAL_FAST_MS），否则单路判定里那个快节流
-            // 会被这道全局闸完全盖掉、形同虚设，十六分音符的连续踩镲全被吞掉。
-            val throttle = if (bestHit == Hit.HIGH) MIN_INTERVAL_FAST_MS else MIN_INTERVAL_MS
-            var pass = fired && now - lastPulseAt >= throttle
-
-            // 听觉掩蔽：强击之后的短窗口内，明显更弱的击打直接丢掉。
-            // 这是"什么都震、手被震麻"的解药——保住节奏骨架（重拍），
-            // 过滤掉夹在中间的碎击，让震动有主次而不是一串等距脉冲。
-            if (pass && now - lastPulseAt < MASK_WINDOW_MS &&
-                bestStrength < lastPulseStrength * MASK_RATIO) {
-                pass = false
-            }
-
-            if (pass) {
-                lastPulseAt = now
-                lastPulseStrength = bestStrength
-                // 力度→幅度：两种模式都按本击强弱调制。
-                // 以前非自适应写死 1f（每下满力），所以听感僵硬、没有呼吸感；
-                // 检测器明明算出了 bestStrength，却在最后一步被丢掉了。
-                val strength = kotlin.math.tanh(bestStrength * AMP_CURVE)
-                // 段落动态加权：本击的局部强度，再叠加"当前段落 vs 全曲平均"的响度差。
-                // 副歌/Drop（+dB）整体推重，主歌/间奏（-dB）整体收轻，
-                // 让段落起伏也能传到手上——这是局部自适应检测本身给不了的。
-                // 只调幅度、不参与触发判定：安静段该震的还是震，只是震得轻。
-                val loudAdj = (SpectrumAnalyzer.relativeLoudnessDb * LOUDNESS_GAIN_PER_DB)
-                    .coerceIn(LOUDNESS_ADJ_MIN, LOUDNESS_ADJ_MAX)
-                val amp = (AMP_MIN + (1f - AMP_MIN) * strength + loudAdj).coerceIn(0.2f, 1f)
-                if (adaptive) {
-                    // 自适应：时长也跟鼓点类型 + 力度走（底鼓长、踩镲短）
-                    val baseDur = when (bestHit) { Hit.LOW -> 18f; Hit.MID -> 11f; Hit.HIGH -> 6f }
-                    val dur = (baseDur * (0.7f + 0.3f * strength)).toInt().coerceIn(4, 32)
-                    firePulse(v, bestHit, intensity, dur, amp)
-                } else {
-                    // 非自适应：时长固定用用户设的档，但幅度仍跟力度——
-                    // 这样"档位可控"和"强弱有对比"两者兼得。
-                    firePulse(v, bestHit, intensity, pulseMs, amp)
-                }
-            }
-            handler.postDelayed(this, 8L)
+            // 一帧 ~11.6ms：按帧率轮询即可，旧版 8ms 空转一半是无用唤醒
+            handler.postDelayed(this, 10L)
         }
     }
 }

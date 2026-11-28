@@ -123,7 +123,7 @@ object Playlists {
         cur[id] = sanitizeName(name).ifBlank { L.autoPlaylistName(id) }
         writeNames(cur)
         prefs.edit().putLong(KEY_NEXT_ID, id + 1).apply()
-        cachedPlaylists = null
+        invalidate()
         id
     }
 
@@ -133,7 +133,7 @@ object Playlists {
         if (playlistId !in cur) return@synchronized false
         cur[playlistId] = sanitizeName(newName).ifBlank { L.autoPlaylistName(playlistId) }
         writeNames(cur)
-        cachedPlaylists = null
+        invalidate()
         true
     }
 
@@ -144,7 +144,7 @@ object Playlists {
         cur.remove(playlistId)
         writeNames(cur)
         prefs.edit().remove(KEY_SONGS_PREFIX + playlistId).apply()
-        cachedPlaylists = null
+        invalidate()
         true
     }
 
@@ -155,7 +155,7 @@ object Playlists {
         if (songId in list) return@synchronized false
         list.add(songId)
         prefs.edit().putString(KEY_SONGS_PREFIX + playlistId, list.joinToString(",")).apply()
-        cachedPlaylists = null
+        invalidate()
         true
     }
 
@@ -166,7 +166,7 @@ object Playlists {
         if (songId !in list) return@synchronized false
         list.remove(songId)
         prefs.edit().putString(KEY_SONGS_PREFIX + playlistId, list.joinToString(",")).apply()
-        cachedPlaylists = null
+        invalidate()
         true
     }
 
@@ -185,9 +185,35 @@ object Playlists {
     /** 歌曲是否在歌单中 */
     fun contains(playlistId: Long, songId: Long): Boolean = songId in songs(playlistId)
 
-    /** 歌曲所属的所有歌单名（按创建顺序） */
+    /**
+     * 歌曲所属的所有歌单名（按创建顺序）。
+     *
+     * 主页每一行都要调它：旧实现是"遍历所有歌单 → 读 prefs → split 解析"，
+     * 一屏 10 行 × 10 个歌单 × 每单几百首 = 每次重组几万次字符串解析。
+     * 现在建一次反向索引（歌单任何变动都会 [invalidate]），之后每行 O(1) 查表。
+     */
     fun playlistsOfSong(songId: Long): List<String> =
-        all().filter { songId in songs(it.id) }.map { it.name }
+        (membership ?: buildMembership()).getOrElse(songId) { emptyList() }
+
+    @Volatile private var membership: Map<Long, List<String>>? = null
+
+    private fun buildMembership(): Map<Long, List<String>> {
+        val m = HashMap<Long, MutableList<String>>()
+        for (p in all()) {
+            for (id in songs(p.id)) {
+                val names = m.getOrPut(id) { ArrayList(2) }
+                if (p.name !in names) names.add(p.name)
+            }
+        }
+        membership = m
+        return m
+    }
+
+    /** 任何写操作后调用：歌单元数据与反向索引一起作废 */
+    private fun invalidate() {
+        cachedPlaylists = null
+        membership = null
+    }
 
     /**
      * 歌曲移动后把各歌单里的旧 ID 换成新 ID（原位替换，保持加入顺序）。
@@ -210,7 +236,7 @@ object Playlists {
                 changed = true
             }
         }
-        cachedPlaylists = null
+        invalidate()
         if (changed) edit.apply()
     }
 

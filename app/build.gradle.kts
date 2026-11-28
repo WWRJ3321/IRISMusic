@@ -46,8 +46,8 @@ android {
         applicationId = "com.iris.music"
         minSdk = 24
         targetSdk = 34
-        versionCode = 49007
-        versionName = "4.9.7"
+        versionCode = 50000
+        versionName = "5.0.0"
 
         // 只保留中英文资源，去掉其它语言的 Compose/AndroidX 字符串，减小体积
         resourceConfigurations += listOf("en", "zh")
@@ -79,6 +79,13 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+        // v5.0 性能：开启 Compose 强跳过（Kotlin 2.x 起默认开启的行为，这里在 1.9 + 编译器 1.5.14 上提前打开），
+        // 并用稳定性配置把 data 层不可变模型声明为稳定——参数没变的子组件直接跳过重组。
+        freeCompilerArgs += listOf(
+            "-P", "plugin:androidx.compose.compiler.plugins.kotlin:experimentalStrongSkipping=true",
+            "-P", "plugin:androidx.compose.compiler.plugins.kotlin:stabilityConfigurationPath=" +
+                project.file("compose-stability.conf").absolutePath
+        )
     }
 
     buildFeatures {

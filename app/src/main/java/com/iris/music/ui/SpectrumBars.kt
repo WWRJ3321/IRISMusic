@@ -17,6 +17,7 @@
  */
 package com.iris.music.ui
 
+import kotlinx.coroutines.flow.first
 import android.content.Context
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -157,6 +158,11 @@ fun SpectrumBars(
                     }
                 }
                 frameTick++
+            }
+            // 暂停且柱子与峰帽都已落到底：停止逐帧循环，挂起到恢复播放（旧版暂停后仍 60~120Hz 空转重绘）
+            if (!playingState.value && level.all { it < 1e-3f } && peak.all { it < 1e-3f }) {
+                androidx.compose.runtime.snapshotFlow { playingState.value }.first { it }
+                lastNanos = 0L
             }
         }
     }

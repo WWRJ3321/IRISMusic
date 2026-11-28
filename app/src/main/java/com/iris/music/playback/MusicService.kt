@@ -209,7 +209,7 @@ class MusicService : MediaSessionService() {
         VirtualSurround.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         SpatialWide.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
         SafeLimiter.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
-        TrackGain.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE))
+        TrackGain.init(getSharedPreferences("iris_prefs", Context.MODE_PRIVATE), this)
         // 「关」档播完即停：按持久化的播放模式同步到播放器（UI 不在也生效）
         val prefs = getSharedPreferences("iris_prefs", Context.MODE_PRIVATE)
         fun syncStopAfterCurrent() {
@@ -231,13 +231,16 @@ class MusicService : MediaSessionService() {
                 consecutiveErrors++
                 val limit = minOf(player.mediaItemCount, 10)
                 if (consecutiveErrors > limit) return
+                // 保持出错前的播放意图：冷启动恢复的上一首已被删/坏时，
+                // 旧实现强制 playWhenReady=true，App 一打开就自己响起来。
+                val resume = player.playWhenReady
                 if (player.hasNextMediaItem()) {
                     player.seekToNextMediaItem()
                 } else if (player.mediaItemCount > 1) {
                     player.seekToDefaultPosition(0)
                 } else return
                 player.prepare()
-                player.playWhenReady = true
+                player.playWhenReady = resume
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) consecutiveErrors = 0

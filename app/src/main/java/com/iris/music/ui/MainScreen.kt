@@ -17,6 +17,8 @@
  */
 package com.iris.music.ui
 
+import com.iris.music.ui.theme.fieldSolid
+import com.iris.music.ui.theme.fieldGlass
 import androidx.compose.animation.*
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInOutCubic
@@ -65,6 +67,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -165,9 +168,7 @@ fun MainScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri -> viewModel.setCustomBackground(uri) }
     // 果冻开关同步到全局动效中心：所有组件读 IrisMotion.jelly
-androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
-        IrisMotion.jelly = state.jellyAnim
-    }
+    // （v5.0 起由 ViewModel 直接写入 IrisMotion.jelly，snapshot 状态自动驱动重组）
     // 主题色过渡：切主题/明暗时整套配色 450ms 渐变，不整屏硬闪。
     // 快速连续切主题：新动画总是从「当前显示的混色」出发（LaunchedEffect 重启时
     // holder 里正是上一段动画停下的帧），所以接续而不是跳变。
@@ -254,6 +255,16 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
 
     // 库页列表状态：提升到根层级，滚动条挂在根 Box 上（保证钉在屏幕右缘）
     val libraryListState = rememberLazyListState()
+    // r12：播放页点歌手名 → 回库页、搜索词设为歌手名并展开搜索框（一次性请求，库页消费后清掉）
+    var librarySearchRequest by remember { mutableStateOf(false) }
+    val onArtistSearch: (String) -> Unit = { a ->
+        onSearch(a)
+        librarySearchRequest = true
+        backScope.launch {
+            pagerState.animateScrollToPage(0)
+            libraryListState.scrollToItem(0)
+        }
+    }
     // 快速滚动条是否正在拖动（拖动期间列表由滑条驱动，上栏需实时跟随）
     val scrollerDragging = remember { mutableStateOf(false) }
 
@@ -286,12 +297,12 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
             //
             // 用 Crossfade 包住切换：if/else 直接换树，两种结构的首帧
             // （玻璃背板重录、Pager 重建）在同一帧里裸奔，看着就是闪。
+            // v5.0 r3：试过「旧层放大淡出 + 新层延迟 80ms 缩放浮现」，实机会闪——
+            // 两层透明度同时探底时露出空背景，且缩放带玻璃背板的整层会让背板重录发白。
+            // 回到同时起止的交叉淡化（任意时刻两层透明度之和≈1，不会露底），不做缩放。
             Crossfade(
                 targetState = state.layout,
-                // 慢一点 + EaseInOut：180ms 直切快得像闪屏，420ms 缓入缓出
-                // 才是"柔和过渡"的节奏。再长会拖泥带水——切布局是低频操作，
-                // 用户愿意多等半秒看清楚，但不愿意等一秒。
-                animationSpec = if (IrisMotion.jelly) IrisMotion.appear() else tween(420, easing = androidx.compose.animation.core.EaseInOut),
+                animationSpec = if (IrisMotion.jelly) IrisMotion.appear() else tween(420, easing = IrisEase.standard),
                 label = "layoutSwitch"
             ) { layout ->
             if (layout.isDeck) {
@@ -311,7 +322,7 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                     onOpenSleepTimer = { showSleepTimer = true },
                     onOpenReport = { viewModel.toggleReport(true) },
                     onOpenSettings = { onToggleSettings(true) },
-                    onCycleLayout = { viewModel.setLayout(state.layout.next) },
+                    onCycleLayout = { viewModel.cycleLayout() },
                     onOpenPlaylists = { showPlaylists = true },
                     onReload = { viewModel.reloadLibrary() },
                     onAddToPlaylist = { song -> pendingAddSong = song },
@@ -337,13 +348,15 @@ androidx.compose.runtime.LaunchedEffect(state.jellyAnim) {
                         onSettings = { onToggleSettings(true) },
                         onReport = { viewModel.toggleReport(true) },
                         onReload = { viewModel.reloadLibrary() },
-                        onCycleLayout = { viewModel.setLayout(state.layout.next) },
+                        onCycleLayout = { viewModel.cycleLayout() },
 onOpenPlaylists = { showPlaylists = true },
                          onSortOrder = viewModel::setSortOrder,
                          onSortDirection = viewModel::setSortDirection,
                          onAddToPlaylist = { song -> pendingAddSong = song },
                         scrollerDragging = scrollerDragging,
-                        showCount = showCountLabel
+                        showCount = showCountLabel,
+                        openSearchRequest = librarySearchRequest,
+                        onOpenSearchConsumed = { librarySearchRequest = false }
                     )
 
                     1 -> PlayerPage(
@@ -358,7 +371,8 @@ onOpenPlaylists = { showPlaylists = true },
                         onCyclePlayMode = onCyclePlayMode,
                         onOpenEqualizer = { showEqualizer = true },
                         onOpenSleepTimer = { showSleepTimer = true },
-                        eqActive = eqState.active
+                        eqActive = eqState.active,
+                        onClickArtist = onArtistSearch
                     )
                 }
             }
@@ -414,6 +428,8 @@ visible = scrollerVisible,
                                 SortOrder.TITLE -> "${indexLabel(song.title)}  ${song.title}"
                                 SortOrder.ARTIST -> "${indexLabel(song.artist)}  ${song.artist}"
                                 SortOrder.ALBUM -> "${indexLabel(song.album)}  ${song.album}"
+                                // 按时长排序时气泡显示时长（旧版显示歌名首字母，和排序依据无关）
+                                SortOrder.DURATION -> formatDuration(song.durationMs)
                                 else -> song.title
                             }
                         }
@@ -427,14 +443,7 @@ visible = scrollerVisible,
 
         // 设置面板 / 均衡器：作为最上层玻璃，折射「背景 + 页面」两层背板
         CompositionLocalProvider(LocalIrisBackdrops provides sheetBackdrops) {
-            AnimatedVisibility(
-                visible = state.showSettings,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180)),
-                modifier = Modifier.fillMaxSize()
-            ) {
+            IrisSheetHost(visible = state.showSettings, modifier = Modifier.fillMaxSize()) {
                 // 拖把手下滑关闭：面板根随手指位移，把手命中在 SettingsPanel 内部
                 val settingsDrag = rememberSheetDragState()
                 IrisSheet(
@@ -455,14 +464,7 @@ visible = scrollerVisible,
             }
 
             // 歌单管理弹层
-            AnimatedVisibility(
-                visible = showPlaylists,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180)),
-                modifier = Modifier.fillMaxSize()
-            ) {
+            IrisSheetHost(visible = showPlaylists, modifier = Modifier.fillMaxSize()) {
                 PlaylistSheet(
                     state = state,
                     colors = colors,
@@ -476,14 +478,11 @@ visible = scrollerVisible,
             }
 
             // 添加到歌单弹层（长按歌曲触发）
-            AnimatedVisibility(
-                visible = pendingAddSong != null,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
-                val song = pendingAddSong
+            IrisSheetHost(visible = pendingAddSong != null) {
+                // 退场动画期间 pendingAddSong 已是 null：记住最后一首，让面板淡出而不是瞬间消失
+                val lastSong = remember { mutableStateOf<com.iris.music.data.Song?>(null) }
+                if (pendingAddSong != null) lastSong.value = pendingAddSong
+                val song = lastSong.value
                 if (song != null) {
                     AddToPlaylistSheet(
                         song = song,
@@ -503,13 +502,7 @@ visible = scrollerVisible,
             }
 
             // 均衡器弹层
-            AnimatedVisibility(
-                visible = showEqualizer,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
+            IrisSheetHost(visible = showEqualizer) {
                 EqualizerSheet(
                     state = eqState,
                     onDismiss = { showEqualizer = false },
@@ -547,22 +540,16 @@ visible = scrollerVisible,
                     onAddAnchor = { freq, gain -> EqualizerController.addAnchor(freq, gain) },
                     onRemoveAnchor = { EqualizerController.removeAnchor(it) },
                     onReset = {
-                        // Reset = 全量复位：EQ 曲线 + 面板内全部独立音效一并回到默认
+                        // r13：重置只管下面的 EQ 曲线（用户：按钮挨着曲线，就该只复位曲线）。
+                        // 各独立音效有自己的开关和强度，不再被一并关掉。
                         EqualizerController.reset()
-                        viewModel.resetAllEffects()
                     },
                     colors = colors
                 )
             }
 
             // 睡眠定时器弹层
-            AnimatedVisibility(
-                visible = showSleepTimer,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
+            IrisSheetHost(visible = showSleepTimer) {
                 SleepTimerSheet(
                     currentMinutes = if (state.sleepTimerMs > 0) (state.sleepTimerMs / 60000).toInt() else 0,
                     onDismiss = { showSleepTimer = false },
@@ -578,13 +565,7 @@ visible = scrollerVisible,
             }
 
             // 听歌报告弹层：和设置/均衡器同层，折射「背景 + 页面」两层背板
-            AnimatedVisibility(
-                visible = state.showReport,
-                enter = if (IrisMotion.jelly) {
-                    fadeIn(IrisMotion.appear()) + scaleIn(initialScale = 0.96f, animationSpec = IrisMotion.appear())
-                } else fadeIn(tween(200)),
-                exit = fadeOut(tween(180))
-            ) {
+            IrisSheetHost(visible = state.showReport) {
                 ListenReportSheet(
                     report = state.report,
                     onDismiss = { viewModel.toggleReport(false) },
@@ -622,9 +603,9 @@ private fun LibrarySortBar(
     // 方向胶囊固定在最左，不随横滑滚走。仍然没有 Popup（玻璃折射问题同上）。
     val chipHeight = 30.dp
     val chipBg = if (glass) {
-        if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+        colors.fieldGlass
     } else {
-        if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+        colors.fieldSolid
     }
     val accent = colors.primary.readableOn(chipBg, 3.2f)
     Row(
@@ -720,8 +701,19 @@ private fun LibraryPage(
     onSortOrder: (SortOrder) -> Unit,
     onSortDirection: (SortDirection) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
-    showCount: Boolean = true
+    showCount: Boolean = true,
+    /** r12：外部（播放页点歌手）请求展开搜索框；消费后回调清掉 */
+    openSearchRequest: Boolean = false,
+    onOpenSearchConsumed: () -> Unit = {}
 ) {
+    // 首屏入场只播一次：列表第一次有内容后 1.2s 标记完成（rememberSaveable：转屏不重播）
+    val firstRevealDone = androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.queue.isNotEmpty()) {
+        if (state.queue.isNotEmpty() && !firstRevealDone.value) {
+            kotlinx.coroutines.delay(1200)
+            firstRevealDone.value = true
+        }
+    }
     // 上栏高度（px）与当前偏移：上滑跟手滑出屏幕，下滑从任意位置随时拉回
     val density = LocalDensity.current
     val statusBarHeightDp = WindowInsets.statusBars.getTop(density)
@@ -749,10 +741,22 @@ private fun LibraryPage(
     var searchExpanded by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
     val showSearch = state.searchPersistent || searchExpanded
+    // r12：由点歌手名展开时不自动聚焦（不弹键盘，直接看筛选结果）
+    var searchQuiet by remember { mutableStateOf(false) }
+    LaunchedEffect(openSearchRequest) {
+        if (openSearchRequest) {
+            if (!state.searchPersistent && !searchExpanded) {
+                searchQuiet = true
+                searchExpanded = true
+            }
+            onOpenSearchConsumed()
+        }
+    }
     // 展开后自动聚焦（等 TextField 进入组合再请求焦点）
     LaunchedEffect(searchExpanded, state.searchPersistent) {
         if (!state.searchPersistent) {
             if (searchExpanded) {
+                if (searchQuiet) { searchQuiet = false; return@LaunchedEffect }
                 delay(150)
                 runCatching { searchFocusRequester.requestFocus() }
             }
@@ -1043,12 +1047,14 @@ private fun LibraryPage(
                 // 预留上栏空间（状态栏 + barTopGap + 上栏实际高度），第一条歌单不被遮挡
                 // barHeight 由 onSizeChanged 实时校准，预留空间自动跟随
                 top = with(density) { statusBarHeightDp.toDp() + barTopGap + barHeight.value.toDp() + 8.dp },
-                bottom = 50.dp
+                // 底部让出导航栏（三键导航/横屏侧边时行不再压在系统栏下）
+                bottom = 50.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             )
         ) {
             // 推荐区：候选池非空即显示（池跟随选中文件夹），可在设置里关掉
             if (recPool.isNotEmpty() && state.searchQuery.isBlank() && state.showRecommendations) {
-                item {
+                // 稳定 key：推荐区开关/出现时滚动锚点不跳
+                item(key = "recommendations") {
                     // Crossfade 必须让 targetState 携带数据本身，否则淡出的旧内容
                     // 会读到已更新的 state.recommendations，看不出过渡效果。
                     Crossfade(
@@ -1075,8 +1081,24 @@ private fun LibraryPage(
                     }
                 }
             }
+            // 空库 / 首次扫描 / 搜索无结果：给出明确状态，而不是一整块空白
+            if (state.queue.isEmpty()) {
+                item(key = "placeholder") {
+                    LibraryPlaceholder(
+                        loading = state.loading || state.refreshing,
+                        colors = colors,
+                        emptyText = if (state.searchQuery.isNotBlank()) L.noSearchResults else L.emptyLibrary
+                    )
+                }
+            }
             itemsIndexed(state.queue, key = { _, song -> "song-${song.id}" }) { index, song ->
                 SongRow(
+                    // 冷启动首屏：前 14 行自上而下错峰浮现（只播一次，之后滚动进来的行不再动画）
+                    revealDelayMs = if (!firstRevealDone.value && index < 14) index * 28 else -1,
+                    // 排序/筛选/增删时行平滑换位，而不是整表瞬间跳变。
+                    // 只要位移动画、不要淡入淡出：快速滚动条拖动时每帧 scrollToItem，
+                    // 新进入视口的行会被当成"出现"走淡入，拖动全程整屏行都是半透明（看起来像糊掉/消失）
+                    modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                     song = song,
                     active = index == state.currentIndex,
                     index = index,
@@ -1269,8 +1291,8 @@ private fun LibraryPage(
                 // 排序行：上栏的扩展，上栏基本露出后才展开，随上栏收起
                 AnimatedVisibility(
                     visible = sortBarVisible,
-                    enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
-                    exit = fadeOut(tween(160)) + shrinkVertically(tween(200, easing = EaseOutCubic))
+                    enter = IrisMotion.expandIn(),
+                    exit = IrisMotion.collapseOut()
                 ) {
                     Column {
                         Spacer(Modifier.height(6.dp))
@@ -1294,15 +1316,15 @@ private fun LibraryPage(
                 // 搜索框：灰底 + 放大镜图标，简约统一
                 // 液态玻璃下改半透明底，否则实色方块会把整条玻璃切成两半
                 val searchBg = if (glass) {
-                    if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+                    colors.fieldGlass
                 } else {
-                    if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+                    colors.fieldSolid
                 }
                 val iconTint = colors.subText
                 AnimatedVisibility(
                     visible = showSearch,
-                    enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
-                    exit = fadeOut(tween(180)) + shrinkVertically(tween(220, easing = EaseOutCubic))
+                    enter = IrisMotion.expandIn(),
+                    exit = IrisMotion.collapseOut()
                 ) {
                     Column {
                         Spacer(Modifier.height(8.dp))
@@ -1358,8 +1380,8 @@ private fun LibraryPage(
                 // 计数：启动后显示 4 秒自动隐藏（showCount 由根层级控制），淡出后收回高度
                 AnimatedVisibility(
                     visible = showCount,
-                    enter = fadeIn(tween(300)) + expandVertically(tween(300)),
-                    exit = fadeOut(tween(400)) + shrinkVertically(tween(400))
+                    enter = IrisMotion.expandIn(),
+                    exit = IrisMotion.collapseOut()
                 ) {
                     Column {
                         Spacer(Modifier.height(6.dp))
@@ -1408,38 +1430,18 @@ private fun PlayerPage(
     onOpenEqualizer: () -> Unit,
     onOpenSleepTimer: () -> Unit,
     /** 均衡器曲线是否非全平，决定副控制行里那枚推子图标点不点亮 */
-    eqActive: Boolean
+    eqActive: Boolean,
+    /** r12：点歌手名 → 回库页按歌手筛选 */
+    onClickArtist: ((String) -> Unit)? = null
 ) {
     // 歌词弹层状态
-    var showLyrics by remember { mutableStateOf(false) }
-    var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
-    var lyricLoading by remember { mutableStateOf(false) }
+    val lyricOverlay = rememberLyricOverlayState(state.currentSong?.filePath, state.durationMs)
 
     // 歌词层比根层级的那些弹层更靠内：它开着时先关它，不要退出应用。
     // 这个 BackHandler 注册得比 MainScreen 根部那个晚，因此优先级更高，
     // 正好匹配它在视觉上更靠上的层级。
-    BackHandler(enabled = showLyrics) { showLyrics = false }
+    BackHandler(enabled = lyricOverlay.visible) { lyricOverlay.visible = false }
     val scope = rememberCoroutineScope()
-    // 歌词层当前显示的歌词属于哪个文件：用于"开着歌词层切歌"时判断需要重新加载。
-    var lyricPath by remember { mutableStateOf<String?>(null) }
-    // 歌词层开着时自动切歌：旧词必须跟着走，否则整屏还停在上一首。
-    // 路径一变先清空再按新歌重解析（LyricParser 自带缓存，重复加载只走内存）。
-    LaunchedEffect(showLyrics, state.currentSong?.filePath, state.durationMs) {
-        val path = state.currentSong?.filePath
-        if (showLyrics && !path.isNullOrBlank() && path != lyricPath) {
-            lyricLines = emptyList()
-            lyricLoading = true
-            try {
-                lyricLines = withContext(Dispatchers.IO) {
-                    LyricParser.loadLyrics(path, state.durationMs)
-                }
-                lyricPath = path
-            } catch (_: Exception) {
-            } finally {
-                lyricLoading = false
-            }
-        }
-    }
     // 歌词弹层毛玻璃：PlayerPage 作为模糊源，弹层作为模糊子层
     val lyricsHazeState = remember { HazeState() }
     val glass = isLiquidGlass
@@ -1454,27 +1456,11 @@ private fun PlayerPage(
         if (glass) outerBackdrops + cardBackdrop else emptyList()
     }
 
-    // 点击封面：读取歌词（内嵌优先，其次同名 .lrc）并弹出
-    // try-catch 防止文件IO异常崩溃；filePath 非空检查避免无效路径
+    // 点击封面：弹出歌词层（内嵌优先，其次同名 .lrc）
     val onClickArtwork: () -> Unit = {
+        // 立即弹出歌词层（层内显示加载态），解析由 rememberLyricOverlayState 在后台完成
         val song = state.currentSong
-        if (song != null && song.filePath.isNotBlank()) {
-            scope.launch {
-                lyricLoading = true
-                try {
-                    val lines = withContext(Dispatchers.IO) {
-                        LyricParser.loadLyrics(song.filePath, state.durationMs)
-                    }
-                    lyricLines = lines
-                    lyricPath = song.filePath
-                    showLyrics = true
-                } catch (_: Exception) {
-                    // 文件读取异常（路径不存在、权限问题等）静默忽略
-                } finally {
-                    lyricLoading = false
-                }
-            }
-        }
+        if (song != null && song.filePath.isNotBlank()) lyricOverlay.open()
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -1502,12 +1488,11 @@ private fun PlayerPage(
             PlayerCard(
                 title = state.currentSong?.title ?: L.none,
                 artist = state.currentSong?.artist ?: "",
-                positionMs = state.positionMs,
+                positionMs = rememberLivePosition(),
                 durationMs = state.durationMs,
                 shuffle = state.shuffle,
                 repeatMode = state.repeatMode,
                 artworkPath = state.currentSong?.filePath,
-                progress = state.progress,
                 isPlaying = state.isPlaying,
                 onToggle = onToggle,
                 onPrev = onPrev,
@@ -1537,16 +1522,24 @@ visualizerEnabled = state.visualizerEnabled,
                                       coverLyricLines = state.coverLyricLines,
                    onToggleVisualizer = { viewModel.setVisualizerEnabled(!state.visualizerEnabled) },
                    fullScreen = fullCard,
-                   onDoubleTapBlank = { viewModel.toggleFullScreenCard() }
+                   onDoubleTapBlank = { viewModel.toggleFullScreenCard() },
+                   onClickArtist = onClickArtist
               )
         }
 
         // 歌词弹层：毛玻璃背景 + 滚动歌词
-        if (showLyrics) {
+        // 歌词层淡入 + 轻微放大入场、淡出退场（旧版瞬间弹出/消失）
+        androidx.compose.animation.AnimatedVisibility(
+            visible = lyricOverlay.visible,
+            enter = androidx.compose.animation.fadeIn(tween(260, easing = IrisEase.emphasized)) +
+                androidx.compose.animation.scaleIn(tween(320, easing = LyricEase), initialScale = 0.97f),
+            exit = androidx.compose.animation.fadeOut(tween(200, easing = IrisEase.exit)) +
+                androidx.compose.animation.scaleOut(tween(200, easing = IrisEase.exit), targetScale = 0.985f)
+        ) {
             LyricsOverlay(
-                lines = lyricLines,
-                loading = lyricLoading,
-                positionMs = state.positionMs,
+                lines = lyricOverlay.lines,
+                loading = lyricOverlay.loading,
+                positionMs = rememberLivePosition(),
                 durationMs = state.durationMs,
                 title = state.currentSong?.title ?: "",
                 artist = state.currentSong?.artist ?: "",
@@ -1558,7 +1551,7 @@ visualizerEnabled = state.visualizerEnabled,
                 lyricFont = state.lyricFont,
                 lyricFontSize = state.lyricFontSize,
                 karaoke = state.karaokeLyric,
-                onDismiss = { showLyrics = false }
+                onDismiss = { lyricOverlay.visible = false }
             )
         }
     }
@@ -1568,14 +1561,14 @@ visualizerEnabled = state.visualizerEnabled,
 // 歌词专用缓动：起步利落、尾部长长地缓缓收住（easeOutQuint 风格贝塞尔）。
 // 比对称的 EaseInOutCubic 更"丝滑"——换行不是机械地加速又减速，
 // 而是干脆起步后优雅滑停，这是苹果那类歌词页顺滑感的关键。
-private val LyricEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
+internal val LyricEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 private const val LYRIC_ANIM_MS = 620
 
 @Composable
 internal fun LyricsOverlay(
     lines: List<LyricLine>,
     loading: Boolean,
-    positionMs: Long,
+    positionMs: () -> Long,
     durationMs: Long,
     title: String,
     artist: String,
@@ -1590,7 +1583,19 @@ internal fun LyricsOverlay(
     onDismiss: () -> Unit
 ) {
     val listState = rememberLazyListState()
-    val current = LyricParser.currentIndex(lines, positionMs)
+    // 只在"当前句"变化时重组整页歌词（进度 500ms 一拍，句子几秒一换）
+    val current by remember(lines, positionMs) {
+        derivedStateOf { LyricParser.currentIndex(lines, positionMs()) }
+    }
+    // r11：同一时间戳的多行（原文 + 译文）合成一组，译文小一号跟在原文下面；
+    // 开头的「词 / 曲 / 编曲…」并成一小段署名，不再和歌词同字号各占一行。
+    val groups = remember(lines) { groupLyrics(lines) }
+    val currentGroup by remember(groups) {
+        derivedStateOf {
+            val c = current
+            if (c < 0) -1 else groups.indexOfLast { it.start <= c }
+        }
+    }
     val colAlign = when (lyricAlign) { 0 -> Alignment.Start; 2 -> Alignment.End; else -> Alignment.CenterHorizontally }
     val boxAlign = when (lyricAlign) { 0 -> Alignment.CenterStart; 2 -> Alignment.CenterEnd; else -> Alignment.Center }
     val textAlign = when (lyricAlign) { 0 -> TextAlign.Start; 2 -> TextAlign.End; else -> TextAlign.Center }
@@ -1605,7 +1610,7 @@ internal fun LyricsOverlay(
     val onCard = if (colors.isDark) Color.White else Color.Black
     val glass = isLiquidGlass
     val frosted = isFrostedGlass
-    val frostedBlur = frostedBlurRadius
+    val frostedBlur = frostedBlurRadius * 1.4f
     val scrim = if (glass) {
         if (colors.isDark) Color(0x8C121218) else Color(0xA6F4F4F8)
     } else {
@@ -1613,7 +1618,8 @@ internal fun LyricsOverlay(
     }
     val lyricsGlass = if (glass) {
         Modifier.glassSurface(
-            spec = GlassLevel.SHEET.currentSpec(colors),
+            // r13：歌词页模糊单独加大到 1.5 倍（用户：背后封面和卡片还看得太清，抢歌词）
+            spec = GlassLevel.SHEET.currentSpec(colors).let { it.copy(blur = it.blur * 1.5f) },
             shape = RectangleShape,
             backdrops = backdrops
         )
@@ -1653,7 +1659,8 @@ internal fun LyricsOverlay(
     // 焦点不在正中而在视口偏上（约 38%）：当前行上方留窄、下方留宽，
     // 视线自然落在偏上位置，且能预读更多下一句，接近主流歌词页的观感。
     // 目标不在屏内时先无动画跳到附近，再由 tween 收尾到焦点线，避免跨很多行时滚动过久。
-    LaunchedEffect(current) {
+    LaunchedEffect(currentGroup) {
+        val current = currentGroup
         if (current < 0) return@LaunchedEffect
         val scrollSpec = tween<Float>(durationMillis = LYRIC_ANIM_MS, easing = LyricEase)
         val visible = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == current }
@@ -1695,17 +1702,17 @@ internal fun LyricsOverlay(
         // 侧边迷你时间标记：随垂直滚动出现，贴在焦点线高度、按对齐方向靠左/右。
         // 只有一个超小时间戳 + 一道指向性短横线指向焦点行，无胶囊背景。
         val tagAlpha by animateFloatAsState(
-            if (showTimeTag && focusIndex in lines.indices) 1f else 0f,
+            if (showTimeTag && focusIndex in groups.indices) 1f else 0f,
             animationSpec = tween(180), label = "timeTagAlpha"
         )
-        if (focusIndex in lines.indices) {
+        if (focusIndex in groups.indices) {
             val focusFrac = if (isLand) 0.42f else 0.38f
             // 居中/靠左对齐 → 标记贴右；靠右对齐 → 标记贴左
             val onRight = lyricAlign != 2
             // 时间数值平滑过渡：跨行时不是瞬间跳变，而是从旧时间连续滑到新时间，
             // 视觉上像滚动条一样渐变滚过去。
             val animMs by animateFloatAsState(
-                targetValue = lines[focusIndex].timeMs.toFloat(),
+                targetValue = groups[focusIndex].main.timeMs.toFloat(),
                 animationSpec = tween(durationMillis = 260, easing = LyricEase),
                 label = "timeTagMs"
             )
@@ -1799,8 +1806,23 @@ internal fun LyricsOverlay(
                     // 让居中的当前行仍能上下滚入，同时显示更多歌词。
                     contentPadding = PaddingValues(vertical = if (isLand) 56.dp else 120.dp)
                 ) {
-                    itemsIndexed(lines, key = { index, _ -> "lyric-$index" }) { index, line ->
+                    itemsIndexed(groups, key = { _, g -> "lyric-${g.start}" }) { index, group ->
+                        val line = group.main
+                        val current = currentGroup
                         val isCurrent = index == current
+                        if (group.credit) {
+                            // 署名段：小字、低调，不参与缩放/扫光，点了也照样能跳转
+                            Column(
+                                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                horizontalAlignment = colAlign
+                            ) {
+                                (listOf(group.main) + group.subs).forEach { c ->
+                                    Text(c.text, color = onCard.copy(alpha = 0.4f), fontSize = 12.sp,
+                                        fontFamily = lyricFamily, textAlign = textAlign, lineHeight = 17.sp)
+                                }
+                            }
+                            return@itemsIndexed
+                        }
                         // 距当前行的行距：用它做连续衰减，离焦点越远越小越淡，
                         // 不再是"当前行/其它行"的二值突变，整屏有纵深层次感。
                         val dist = if (current < 0) 0 else kotlin.math.abs(index - current)
@@ -1855,6 +1877,7 @@ internal fun LyricsOverlay(
                                 animationSpec = tween(durationMillis = LYRIC_ANIM_MS, easing = LyricEase),
                                 label = "lyricColor"
                             )
+                            Column(horizontalAlignment = colAlign) {
                             if (isCurrent && karaoke) {
                                 // 当前行走 KaraokeLine 做扫光：
                                 //  - 有词级时间（增强型 LRC）→ 真逐字，按每个字的时间戳点亮
@@ -1863,7 +1886,7 @@ internal fun LyricsOverlay(
                                 KaraokeLine(
                                     line = line,
                                     positionMs = positionMs,
-                                    lineEndMs = lines.getOrNull(index + 1)?.timeMs
+                                    lineEndMs = groups.getOrNull(index + 1)?.main?.timeMs
                                         ?: (if (durationMs > 0) durationMs else line.timeMs + 4000),
                                     sungColor = colors.primary,
                                     unsungColor = onCard.copy(alpha = 0.42f),
@@ -1884,12 +1907,36 @@ internal fun LyricsOverlay(
                                     modifier = seekModifier
                                 )
                             }
+                            // 译文：小一号、稍淡，紧贴原文
+                            group.subs.forEach { sub ->
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    sub.text,
+                                    color = if (isCurrent) lineColor.copy(alpha = 0.78f) else onCard.copy(alpha = 0.7f),
+                                    fontSize = (lyricFontSize * 0.72f).sp,
+                                    fontFamily = lyricFamily,
+                                    fontWeight = FontWeight.Medium,
+                                    textAlign = textAlign,
+                                    modifier = seekModifier
+                                )
+                            }
+                            }
                         }
                     }
                 }
             }
             Spacer(Modifier.height(8.dp))
-            if (!isLand) Text("\u70b9\u6b4c\u8bcd\u8df3\u8f6c\uff0c\u70b9\u7a7a\u767d\u5904\u5173\u95ed", color = colors.subText, fontSize = 11.sp)
+            if (!isLand) {
+                // 操作提示只在打开后的前 3 秒出现，随后淡出
+                var hintOn by remember { mutableStateOf(true) }
+                LaunchedEffect(Unit) { delay(3000); hintOn = false }
+                val hintAlpha by animateFloatAsState(if (hintOn) 1f else 0f, tween(IrisDur.LONG, easing = IrisEase.standard), label = "lyricHint")
+                Text(
+                    "\u70b9\u6b4c\u8bcd\u8df3\u8f6c\uff0c\u70b9\u7a7a\u767d\u5904\u5173\u95ed",
+                    color = colors.subText, fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 2.dp).graphicsLayer { alpha = hintAlpha }
+                )
+            }
         }
         }
     }
@@ -1911,7 +1958,7 @@ internal fun LyricsOverlay(
 @Composable
 private fun KaraokeLine(
     line: LyricLine,
-    positionMs: Long,
+    positionMs: () -> Long,
     lineEndMs: Long,
     sungColor: Color,
     unsungColor: Color,
@@ -1924,14 +1971,18 @@ private fun KaraokeLine(
     val baseWall = remember { mutableStateOf(0L) }
     val basePos = remember { mutableStateOf(0L) }
     LaunchedEffect(positionMs) {
-        basePos.value = positionMs
-        baseWall.value = System.currentTimeMillis()
+        snapshotFlow { positionMs() }.collect { p ->
+            basePos.value = p
+            baseWall.value = System.currentTimeMillis()
+        }
     }
-    var estMs by remember { mutableStateOf(positionMs) }
+    var estMs by remember { mutableStateOf(positionMs()) }
     LaunchedEffect(line) {
         while (true) {
             withFrameMillis {
-                estMs = basePos.value + (System.currentTimeMillis() - baseWall.value)
+                // 外推封顶 700ms：播放中进度每 500ms 刷新一次，够用；暂停后进度不再刷新，
+                // 光带最多再走 0.7 秒就停住（旧实现会一路扫到行尾），且值不变后不再触发重组
+                estMs = basePos.value + (System.currentTimeMillis() - baseWall.value).coerceAtMost(700L)
             }
         }
     }
@@ -1997,14 +2048,13 @@ internal fun SettingsButton(onClick: () -> Unit, colors: IrisColors, plain: Bool
             .irisPressable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.size(18.dp)) {
-            val c = colors.primary
-            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.3f))
-            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.3f))
-            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.3f, size.height * 0.7f))
-            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.7f, size.height * 0.7f))
-            drawCircle(c, radius = 2.5f, center = Offset(size.width * 0.5f, size.height * 0.5f))
-        }
+        // r12：原来的五点阵图标看不出是「设置」（issue #4），换成标准齿轮
+        Icon(
+            androidx.compose.material.icons.Icons.Rounded.Settings,
+            contentDescription = null,
+            tint = colors.primary,
+            modifier = Modifier.size(19.dp)
+        )
     }
 }
 
@@ -2167,8 +2217,20 @@ private fun SongRow(
     liked: Boolean = false,
     playlistNames: List<String> = emptyList(),
     onClick: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** ≥0 = 首屏入场：延迟该毫秒后上浮淡入；-1 = 直接显示 */
+    revealDelayMs: Int = -1
 ) {
+    val reveal = remember { Animatable(if (revealDelayMs >= 0) 0f else 1f) }
+    // 无条件挂载：之前包在 if (revealDelayMs >= 0) 里，入场窗口一结束参数变 -1，
+    // 等待中的效果被移出组合而取消，行永远停在透明（r3 实机：第 8–12 行整块消失）。
+    LaunchedEffect(Unit) {
+        if (reveal.value < 1f) {
+            kotlinx.coroutines.delay(revealDelayMs.coerceAtLeast(0).toLong())
+            reveal.animateTo(1f, tween(460, easing = IrisEase.emphasized))
+        }
+    }
     // 指示条高度动画：切歌时旧条收缩、新条生长，平滑过渡不瞬移
     val barH by animateDpAsState(if (active) 22.dp else 0.dp, IrisMotion.moveDp(), label = "cursorBar")
     // 激活态整体渐变：底色、文字色都走 260ms 补间，切歌时行内所有颜色一起过渡
@@ -2185,7 +2247,11 @@ private fun SongRow(
     // 封面尺寸
     val coverSize = if (rowSize == 0) 34.dp else if (rowSize == 1) 44.dp else 50.dp
     Row(
-        Modifier
+        modifier
+            .graphicsLayer {
+                val r = reveal.value
+                if (r < 1f) { alpha = r; translationY = (1f - r) * 18.dp.toPx() }
+            }
             .fillMaxWidth()
             .irisSurface(
                 level = GlassLevel.ROW,
@@ -2244,13 +2310,15 @@ private fun SongRow(
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        Column(horizontalAlignment = Alignment.End) {
+        // 右侧信息列限宽：不限宽时它先于 weight(1f) 的标题列测量，
+        // 歌单名一长就把标题挤到只剩几个字
+        Column(Modifier.padding(start = 8.dp).widthIn(max = 112.dp), horizontalAlignment = Alignment.End) {
             Text(formatDuration(song.durationMs), color = colors.subText, fontSize = subSize, fontWeight = FontWeight.Medium)
             // 所属歌单名：右下角淡显示，多个歌单用「/」分隔
             if (showPlaylist && playlistNames.isNotEmpty()) {
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    playlistNames.joinToString(" / "),
+                    playlistNames.joinToString(" / ") { L.displayName(it) },
                     color = colors.primary.readableOn(colors.row, 3.0f),
                     fontSize = if (rowSize == 0) 9.sp else 10.sp,
                     fontWeight = FontWeight.Medium,
@@ -2307,4 +2375,46 @@ internal fun FolderRow(name: String, count: String, active: Boolean, colors: Iri
     }
 }
 
+/** 歌词显示分组：同一时间戳的原文 + 译文合为一组；开头的署名行（词/曲/编曲…）合成一段小字。 */
+internal data class LyricGroup(
+    /** 在原始 lines 中的起始下标（currentIndex 落在这一组内即当前组） */
+    val start: Int,
+    val main: LyricLine,
+    val subs: List<LyricLine>,
+    val credit: Boolean = false
+)
 
+private val LYRIC_CREDIT = Regex(
+    "^\\s*(作?词|作?曲|编曲|制作人?|混音|母带|和声|吉他|贝斯|鼓|弦乐|录音|监制|出品|演唱|原唱|翻唱|策划|统筹|OP|SP|" +
+        "Lyrics?|Composer|Arranger|Producer|Mix(ing)?|Master(ing)?|Vocals?)\\s*[:：]",
+    RegexOption.IGNORE_CASE
+)
+
+internal fun groupLyrics(lines: List<LyricLine>): List<LyricGroup> {
+    if (lines.isEmpty()) return emptyList()
+    val out = ArrayList<LyricGroup>(lines.size)
+    // 开头署名段：第一行若是「歌名 - 歌手」也算进去
+    var i = 0
+    val credits = ArrayList<LyricLine>()
+    while (i < lines.size && i < 12) {
+        val t = lines[i].text
+        val isCredit = LYRIC_CREDIT.containsMatchIn(t) || (i == 0 && t.contains(" - ") && lines.size > 3)
+        if (!isCredit) break
+        credits += lines[i]; i++
+    }
+    if (credits.size >= 2 || (credits.size == 1 && LYRIC_CREDIT.containsMatchIn(credits[0].text))) {
+        out += LyricGroup(0, credits.first(), credits.drop(1), credit = true)
+    } else i = 0
+    while (i < lines.size) {
+        val start = i
+        val main = lines[i]; i++
+        val subs = ArrayList<LyricLine>(1)
+        // 同一时间戳（±30ms 容差）的后续行视为译文/注音，最多并 2 行
+        while (i < lines.size && subs.size < 2 && kotlin.math.abs(lines[i].timeMs - main.timeMs) <= 30L &&
+            lines[i].text.isNotBlank()) {
+            subs += lines[i]; i++
+        }
+        out += LyricGroup(start, main, subs)
+    }
+    return out
+}

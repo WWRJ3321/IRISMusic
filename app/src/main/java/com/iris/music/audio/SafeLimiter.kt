@@ -123,7 +123,22 @@ object SafeLimiter : BaseAudioProcessor() {
         lookPeak = 0f
     }
 
+    private val declick = Declick()
+    private var lastOut: ByteBuffer? = null
+
     override fun queueInput(inputBuffer: ByteBuffer) {
+        val on = enabled
+        if (!declick.transitioning(on)) { processImpl(inputBuffer, false); return }
+        val n = inputBuffer.remaining()
+        if (n == 0) return
+        declick.snapshot(inputBuffer)
+        processImpl(inputBuffer, true)
+        val out = lastOut ?: return
+        val fmt = inputAudioFormat
+        declick.blend(out, n, on, fmt.sampleRate, fmt.channelCount, fmt.encoding == C.ENCODING_PCM_16BIT)
+    }
+
+    private fun processImpl(inputBuffer: ByteBuffer, forceOn: Boolean) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
         val format = inputAudioFormat
@@ -131,12 +146,12 @@ object SafeLimiter : BaseAudioProcessor() {
         val is16 = format.encoding == C.ENCODING_PCM_16BIT
         val bytesPerFrame = if (is16) channels * 2 else channels * 4
 
-        val out = replaceOutputBuffer(remaining)
+        val out = replaceOutputBuffer(remaining).also { lastOut = it }
         out.put(inputBuffer)
         out.flip()
 
         // 关闭时纯直通（归位增益，重开不带残留）
-        if (!enabled || channels < 1) { gain = 1f; return }
+        if (!(enabled || forceOn) || channels < 1) { gain = 1f; return }
         if (designedRate != format.sampleRate || lookCh != channels) design(format.sampleRate, channels)
 
         // ceiling：strength 0→-0.1dBFS，100→-3dBFS（线性插值 dB）。默认 30 ≈ -1dBFS。
@@ -145,6 +160,8 @@ object SafeLimiter : BaseAudioProcessor() {
         val ceiling = 10f.pow(ceilingDb / 20f)
 
         val frame = FloatArray(channels)
+        // 每帧复用：旧实现在逐帧循环里 new FloatArray，音频线程每秒几万次分配 → GC 抖动/爆音
+        val delayed = FloatArray(channels)
         var i = 0
         while (i + bytesPerFrame <= remaining) {
             try {
@@ -164,10 +181,9 @@ object SafeLimiter : BaseAudioProcessor() {
 
                 // 推入前瞻缓冲，弹出最旧一帧作为"当前要输出"的帧
                 val base = writePos * channels
-                val delayed = FloatArray(channels)
                 if (filled >= lookFrames) {
                     for (c in 0 until channels) delayed[c] = look[base + c]
-                }
+                } else java.util.Arrays.fill(delayed, 0f)
 
                 // 更新前瞻峰值：写入新帧、（满时）移除旧帧后重算或增量维护。
                 if (filled >= lookFrames) {

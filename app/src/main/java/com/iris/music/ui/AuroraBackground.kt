@@ -94,6 +94,10 @@ fun AuroraBackground(
             // 自定义背景读取失败（如重启后 URI 权限失效）：清掉 loadedSource，
             // 让下一帧能回退到封面/光晕，而不是永远停在旧图。
             loadedSource = null
+        } else {
+            // 新歌确实没有封面：按设计回退霓虹光晕（旧实现会一直停在上一首的封面上）
+            blurBitmap = null
+            loadedSource = sourceKey
         }
     }
 

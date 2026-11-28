@@ -242,8 +242,12 @@ object ArtworkLoader {
         // 磁盘缓存命中：直接读图，跳过音频解析
         val df = diskFile(filePath)
         if (df != null && df.exists()) {
-            val bmp = runCatching { BitmapFactory.decodeFile(df.absolutePath) }.getOrNull()
+            // 与新解码同为 RGB_565：默认 ARGB_8888 会让磁盘缓存热起来后内存缓存占用翻倍
+            val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 }
+            val bmp = runCatching { BitmapFactory.decodeFile(df.absolutePath, opts) }.getOrNull()
             if (bmp != null) {
+                // 命中即刷新时间戳：淘汰按"最近使用"而不是"写入时间"
+                runCatching { df.setLastModified(System.currentTimeMillis()) }
                 synchronized(lock) { cache[key] = bmp }
                 return bmp
             }
@@ -264,9 +268,13 @@ object ArtworkLoader {
                     diskMutex.withLock {
                         runCatching {
                             val existed = df.length()
-                            val out = java.io.FileOutputStream(df)
-                            bmp.compress(Bitmap.CompressFormat.WEBP, 65, out)
-                            out.flush(); out.close()
+                            // 先写临时文件再原子改名：并发的 load() 不会读到写了一半的 webp；
+                            // use{} 保证 compress 抛异常时流也关闭
+                            val tmp = java.io.File(df.path + ".tmp")
+                            java.io.FileOutputStream(tmp).use { out ->
+                                bmp.compress(Bitmap.CompressFormat.WEBP, 65, out)
+                            }
+                            if (!tmp.renameTo(df)) tmp.delete()
                             diskBytes.addAndGet(df.length() - existed)
                         }
                         // 写超了才淘汰；trim 后留余量，缩回阈值以下前不再重复扫描
@@ -401,7 +409,8 @@ object ArtworkLoader {
             val major = header[3].toInt() and 0xFF
             val flags = header[5].toInt() and 0xFF
             val tagSize = synchsafe(header, 6)
-            if (tagSize <= 0 || tagSize > file.length()) return null
+            // 32MB 封顶：损坏的标签头可能声称几百 MB，按它分配会 OOM
+            if (tagSize <= 0 || tagSize > 32 * 1024 * 1024 || tagSize > file.length()) return null
 
             var tag = ByteArray(tagSize)
             if (raf.read(tag) != tagSize) return null

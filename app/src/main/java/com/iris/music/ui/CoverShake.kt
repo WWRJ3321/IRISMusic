@@ -72,11 +72,21 @@ fun rememberShakeState(enabled: Boolean): CoverShake {
     LaunchedEffect(enabled) {
         if (!enabled) { shake.reset(); return@LaunchedEffect }
         var last = 0L
+        var seeded = false
         while (true) {
             withFrameNanos { now ->
                 val dt = if (last == 0L) 1f else ((now - last) / 16_666_667f).coerceIn(0.2f, 3f)
                 last = now
                 val ax = rawAx[0]; val ay = rawAy[0]; val az = rawAz[0]
+                // r10：重力估计用第一帧真实读数落位。之前从 (0,0,9.81)（手机平放）起步，
+                // 竖着拿手机时"读数 − 估计"差出 ~14m/s²，被当成摇动冲量——每次切歌新卡
+                // 重建这套状态，封面就无故甩一下（用户实录「切歌封面抖一下」）。
+                if (!seeded) {
+                    if (ax == 0f && ay == 0f && az == 0f) return@withFrameNanos // 传感器还没首包
+                    grav[0] = ax; grav[1] = ay; grav[2] = az
+                    seeded = true
+                    return@withFrameNanos
+                }
                 // 扣掉重力低通分量：兼容退回普通加速度计的情况（其读数常年含 ~9.8 重力）。
                 val gx = grav[0]; val gy = grav[1]; val gz = grav[2]
                 // 中速低通：平滑估计重力方向（朝哪倾），又快又稳 → 静态倾斜跟手连贯。

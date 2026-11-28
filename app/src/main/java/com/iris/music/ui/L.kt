@@ -78,10 +78,10 @@ object L {
     // 显示时按模式重映射，两种语言来回切都能还原。
     private val zhAutoName = Regex("^歌单 (\\d+)$")
     private val enAutoName = Regex("^Playlist (\\d+)$")
-    fun displayName(raw: String): String = when {
-        zh && enAutoName.matches(raw) -> "歌单 ${enAutoName.matchEntire(raw)!!.groupValues[1]}"
-        !zh && zhAutoName.matches(raw) -> "Playlist ${zhAutoName.matchEntire(raw)!!.groupValues[1]}"
-        else -> raw
+    fun displayName(raw: String): String {
+        // 只跑一次正则、无 !!（旧实现 matches + matchEntire!! 双跑）
+        val n = (if (zh) enAutoName else zhAutoName).matchEntire(raw)?.groupValues?.get(1) ?: return raw
+        return if (zh) "歌单 $n" else "Playlist $n"
     }
 
     // ==================== 设置页：语言 ====================
@@ -97,6 +97,8 @@ object L {
     val settings get() = if (zh) "设置" else "Settings"
     val delete get() = if (zh) "删除" else "Delete"
     val create get() = if (zh) "创建" else "Create"
+    val rename get() = if (zh) "重命名" else "Rename"
+    val renameHint get() = if (zh) "长按歌单可重命名" else "Long-press a playlist to rename"
     val reset get() = if (zh) "重置" else "Reset"
     val done get() = if (zh) "完成" else "Done"
     val unknown get() = if (zh) "未知" else "Unknown"
@@ -209,6 +211,7 @@ object L {
     val notPlaying get() = if (zh) "未播放" else "Not playing"
     val pickToPlay get() = if (zh) "选一首开始播放" else "Pick a song to start"
     val loadingLibrary get() = if (zh) "读取音乐库…" else "Loading library…"
+    val noSearchResults get() = if (zh) "没有匹配的歌曲\n换个关键词试试" else "No matching songs\nTry another keyword"
     val emptyLibrary get() =
         if (zh) "还没有歌曲\n去设置里换个文件夹，或取消当前筛选"
         else "No songs yet\nPick another folder in Settings, or clear the current filter"
@@ -420,7 +423,7 @@ object L {
     val fadeInOut get() = if (zh) "淡入淡出" else "Fade in / out"
     val fadeInOutNote get() = if (zh) "开头音量渐起、结尾渐落，暂停也不再突兀" else "Volume ramps up at the start and down at the end; pauses are never abrupt"
     fun fadeSeconds(v: String) = if (zh) "渐变时长 · $v 秒" else "Fade duration · $v s"
-    val silenceSkip get() = if (zh) "无声略过 · beta" else "Silence skip · beta"
+    val silenceSkip get() = if (zh) "无声略过" else "Silence skip"
     val silenceSkipNote get() = if (zh) "自动跳过歌曲开头和结尾没有声音的部分" else "Automatically skips silent parts at the beginning and end of songs"
     val topBarIdleHide get() = if (zh) "上栏静止时隐藏" else "Hide top bar when idle"
     val topBarIdleHideNote get() = if (zh) "完全静止时上栏淡到全透明，碰一下即回" else "When nothing moves, the top bar fades out completely — touch to bring it back"
@@ -429,6 +432,8 @@ object L {
     val coverLyric get() = if (zh) "封面歌词" else "Cover lyric"
     val coverLyricNote get() = if (zh) "封面左下角歌词，换句时模糊渐隐渐出" else "Lyrics in the cover's corner, blurring in and out between lines"
     val coverLyricLinesLabel get() = if (zh) "显示行数" else "Lines shown"
+    val coverLyricFull get() = if (zh) "歌词铺满封面" else "Lyrics fill the cover"
+    val coverLyricFullNote get() = if (zh) "堆叠 / 横向卡片下，封面压暗并滚动显示多行歌词，当前行居中高亮" else "In Stack / Carousel layouts, the cover dims and shows scrolling lyrics with the current line centered and highlighted"
     val lines1 get() = if (zh) "1 行" else "1"
     val lines2 get() = if (zh) "2 行" else "2"
     val lines3 get() = if (zh) "3 行" else "3"
@@ -441,16 +446,21 @@ object L {
     val lyricFont get() = if (zh) "歌词字体" else "Lyric font"
     fun lyricFontSize(v: Int) = if (zh) "歌词字号 · ${v}sp" else "Lyric size · ${v}sp"
     // —— 动效与反馈 ——
-    val secMotion get() = if (zh) "动效与反馈" else "Motion & feedback"
+    val secMotion get() = if (zh) "动效与触感" else "Motion & haptics"
+    val secPlayLyrics get() = if (zh) "播放与歌词" else "Playback & lyrics"
+    val secLibrary get() = if (zh) "曲库" else "Library"
+    val moreAppearance get() = if (zh) "更多外观：背景、圆角、字号、字体" else "More: background, corners, text size, font"
+    val moreLyricStyle get() = if (zh) "歌词样式：对齐、字体、字号" else "Lyric style: alignment, font, size"
+    val moreBass get() = if (zh) "震动细调：自适应、时长、灵敏度、低音范围" else "Fine-tune: adaptive, duration, sensitivity, bass range"
     val haptics get() = if (zh) "触感反馈" else "Haptic feedback"
     val hapticsNote get() = if (zh) "按键、切歌、拖动滚动条时轻微震动" else "A light buzz on taps, track changes and scrubbing"
     val hapticsDrag get() = if (zh) "拖动刻度震动" else "Scrub haptics"
     val hapticsDragNote get() = if (zh) "拖动进度条每跨 1 秒轻震一下，唱片墙每滑 1/4 格（含惯性）轻震一下" else "One tick per second on the seek bar; one tick per quarter-tile on the poster wall, fling included"
-    val physicsMotion get() = if (zh) "物理动效 · beta" else "Physical motion · beta"
+    val physicsMotion get() = if (zh) "物理动效" else "Physical motion"
     val physicsMotionNote get() = if (zh) "倾斜频谱 + 摇动封面，传感器驱动" else "Tilting spectrum + shakeable cover, sensor-driven"
     val springyMotion get() = if (zh) "灵动动效" else "Springy motion"
     val springyMotionNote get() = if (zh) "按钮、列表、卡片与面板采用更有弹性的过渡" else "Buttons, lists, cards and sheets use more elastic transitions"
-    val bassMotor get() = if (zh) "低音马达震动 · beta" else "Bass motor vibration · beta"
+    val bassMotor get() = if (zh) "音律震动" else "Rhythm haptics"
     val bassMotorNote get() = if (zh) "跟随低频节奏轻微震动，幅度随鼓点强弱变化" else "Light vibration following the bass line; amplitude tracks the drums"
     val vibStrength get() = if (zh) "震动强度" else "Vibration strength"
     val vibLightTap get() = if (zh) "轻点" else "Light tap"
@@ -464,6 +474,12 @@ object L {
     val triggerSensitivity get() = if (zh) "触发灵敏度" else "Trigger sensitivity"
     val sensLow get() = if (zh) "低" else "Low"
     val sensHigh get() = if (zh) "高" else "High"
+    val bassSync get() = if (zh) "震动同步" else "Vibration sync"
+    fun bassSyncNote(ms: Int) = when {
+        ms == 0 -> if (zh) "自动对齐（已按扬声器 / 蓝牙延迟补偿）" else "Auto (compensates speaker / Bluetooth delay)"
+        ms > 0 -> if (zh) "比自动再晚 ${ms}ms：震动仍比鼓点早时往右" else "${ms}ms later than auto — slide right if it still leads the beat"
+        else -> if (zh) "比自动提早 ${-ms}ms：震动落在鼓点后时往左" else "${-ms}ms earlier than auto — slide left if it lags the beat"
+    }
     val bassCutoff get() = if (zh) "低音范围（截止频率）" else "Bass range (cutoff frequency)"
     fun bassCutoffNote(hz: Int) =
         if (zh) "${hz}Hz 以下算作低音（走沉震），以上走脆震"

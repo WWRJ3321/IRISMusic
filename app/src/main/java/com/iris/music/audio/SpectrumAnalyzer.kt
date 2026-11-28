@@ -298,6 +298,66 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
 
     private val EMPTY = FloatArray(BANDS)
 
+    // ================= 触感用时域分频包络（v5.0 r6） =================
+    // 1024 点 FFT 每个 bin 宽 ~43Hz，buildBins 又强制每带至少一个 bin，
+    // 结果「低音」12 个带实际铺在 43–560Hz：人声、钢琴、吉他全算进低音，
+    // 真正的 808 / 底鼓只占 1–2 个 bin，被平均稀释——"低音很劲但没震感"的根因。
+    // 这里改用时域双二阶滤波器直接取三段能量，按 hop 出一帧 dB：
+    //   kick  < 110Hz（4 阶低通）   mid 600–4000Hz   high 4–12kHz   total 全频
+    // 每样本 5 个双二阶 ≈ 25 次乘加，只在低音震动开启时运行。
+    @Volatile
+    var hapticBands: Boolean = false
+
+    private class Biquad {
+        var b0 = 0f; var b1 = 0f; var b2 = 0f; var a1 = 0f; var a2 = 0f
+        var x1 = 0f; var x2 = 0f; var y1 = 0f; var y2 = 0f
+        fun set(lowPass: Boolean, fc: Float, sr: Int) {
+            val w0 = 2.0 * Math.PI * fc / sr
+            val al = kotlin.math.sin(w0) / (2.0 * 0.7071)
+            val c = kotlin.math.cos(w0)
+            val a0 = 1.0 + al
+            if (lowPass) {
+                b0 = ((1 - c) / 2 / a0).toFloat(); b1 = ((1 - c) / a0).toFloat(); b2 = b0
+            } else {
+                b0 = ((1 + c) / 2 / a0).toFloat(); b1 = (-(1 + c) / a0).toFloat(); b2 = b0
+            }
+            a1 = (-2 * c / a0).toFloat(); a2 = ((1 - al) / a0).toFloat()
+            x1 = 0f; x2 = 0f; y1 = 0f; y2 = 0f
+        }
+        fun run(x: Float): Float {
+            var y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            if (kotlin.math.abs(y) < 1e-20f) y = 0f // 防次正规数拖慢
+            x2 = x1; x1 = x; y2 = y1; y1 = y
+            return y
+        }
+    }
+    private val kickA = Biquad(); private val kickB = Biquad()
+    private val midHp = Biquad(); private val midLp = Biquad()
+    private val highHp = Biquad(); private val highLp = Biquad()
+    private var accKick = 0f; private var accMid = 0f; private var accHigh = 0f; private var accAll = 0f
+    private var accN = 0
+
+    /** 每帧（hop）一格的 dB 环形缓冲，按 analysisFrame 取：读线程可回看最近 [RING] 帧 */
+    const val RING = 128
+    val kickDbRing = FloatArray(RING)
+    val midDbRing = FloatArray(RING)
+    val highDbRing = FloatArray(RING)
+    val totalDbRing = FloatArray(RING)
+    /** 一帧时长（ms），随采样率 */
+    @Volatile var frameMs: Float = 512f * 1000f / 44100f
+        private set
+
+    private fun setupBandFilters() {
+        val sr = sampleRate
+        kickA.set(true, 110f, sr); kickB.set(true, 110f, sr)
+        midHp.set(false, 600f, sr); midLp.set(true, 4000f, sr)
+        highHp.set(false, 4000f, sr); highLp.set(true, minOf(12000f, sr * 0.45f), sr)
+        accKick = 0f; accMid = 0f; accHigh = 0f; accAll = 0f; accN = 0
+        frameMs = HOP_SIZE * 1000f / sr
+    }
+
+    private fun db(e: Float): Float = 10f * log10(e + 1e-10f)
+
     // ==================== AudioBufferSink ====================
 
     override fun flush(sampleRateHz: Int, channelCount: Int, encoding: Int) {
@@ -318,6 +378,7 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         longRms = 0f
         relativeLoudnessDb = 0f
         buildBins()
+        setupBandFilters()
     }
 
     override fun handleBuffer(buffer: ByteBuffer) {
@@ -358,6 +419,13 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
 
     /** 累积单声道样本；滑动窗：首次填满后每推进 [HOP_SIZE] 个新样本做一次 FFT（窗口 50% 重叠） */
     private fun push(sample: Float) {
+        if (hapticBands) {
+            val k = kickB.run(kickA.run(sample))
+            val m = midLp.run(midHp.run(sample))
+            val h = highLp.run(highHp.run(sample))
+            accKick += k * k; accMid += m * m; accHigh += h * h; accAll += sample * sample
+            accN++
+        }
         monoBuffer[writeIndex++] = sample
         if (writeIndex < FFT_SIZE) return
         analyze()
@@ -494,6 +562,16 @@ object SpectrumAnalyzer : TeeAudioProcessor.AudioBufferSink {
         } else {
             lowFlux = 0f; midFlux = 0f; highFlux = 0f; bandsRising = 0f
         }
+        if (hapticBands && accN > 0) {
+            val slot = ((analysisFrame + 1) % RING).toInt()
+            val inv = 1f / accN
+            kickDbRing[slot] = db(accKick * inv)
+            midDbRing[slot] = db(accMid * inv)
+            highDbRing[slot] = db(accHigh * inv)
+            totalDbRing[slot] = db(accAll * inv)
+            accKick = 0f; accMid = 0f; accHigh = 0f; accAll = 0f; accN = 0
+        }
+        // 先写环形缓冲再递增帧号（@Volatile 写），读线程看到新帧号时数据已就位
         analysisFrame++
     }
 

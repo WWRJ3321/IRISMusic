@@ -394,3 +394,16 @@ fun IrisTheme.colors(
         isDark = dark
     )
 }
+
+// ==================== 语义色（v5.0 收拢） ====================
+// 下面几组颜色原来以字面量散落在 MainScreen / SongDeck / PlaylistSheets / PlayerCard 共 15 处，
+// 改一处漏一处。统一成 IrisColors 的语义扩展，改色只改这里。
+
+/** 输入框/搜索框底色（实色材质） */
+val IrisColors.fieldSolid: Color get() = if (isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+/** 输入框/搜索框底色（玻璃材质：半透明叠在玻璃上） */
+val IrisColors.fieldGlass: Color get() = if (isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+/** 播放大卡实色底 */
+val IrisColors.playerCard: Color get() = if (isDark) Color(0xFF1E1E26) else Color(0xFFFFFFFF)
+/** 进度条轨道（实色） */
+val IrisColors.track: Color get() = if (isDark) Color(0xFF3A3A44) else Color(0xFFD8D8DE)

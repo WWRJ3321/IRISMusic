@@ -278,6 +278,9 @@ object FloatingLyric {
             ?: item.localConfiguration?.uri?.let { if (it.scheme == "file") it.path else null }
         if (path.isNullOrBlank()) { setText(""); return }
 
+        // 时长未就绪（切歌瞬间常是 TIME_UNSET）先不加载：纯文本歌词要靠时长均分行，
+        // 拿 0 去解析会按 1 秒一行滚完整首。下一拍轮询时长就位后再加载。
+        if (path != lyricPath && path != loadingPath && p.duration <= 0) return
         if (path != lyricPath && path != loadingPath) {
             loadingPath = path
             lyricPath = path

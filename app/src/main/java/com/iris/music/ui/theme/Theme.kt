@@ -24,10 +24,12 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import kotlinx.coroutines.launch
 
 @Composable
 fun IRISMusicTheme(
@@ -41,9 +43,13 @@ fun IRISMusicTheme(
     glassBlur: Float = GLASS_BLUR_DEFAULT,
     /** 界面字体：0=系统无衬线 1=衬线 */
     uiFont: Int = 0,
+    /** AUTO 模式需要系统明暗；自定义主题需要用户取色——旧实现漏传，AUTO+系统深色时状态栏图标是深色（看不见） */
+    systemDark: Boolean = false,
+    customPrimary: Color? = null,
+    customSecondary: Color? = null,
     content: @Composable () -> Unit
 ) {
-    val colors = theme.colors(mode)
+    val colors = theme.colors(mode, systemDark, customPrimary, customSecondary)
 
 
     val view = LocalView.current
@@ -98,6 +104,10 @@ fun IRISMusicTheme(
             LocalCorners provides IrisCorners(cornerBase.dp),
             LocalSurfaceStyle provides surfaceStyle,
             LocalGlassBlur provides glassBlur.coerceIn(GLASS_BLUR_MIN, GLASS_BLUR_MAX),
+            // 设计铁律「无水波」：全局去掉 M3 涟漪。旧版只有走 irisPressable 的地方没水波，
+            // 约 50 处裸 clickable（卡片、封面、排序胶囊、弹层行…）仍会冒灰色涟漪。
+            androidx.compose.foundation.LocalIndication provides
+                PressHighlight(if (colors.isDark) Color.White else Color.Black),
             // 全局界面字体：Text 未显式传 style 时继承 LocalTextStyle
             androidx.compose.material3.LocalTextStyle provides
                 androidx.compose.ui.text.TextStyle(
@@ -105,5 +115,55 @@ fun IRISMusicTheme(
                 ),
             content = content
         )
+    }
+}
+
+/**
+ * 按压高亮（v5.0）：替代 M3 涟漪的统一按压反馈。
+ *
+ * 设计铁律是「无水波」，但完全没有反馈又会让约 50 处普通点击（设置行、选项块、弹层按钮、
+ * 分区标题……）按下去像没点到。这里做成 iOS 式的整块轻微压暗/提亮：按下 90ms 升到 7%，
+ * 松手 260ms 加速淡出——快点一下是一闪，按住是一层薄雾。形状跟随调用处在它之前的 clip。
+ * 自带缩放手感的主控件（irisPressable）显式 indication=null，不叠加。
+ */
+private class PressHighlight(private val tint: Color) : androidx.compose.foundation.IndicationNodeFactory {
+    override fun create(
+        interactionSource: androidx.compose.foundation.interaction.InteractionSource
+    ): androidx.compose.ui.node.DelegatableNode = PressHighlightNode(interactionSource, tint)
+    override fun equals(other: Any?): Boolean = other is PressHighlight && other.tint == tint
+    override fun hashCode(): Int = tint.hashCode()
+}
+
+private class PressHighlightNode(
+    private val source: androidx.compose.foundation.interaction.InteractionSource,
+    private val tint: Color
+) : androidx.compose.ui.Modifier.Node(), androidx.compose.ui.node.DrawModifierNode {
+    private val level = androidx.compose.animation.core.Animatable(0f)
+
+    override fun onAttach() {
+        coroutineScope.launch {
+            var pressed = 0
+            source.interactions.collect { i ->
+                when (i) {
+                    is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                        pressed++
+                        launch { level.animateTo(1f, androidx.compose.animation.core.tween(90)) }
+                    }
+                    is androidx.compose.foundation.interaction.PressInteraction.Release,
+                    is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
+                        pressed = (pressed - 1).coerceAtLeast(0)
+                        if (pressed == 0) launch {
+                            level.animateTo(0f, androidx.compose.animation.core.tween(260, easing = com.iris.music.ui.IrisEase.exit))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun androidx.compose.ui.graphics.drawscope.ContentDrawScope.draw() {
+        drawContent()
+        val a = level.value
+        if (a > 0.001f) drawRect(tint.copy(alpha = 0.07f * a))
     }
 }

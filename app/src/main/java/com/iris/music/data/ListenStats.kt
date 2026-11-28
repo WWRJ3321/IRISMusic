@@ -165,7 +165,8 @@ object ListenStats {
                 sb.append(day).append(',').append(id).append(',').append(ms).append('\n')
             }
         }
-        runCatching { f.appendText(sb.toString()) }
+        // 写失败（存储满/IO 异常）不清缓冲，留到下次再写，别把这段收听时长丢掉
+        if (runCatching { f.appendText(sb.toString()) }.isFailure) return
         pending.clear()
         pendingMs = 0L
     }

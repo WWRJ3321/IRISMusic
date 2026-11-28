@@ -40,8 +40,9 @@ class MainActivity : ComponentActivity() {
     private val viewModel: PlayerViewModel by viewModels()
 
     private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            viewModel.reloadLibrary()
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            // 只有真拿到了新权限才重扫；全拒绝时重扫一遍也还是空库，白白耗电
+            if (result.values.any { it }) viewModel.reloadLibrary()
         }
 
     // 用户从「所有文件访问」设置页返回后重新建库
@@ -54,17 +55,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // i18n：在任何 Compose 内容之前确定语言（读取偏好/系统 locale）
         com.iris.music.ui.L.init(application)
-        requestNeededPermissions()
+        // 旋转/换主题重建 Activity 时不再重复弹权限（被拒过的会每转一次屏就弹一次）
+        if (savedInstanceState == null) requestNeededPermissions()
         enableImmersiveMode()
 
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
+            // 进度独立收集：State 对象本身经 CompositionLocal 下发，根节点不读它的值，
+            // 进度变化不会让整棵树重组（见 ui/PlaybackClock.kt）
+            val position = viewModel.position.collectAsStateWithLifecycle()
             val baseDensity = androidx.compose.ui.platform.LocalDensity.current
+            // App 内字号倍率叠在系统字号上：系统 200% × App 1.3 = 260%，大片文字被裁。
+            // 合成值封顶 max(系统值, 1.45)——用户在系统里调得更大时尊重系统，否则不让 App 倍率放飞。
+            val fontScale = (baseDensity.fontScale * state.fontScale)
+                .coerceAtMost(maxOf(baseDensity.fontScale, 1.45f))
             androidx.compose.runtime.CompositionLocalProvider(
                 androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
                     density = baseDensity.density,
-                    fontScale = baseDensity.fontScale * state.fontScale
-                )
+                    fontScale = fontScale
+                ),
+                com.iris.music.ui.LocalPlaybackPosition provides position
             ) {
             IRISMusicTheme(
                 theme = state.theme,
@@ -72,7 +82,10 @@ class MainActivity : ComponentActivity() {
                 cornerBase = state.cornerBase,
                 surfaceStyle = state.surfaceStyle,
                 glassBlur = state.glassBlur,
-                uiFont = state.uiFont
+                uiFont = state.uiFont,
+                systemDark = state.systemDark,
+                customPrimary = androidx.compose.ui.graphics.Color(state.customPrimaryArgb),
+                customSecondary = androidx.compose.ui.graphics.Color(state.customSecondaryArgb)
             ) {
                 MainScreen(
                     state = state,
@@ -90,10 +103,6 @@ class MainActivity : ComponentActivity() {
             }
             }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
     }
 
     /** 沉浸式系统栏：内容延伸至状态栏/导航栏区域，系统栏透明、图标跟随主题，常驻显示 */

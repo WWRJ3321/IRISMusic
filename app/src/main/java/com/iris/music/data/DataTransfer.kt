@@ -559,11 +559,17 @@ object DataTransfer {
             val totals = HashMap<Long, Long>()
             val lasts = HashMap<Long, Long>()
 
+            // 没匹配上的条目留到下次（曲库可能还没扫全 / 设了扫描目录）。
+            // 旧实现无论匹配多少都整份删除孤儿文件，没匹配上的数据永久丢失。
+            val restSongs = JSONArray()
+            val restListen = JSONArray()
+            val restPl = JSONArray()
+
             val songArr = root.optJSONArray("songs") ?: JSONArray()
             for (i in 0 until songArr.length()) {
                 val o = songArr.optJSONObject(i) ?: continue
                 val key = nameKey(o.optString("title"), o.optString("artist"))
-                val id = byName[key] ?: continue
+                val id = byName[key] ?: run { restSongs.put(o); null } ?: continue
                 if (o.optBoolean("liked")) likes.add(id)
                 o.optInt("playCount").let { if (it > 0) plays[id] = maxOf(plays[id] ?: 0, it) }
                 o.optInt("incompleteCount").let { if (it > 0) incompletes[id] = maxOf(incompletes[id] ?: 0, it) }
@@ -576,7 +582,7 @@ object DataTransfer {
             val listenArr = root.optJSONArray("listen") ?: JSONArray()
             for (i in 0 until listenArr.length()) {
                 val o = listenArr.optJSONObject(i) ?: continue
-                val id = byName[o.optString("key")] ?: continue
+                val id = byName[o.optString("key")] ?: run { restListen.put(o); null } ?: continue
                 val day = o.optLong("day", -1L)
                 val ms = o.optLong("ms", 0L)
                 if (day < 0L || ms <= 0L) continue
@@ -591,11 +597,23 @@ object DataTransfer {
                 val name = o.optString("name")
                 val keys = o.optString("keys").split("\u0002").filter { it.isNotBlank() }
                 val target = Playlists.all().firstOrNull { it.name == name }?.id ?: continue
-                keys.forEach { key -> byName[key]?.let { Playlists.addSong(target, it) } }
+                val left = keys.filter { key ->
+                    val id = byName[key]
+                    if (id != null) Playlists.addSong(target, id)
+                    id == null
+                }
+                if (left.isNotEmpty()) restPl.put(JSONObject(o.toString()).put("keys", left.joinToString("\u0002")))
             }
 
             PlayHistory.mergeImported(likes, plays, incompletes, totals, lasts)
-            clearOrphans(context)
+            if (restSongs.length() == 0 && restListen.length() == 0 && restPl.length() == 0) {
+                clearOrphans(context)
+            } else {
+                root.put("songs", restSongs)
+                root.put("listen", restListen)
+                root.put("playlists", restPl)
+                runCatching { context.filesDir.resolve(ORPHAN_FILE).writeText(root.toString()) }
+            }
         }
     }
 

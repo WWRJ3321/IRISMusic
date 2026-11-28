@@ -162,7 +162,7 @@ data class GlassSpec(
 /** SOLID 模式下该层级对应的实色，保证切回实色时观感与旧版一致 */
 fun GlassLevel.solidColor(colors: IrisColors): Color = when (this) {
     GlassLevel.SHEET -> colors.surface
-    GlassLevel.PLAYER -> if (colors.isDark) Color(0xFF1E1E26) else Color(0xFFFFFFFF)
+    GlassLevel.PLAYER -> colors.playerCard
     GlassLevel.CARD -> colors.card
     GlassLevel.ROW -> colors.row
     GlassLevel.CHIP -> colors.card

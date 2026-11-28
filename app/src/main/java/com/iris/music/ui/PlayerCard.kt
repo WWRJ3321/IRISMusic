@@ -17,6 +17,8 @@
  */
 package com.iris.music.ui
 
+import com.iris.music.ui.theme.playerCard
+import com.iris.music.ui.theme.track
 import android.graphics.Bitmap
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
@@ -29,6 +31,14 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -96,12 +106,11 @@ import com.iris.music.player.PlayerViewModel
 fun PlayerCard(
     title: String,
     artist: String,
-    positionMs: Long,
+    positionMs: () -> Long,
     durationMs: Long,
     shuffle: Boolean,
     repeatMode: RepeatMode,
     artworkPath: String?,
-    progress: Float,
     isPlaying: Boolean,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
@@ -134,6 +143,10 @@ fun PlayerCard(
     coverLyricEnabled: Boolean = false,
     /** 封面歌词同时显示几行：1=只有当前行，2/3=带上后续行并淡化 */
     coverLyricLines: Int = 1,
+    /** r12：封面歌词铺满整张封面（暗层 + 多行滚动）。只有堆叠/横向卡片布局传 true */
+    coverLyricFull: Boolean = false,
+    /** r12：点歌手名（null = 不可点）。参数是当前歌手名 */
+    onClickArtist: ((String) -> Unit)? = null,
     /**
      * 是否是"活的"卡片。
      *
@@ -152,16 +165,23 @@ fun PlayerCard(
     onDoubleTapBlank: (() -> Unit)? = null
 ) {
     // 深色模式：深色卡片 + 白字 + 白图标；浅色模式：白色卡片 + 黑字 + 黑图标
-    val cardColor = if (colors.isDark) Color(0xFF1E1E26) else Color(0xFFFFFFFF)
+    val cardColor = colors.playerCard
     val glass = isLiquidGlass
     val btnColor = colors.primary.readableOn(cardColor, 3.2f)
-    val trackColor = if (colors.isDark) Color(0xFF3A3A44) else Color(0xFFD8D8DE)
+    val trackColor = colors.track
     // 卡片上的图标/主文字颜色：深色=白，浅色=黑
     val onCard = if (colors.isDark) Color.White else Color.Black
     // 主题色在卡片背景上的可读版本（霓虹黄/青落在白卡上会看不清）
     val readableAccent = btnColor
     // 次要文字：0.55 太淡，提到 0.72 保证小字也看得清
     val subOnCard = onCard.copy(alpha = 0.72f)
+
+    // 切歌时标题/歌手先模糊淡出、换字、再淡入（v5.0：竖屏列表模式原来是硬切）
+    val infoSwap = rememberInfoSwap(title, artist)
+    // r12：点歌手 → 回曲库按歌手筛选。用传入的 artist（不是过渡中的 infoSwap.artist），空歌手不可点
+    val artistClick: (() -> Unit)? = if (onClickArtist != null && artist.isNotBlank()) {
+        { onClickArtist(artist) }
+    } else null
 
     // 实验性：封面摇动。仅在活动卡 + 开关开启时注册加速度计。
     val shake = rememberShakeState(coverShakeEnabled && interactive)
@@ -194,7 +214,11 @@ fun PlayerCard(
         modifier = modifier
             // 长按卡片空白处 →「加入歌单」。onClick 传空 lambda：不拦子级按钮的点击
             // （子级 clickable 优先消费事件），只有空白区域的长按会落到这里。
+            // indication = null：r2 起全局按压高亮替代了 NoIndication，这块整卡的长按区域
+            // 一按就盖上一整张灰色矩形（堆叠模式拖卡时尤其明显，用户实录"黑色阴影遮罩"）。
             .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
                 onClick = {},
                 onDoubleClick = onDoubleTapBlank?.let { cb -> { Haptics.click(); cb() } },
                 onLongClick = { Haptics.click(); onAddToPlaylist() }
@@ -238,6 +262,7 @@ fun PlayerCard(
                     shake = rememberShakeState(false),
                     coverLyricEnabled = coverLyricEnabled,
                     coverLyricLines = coverLyricLines,
+                    coverLyricFull = coverLyricFull,
                     interactive = interactive,
                     coverLyrics = coverLyrics,
                     corner = (LocalCorners.current.card - 18.dp).coerceAtLeast(0.dp),
@@ -248,13 +273,13 @@ fun PlayerCard(
                         .aspectRatio(1f)
                 )
                 PlayerControls(
-                    title = title,
-                    artist = artist,
+                    title = infoSwap.title,
+                    artist = infoSwap.artist,
+                    infoFade = infoSwap.fade.value,
                     positionMs = positionMs,
                     durationMs = durationMs,
                     shuffle = shuffle,
                     repeatMode = repeatMode,
-                    progress = progress,
                     isPlaying = isPlaying,
                     onToggle = onToggle,
                     onPrev = onPrev,
@@ -282,6 +307,7 @@ fun PlayerCard(
                     isDark = colors.isDark,
                     interactive = interactive,
                     compact = true,
+                    onClickArtist = artistClick,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -298,6 +324,7 @@ fun PlayerCard(
                     shake = shake,
                     coverLyricEnabled = coverLyricEnabled,
                     coverLyricLines = coverLyricLines,
+                    coverLyricFull = coverLyricFull,
                     interactive = interactive,
                     coverLyrics = coverLyrics,
                     corner = (LocalCorners.current.card - 18.dp).coerceAtLeast(0.dp),
@@ -312,13 +339,13 @@ fun PlayerCard(
                 Spacer(Modifier.height(20.dp))
 
                 PlayerControls(
-                    title = title,
-                    artist = artist,
+                    title = infoSwap.title,
+                    artist = infoSwap.artist,
+                    infoFade = infoSwap.fade.value,
                     positionMs = positionMs,
                     durationMs = durationMs,
                     shuffle = shuffle,
                     repeatMode = repeatMode,
-                    progress = progress,
                     isPlaying = isPlaying,
                     onToggle = onToggle,
                     onPrev = onPrev,
@@ -346,6 +373,7 @@ fun PlayerCard(
                     isDark = colors.isDark,
                     interactive = interactive,
                     compact = false,
+                    onClickArtist = artistClick,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -360,12 +388,13 @@ fun PlayerCard(
 @Composable
 internal fun PlayerCoverArt(
     artworkPath: String?,
-    positionMs: Long,
+    positionMs: () -> Long,
     isDark: Boolean,
     vizAlpha: Float,
     shake: CoverShake,
     coverLyricEnabled: Boolean,
     coverLyricLines: Int = 1,
+    coverLyricFull: Boolean = false,
     interactive: Boolean,
     coverLyrics: List<LyricLine>,
     onClickArtwork: () -> Unit,
@@ -396,7 +425,13 @@ internal fun PlayerCoverArt(
         // 封面左下角歌词：锁在封面上（随 shake 一起动），换词时模糊渐隐渐出。
         // 多行模式下当前行白色，后续行按行号递减透明度。
         if (coverLyricEnabled && interactive) {
-            val curIdx = LyricParser.currentIndex(coverLyrics, positionMs)
+            // derivedStateOf：只在"当前句"变化时重组，不随 500ms 进度轮询重组
+            val curIdx by remember(coverLyrics, positionMs) {
+                derivedStateOf { LyricParser.currentIndex(coverLyrics, positionMs()) }
+            }
+            if (coverLyricFull) {
+                CoverLyricFull(lines = coverLyrics, curIdx = curIdx, modifier = Modifier.matchParentSize())
+            } else {
             val n = coverLyricLines.coerceIn(1, 3)
             val texts = if (curIdx in coverLyrics.indices)
                 (curIdx until minOf(curIdx + n, coverLyrics.size)).map { coverLyrics[it].text }
@@ -407,6 +442,7 @@ internal fun PlayerCoverArt(
                     .align(Alignment.BottomStart)
                     .padding(start = 14.dp, bottom = 14.dp)
             )
+            }
         }
     }
 }
@@ -419,11 +455,10 @@ internal fun PlayerCoverArt(
 private fun PlayerControls(
     title: String,
     artist: String,
-    positionMs: Long,
+    positionMs: () -> Long,
     durationMs: Long,
     shuffle: Boolean,
     repeatMode: RepeatMode,
-    progress: Float,
     isPlaying: Boolean,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
@@ -452,6 +487,8 @@ private fun PlayerControls(
     interactive: Boolean,
     compact: Boolean,
     infoFade: Float = 1f,
+    /** r12：点歌手名回调；null = 歌手名不可点 */
+    onClickArtist: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // 横屏紧凑：信息区更矮、间距更小、主控制按钮略缩。
@@ -520,7 +557,12 @@ private fun PlayerControls(
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        // r12：点歌手名 → 回曲库按歌手筛选。文字不要按压高亮（indication = null）
+                        modifier = if (onClickArtist != null) Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { Haptics.tap(); onClickArtist() } else Modifier
                     )
                 }
             }
@@ -547,7 +589,7 @@ private fun PlayerControls(
 
         // 进度条
         NeonProgressBar(
-            progress = progress,
+            progress = { if (durationMs > 0) (positionMs().toFloat() / durationMs).coerceIn(0f, 1f) else 0f },
             onSeek = onSeek,
             durationMs = durationMs,
             accent = readableAccent,
@@ -567,12 +609,7 @@ private fun PlayerControls(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                formatDuration(positionMs),
-                color = subOnCard,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium
-            )
+            ElapsedText(positionMs, color = subOnCard)
             Text(
                 formatDuration(durationMs),
                 color = subOnCard,
@@ -657,6 +694,98 @@ private fun PlayerControls(
                             softWrap = false
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * r12：歌词铺满整张封面（堆叠 / 横向卡片布局）。
+ *
+ * 封面上一层半透明暗层 + 多行歌词，当前行居中高亮、其余行淡化。
+ * 性能：[curIdx] 由调用方 derivedStateOf 派生，只在换行时变化 → 本组件只在换行时重组；
+ * 滚动是一次 animateScrollBy（IrisMotion 规格），不随播放进度逐帧重组。
+ * 列表禁用用户滚动，点击/拖动照常落到封面（开歌词页 / 抽卡手势）。
+ */
+@Composable
+private fun CoverLyricFull(lines: List<LyricLine>, curIdx: Int, modifier: Modifier = Modifier) {
+    // 歌词到位后暗层淡入（异步解析完成前不压暗封面）
+    val shade by animateFloatAsState(
+        targetValue = if (lines.isNotEmpty()) 1f else 0f,
+        animationSpec = IrisMotion.appear(),
+        label = "coverLyricShade"
+    )
+    Box(modifier.graphicsLayer { alpha = shade }) {
+        Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.48f)))
+        if (lines.isEmpty()) return@Box
+        val listState = rememberLazyListState()
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.matchParentSize()) {
+            val half = maxHeight / 2
+            LaunchedEffect(curIdx, lines) {
+                val target = curIdx.coerceIn(0, lines.lastIndex)
+                fun deltaOf(): Float? {
+                    val info = listState.layoutInfo
+                    val item = info.visibleItemsInfo.firstOrNull { it.index == target } ?: return null
+                    val center = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                    return item.offset + item.size / 2f - center
+                }
+                if (deltaOf() == null) listState.scrollToItem(target)
+                val d = deltaOf() ?: return@LaunchedEffect
+                if (kotlin.math.abs(d) > 0.5f) listState.animateScrollBy(d, IrisMotion.move())
+            }
+            LazyColumn(
+                state = listState,
+                userScrollEnabled = false,
+                contentPadding = PaddingValues(vertical = half),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxSize()
+                    // 上下边缘柔化淡出，行滚出封面时不被硬切
+                    .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                0f to Color.Transparent,
+                                0.18f to Color.Black,
+                                0.82f to Color.Black,
+                                1f to Color.Transparent
+                            ),
+                            blendMode = BlendMode.DstIn
+                        )
+                    }
+            ) {
+                itemsIndexed(lines, key = { i, _ -> i }) { i, line ->
+                    val t by animateFloatAsState(
+                        targetValue = if (i == curIdx) 1f else 0f,
+                        animationSpec = tween(IrisDur.MEDIUM, easing = IrisEase.standard),
+                        label = "coverLyricHi"
+                    )
+                    Text(
+                        line.text,
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 20.sp,
+                        style = TextStyle(
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 0.45f),
+                                offset = Offset(0f, 1.2f),
+                                blurRadius = 3f
+                            )
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp, vertical = 5.dp)
+                            .graphicsLayer {
+                                alpha = 0.42f + 0.58f * t
+                                val sc = 0.92f + 0.08f * t
+                                scaleX = sc
+                                scaleY = sc
+                            }
+                    )
                 }
             }
         }
@@ -1256,7 +1385,8 @@ private fun AlbumArt(filePath: String?) {
         if (filePath != loadedPath) {
             val bmp = if (filePath == null) null else ArtworkLoader.load(filePath)
             // 若高清已在阶段二先就位，别用低清盖回去。
-            if ((bmp != null || filePath == null) && hiResPath != filePath) {
+            // 新歌没有封面（bmp=null）也要落下：旧条件会把上一首的封面一直留在屏上
+            if (hiResPath != filePath) {
                 bitmap = bmp
                 loadedPath = filePath
             }
@@ -1274,7 +1404,7 @@ private fun AlbumArt(filePath: String?) {
 
     val bmp = bitmap
     if (bmp != null) {
-        androidx.compose.animation.Crossfade(targetState = bmp, animationSpec = tween(280), label = "albumArt") { b ->
+        androidx.compose.animation.Crossfade(targetState = bmp, animationSpec = tween(360, easing = IrisEase.standard), label = "albumArt") { b ->
             Image(
                 bitmap = b.asImageBitmap(),
                 contentDescription = null,
@@ -1288,7 +1418,8 @@ private fun AlbumArt(filePath: String?) {
 /** 进度条 */
 @Composable
 private fun NeonProgressBar(
-    progress: Float,
+    /** 延迟读取：只在绘制阶段读，进度变化只重绘不重组 */
+    progress: () -> Float,
     onSeek: (Float) -> Unit,
     /** 拖动刻度震动按秒位计，需要总时长 */
     durationMs: Long = 0L,
@@ -1301,6 +1432,13 @@ private fun NeonProgressBar(
     /** false 时只画不响应手势（卡片模式里非当前那几张卡） */
     interactive: Boolean = true
 ) {
+    // pointerInput(Unit) 会把首次组合时的 onSeek/durationMs 永久捕获（切歌后震动刻度按旧时长算），
+    // 用 rememberUpdatedState 读最新值。
+    val seekRef = rememberUpdatedState(onSeek)
+    val durRef = rememberUpdatedState(durationMs)
+    // 拖动期间只动本地值，松手才真正 seek：旧实现每个拖动事件都 seek 一次，
+    // 解码器被反复打断，拖动时会"咔咔"响且卡顿。-1f = 未在拖动。
+    val dragPos = remember { mutableFloatStateOf(-1f) }
     Box(
         modifier
             .height(14.dp)
@@ -1308,14 +1446,24 @@ private fun NeonProgressBar(
                 if (interactive) Modifier
                     .pointerInput(Unit) {
                         detectTapGestures { offset ->
-                            onSeek((offset.x / size.width).coerceIn(0f, 1f))
+                            seekRef.value((offset.x / size.width).coerceIn(0f, 1f))
                         }
                     }
                     .pointerInput(Unit) {
-                        detectHorizontalDragGestures { change, _ ->
-                            Haptics.drag((change.position.x / size.width).coerceIn(0f, 1f), durationMs)
-                            onSeek((change.position.x / size.width).coerceIn(0f, 1f))
-                        }
+                        detectHorizontalDragGestures(
+                            onDragStart = { dragPos.floatValue = (it.x / size.width).coerceIn(0f, 1f) },
+                            onHorizontalDrag = { change, _ ->
+                                change.consume()
+                                val f = (change.position.x / size.width).coerceIn(0f, 1f)
+                                Haptics.drag(f, durRef.value)
+                                dragPos.floatValue = f
+                            },
+                            onDragEnd = {
+                                if (dragPos.floatValue >= 0f) seekRef.value(dragPos.floatValue)
+                                dragPos.floatValue = -1f
+                            },
+                            onDragCancel = { dragPos.floatValue = -1f }
+                        )
                     }
                 else Modifier
             )
@@ -1352,7 +1500,8 @@ private fun NeonProgressBar(
                 )
             }
 
-            val filled = (size.width * progress).coerceAtLeast(barH)
+            val p = if (dragPos.floatValue >= 0f) dragPos.floatValue else progress()
+            val filled = (size.width * p).coerceAtLeast(barH)
             drawRoundRect(
                 color = accent,
                 topLeft = Offset(0f, y),
@@ -1383,11 +1532,10 @@ private fun NeonProgressBar(
 internal fun LandscapeDeckPlayer(
     title: String,
     artist: String,
-    positionMs: Long,
+    positionMs: () -> Long,
     durationMs: Long,
     shuffle: Boolean,
     repeatMode: RepeatMode,
-    progress: Float,
     isPlaying: Boolean,
     onToggle: () -> Unit,
     onPrev: () -> Unit,
@@ -1416,12 +1564,14 @@ internal fun LandscapeDeckPlayer(
      * 1.0 = 刚好一张封面；大于 1 的部分就是留给邻曲/堆叠露头的余量。
      */
     coverAspect: Float = 1f,
+    /** r12：点歌手名（null = 不可点） */
+    onClickArtist: ((String) -> Unit)? = null,
     coverSlot: @Composable () -> Unit
 ) {
-    val cardColor = if (colors.isDark) Color(0xFF1E1E26) else Color(0xFFFFFFFF)
+    val cardColor = colors.playerCard
     val glass = isLiquidGlass
     val btnColor = colors.primary.readableOn(cardColor, 3.2f)
-    val trackColor = if (colors.isDark) Color(0xFF3A3A44) else Color(0xFFD8D8DE)
+    val trackColor = colors.track
     val onCard = if (colors.isDark) Color.White else Color.Black
     val readableAccent = btnColor
     val subOnCard = onCard.copy(alpha = 0.72f)
@@ -1437,16 +1587,7 @@ internal fun LandscapeDeckPlayer(
 
     // 切歌时资料模糊淡变：title+artist 变化 → 淡出模糊 → 换字 → 淡入清晰。
     // 用一个 Animatable 驱动 alpha 与 blur（同封面歌词的换词动画节奏）。
-    val infoFade = remember { Animatable(1f) }
-    val shownTitle = remember { mutableStateOf(title) }
-    val shownArtist = remember { mutableStateOf(artist) }
-    LaunchedEffect(title, artist) {
-        if (shownTitle.value == title && shownArtist.value == artist) return@LaunchedEffect
-        infoFade.animateTo(0f, tween(210, easing = androidx.compose.animation.core.FastOutSlowInEasing))
-        shownTitle.value = title
-        shownArtist.value = artist
-        infoFade.animateTo(1f, tween(360, easing = androidx.compose.animation.core.EaseOutCubic))
-    }
+    val infoSwap = rememberInfoSwap(title, artist)
 
     Box(
         modifier = modifier
@@ -1486,13 +1627,12 @@ internal fun LandscapeDeckPlayer(
                 contentAlignment = Alignment.Center
             ) {
             PlayerControls(
-                title = shownTitle.value,
-                artist = shownArtist.value,
+                title = infoSwap.title,
+                artist = infoSwap.artist,
                 positionMs = positionMs,
                 durationMs = durationMs,
                 shuffle = shuffle,
                 repeatMode = repeatMode,
-                progress = progress,
                 isPlaying = isPlaying,
                 onToggle = onToggle,
                 onPrev = onPrev,
@@ -1520,10 +1660,45 @@ internal fun LandscapeDeckPlayer(
                 isDark = colors.isDark,
                 interactive = true,
                 compact = true,
-                infoFade = infoFade.value,
+                infoFade = infoSwap.fade.value,
+                onClickArtist = if (onClickArtist != null && artist.isNotBlank()) {
+                    { onClickArtist(artist) }
+                } else null,
                 modifier = Modifier.fillMaxWidth()
 )
             }
         }
     }
+}
+
+/** 已播时间：derivedStateOf 让它每秒只重组一次，且只重组这一个 Text */
+@Composable
+private fun ElapsedText(positionMs: () -> Long, color: Color) {
+    val text by remember(positionMs) { derivedStateOf { formatDuration(positionMs()) } }
+    Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+}
+
+
+/**
+ * 切歌时资料区的"换字"过渡状态（v5.0 抽出，竖屏/横屏/卡片共用）：
+ * title+artist 变化 → 淡出（带轻模糊）→ 换字 → 淡入。快速连切时只保留最后一次。
+ */
+@Stable
+internal class InfoSwap(title: String, artist: String) {
+    var title by mutableStateOf(title)
+    var artist by mutableStateOf(artist)
+    val fade = Animatable(1f)
+}
+
+@Composable
+internal fun rememberInfoSwap(title: String, artist: String): InfoSwap {
+    val s = remember { InfoSwap(title, artist) }
+    LaunchedEffect(title, artist) {
+        if (s.title == title && s.artist == artist) return@LaunchedEffect
+        s.fade.animateTo(0f, tween(180, easing = IrisEase.exit))
+        s.title = title
+        s.artist = artist
+        s.fade.animateTo(1f, tween(360, easing = IrisEase.emphasized))
+    }
+    return s
 }

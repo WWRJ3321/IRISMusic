@@ -95,7 +95,6 @@ data class PlayerUiState(
     val sortDirection: SortDirection = SortDirection.ASCENDING,
     val currentIndex: Int = -1,
     val isPlaying: Boolean = false,
-    val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val shuffle: Boolean = false,
     val repeatMode: RepeatMode = RepeatMode.OFF,
@@ -168,6 +167,8 @@ data class PlayerUiState(
     val coverLyric: Boolean = false,
     /** 封面歌词同时显示几行：1=只有当前行，2/3=再带上后续行（淡化） */
     val coverLyricLines: Int = 1,
+    /** r12：堆叠/横向卡片下封面歌词铺满整张封面（暗层 + 多行滚动，当前行高亮居中） */
+    val coverLyricFull: Boolean = false,
     /** 全屏歌词当前行的伪逐字扫光（无词级时间时按行时长匀速扫过） */
     val karaokeLyric: Boolean = true,
     /** 全屏歌词对齐：0=靠左 1=居中 2=靠右 */
@@ -208,6 +209,7 @@ data class PlayerUiState(
     val bassHapticsSensitivity: Int = 5,
     /** 低音截止频率 Hz：多少 Hz 以下算作低音，120–320，默认 250 */
     val bassHapticsLowCutoff: Int = 250,
+    val bassHapticsSync: Int = 0,
     /** 自适应：时长/灵敏度跟随音乐实时变化 */
     val bassHapticsAdaptive: Boolean = false,
     /** 虚拟低音（V2.2 · beta） */
@@ -247,9 +249,6 @@ data class PlayerUiState(
     val scanRoot: String? = null
 ) {
     val currentSong: Song? get() = queue.getOrNull(currentIndex)
-
-    val progress: Float
-        get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
 }
 
 class PlayerViewModel(app: Application) : AndroidViewModel(app) {
@@ -262,7 +261,25 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    private val _state = MutableStateFlow(
+    /** 播放进度（ms）。独立于 [state]：高频变化只通知真正显示进度的界面叶子 */
+    private val _position = MutableStateFlow(0L)
+    val position: StateFlow<Long> = _position.asStateFlow()
+
+    // 注意：这几个字段必须声明在 init 块之前（init 里会赋值，声明在后会被初始化器覆盖回 null）
+    private var controllerFuture: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
+    @Volatile private var cleared = false
+
+    /**
+     * 当前进行中的建库任务（冷启动校正扫描 / 手动刷新 / 改扫描目录）。
+     * 新任务开始前取消旧的：否则慢的旧扫描后完成，会把新结果（比如刚改的扫描目录）覆盖回去，
+     * 两次 loadSongs 还会并发回写同一份元数据缓存。
+     */
+    private var libraryJob: Job? = null
+
+    private val _state = MutableStateFlow(readPrefsState())
+
+    /** 从设置文件读出全部持久化的界面状态（冷启动 & 导入数据后重载共用） */
+    private fun readPrefsState(): PlayerUiState =
         PlayerUiState(
             theme = readTheme(),
             mode = readMode(),
@@ -288,6 +305,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             coverShake = prefs.getBoolean(KEY_COVER_SHAKE, false),
             coverLyric = prefs.getBoolean(KEY_COVER_LYRIC, false),
             coverLyricLines = prefs.getInt(KEY_COVER_LYRIC_LINES, 1).coerceIn(1, 3),
+            coverLyricFull = prefs.getBoolean(KEY_COVER_LYRIC_FULL, false),
             karaokeLyric = prefs.getBoolean(KEY_KARAOKE_LYRIC, true),
             lyricAlign = prefs.getInt(KEY_LYRIC_ALIGN, 1).coerceIn(0, 2),
             lyricFont = if (prefs.getInt(KEY_LYRIC_FONT, 0) == 1) 1 else 0,
@@ -309,6 +327,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             bassHapticsPulseMs = prefs.getInt(BassHaptics.KEY_PULSE_MS, 20).coerceIn(1, 30),
             bassHapticsSensitivity = prefs.getInt(BassHaptics.KEY_SENSITIVITY, 5).coerceIn(1, 10),
             bassHapticsLowCutoff = prefs.getInt(BassHaptics.KEY_LOW_CUTOFF, 250).coerceIn(120, 320),
+            bassHapticsSync = prefs.getInt(BassHaptics.KEY_SYNC_OFFSET, 0).coerceIn(-250, 250),
             bassHapticsAdaptive = prefs.getBoolean(BassHaptics.KEY_ADAPTIVE, false),
             virtualBass = prefs.getBoolean(VirtualBass.KEY_ENABLED, false),
             virtualBassStrength = prefs.getInt(VirtualBass.KEY_STRENGTH, 50).coerceIn(0, 100),
@@ -332,8 +351,14 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             fullScreenCard = prefs.getBoolean(KEY_FULLSCREEN_CARD, false),
             sleepLastMinutes = prefs.getInt(KEY_SLEEP_LAST_MIN, 0)
         )
-    )
+
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
+
+    init {
+        // 首帧前就把果冻开关同步到动效中心（不等 LaunchedEffect 晚一帧）
+        com.iris.music.ui.IrisMotion.jelly = _state.value.jellyAnim
+    }
+
     private var controller: MediaController? = null
     private var sleepUnsub: (() -> Unit)? = null
     private var searchJob: Job? = null
@@ -443,7 +468,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
 
         connectController()
 
-        viewModelScope.launch { loadLibrary() }
+        libraryJob = viewModelScope.launch { loadLibrary() }
         viewModelScope.launch { tickPosition() }
         // 睡眠定时器状态恢复：计时在 SleepTimer（进程级），若服务已 attach 过
         // 或上次定时未到期，把剩余定时映射回 UI（进度环、角标）。
@@ -520,7 +545,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (duration <= 0) return
         val target = (duration * fraction.coerceIn(0f, 1f)).toLong()
         c.seekTo(target)
-        _state.value = _state.value.copy(positionMs = target)
+        _position.value = target
     }
 
     /** 播放队列中指定位置的歌曲 */
@@ -603,7 +628,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         val base = _state.value.queue
         if (base.isEmpty()) return
-        val cur = _state.value.currentSong
+        // 当前曲以播放器为准；它若被搜索/筛选挡在列表外，不重建时间线——
+        // 旧实现会 setMediaItems(列表[0], 旧歌的播放位置)，等于跳歌还 seek 到错的位置。
+        // 模式本身已记下，下次队列重建（清空搜索/点歌）时自然按新模式排。
+        val playingId0 = c.currentMediaItem?.mediaId?.toLongOrNull()
+        val cur = base.firstOrNull { it.id == playingId0 } ?: _state.value.currentSong
+        if (playingId0 != null && cur?.id != playingId0) return
         val order = playOrder(base, if (_state.value.shuffle) cur?.id else null)
         val cIdx = order.indexOfFirst { it.id == cur?.id }.coerceAtLeast(0)
         val playingId = c.currentMediaItem?.mediaId?.toLongOrNull()
@@ -694,11 +724,43 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         applyPlaybackModes()
     }
 
+    /**
+     * 导入数据后调用：设置、点赞、歌单、计数都已写进存储，但内存里的界面状态和
+     * 音效开关还是旧值——旧版要重启 App 才生效，且之后任一设置项写盘会把导入值覆盖回去。
+     * 这里按存储重载可持久化的部分，运行态（曲库/队列/播放/弹层）原样保留。
+     */
+    fun onDataImported() {
+        val cur = _state.value
+        val fresh = readPrefsState()
+        _state.value = fresh.copy(
+            allSongs = cur.allSongs, queue = cur.queue, folders = cur.folders,
+            currentIndex = cur.currentIndex, isPlaying = cur.isPlaying, durationMs = cur.durationMs,
+            loading = cur.loading, refreshing = cur.refreshing,
+            recommendations = cur.recommendations, recommendationsVersion = cur.recommendationsVersion,
+            report = cur.report, showReport = cur.showReport, showSettings = cur.showSettings,
+            systemDark = cur.systemDark, searchQuery = cur.searchQuery,
+            sleepTimerMs = cur.sleepTimerMs, sleepTimerEndMs = cur.sleepTimerEndMs,
+            activePlaylistId = cur.activePlaylistId, browse = cur.browse,
+            likedSongIds = PlayHistory.getLikes(),
+            playlists = Playlists.all()
+        )
+        com.iris.music.ui.IrisMotion.jelly = fresh.jellyAnim
+        SpectrumAnalyzer.enabled = fresh.visualizerEnabled
+        // 纯 prefs 驱动的音效：重读开关与强度（与 MusicService.onCreate 同源）
+        VirtualBass.init(prefs); RangeEnhancer.init(prefs); VirtualSurround.init(prefs)
+        SpatialWide.init(prefs); SafeLimiter.init(prefs)
+        applyPlaybackModes()
+        applyFilters(resetToFirst = false)
+        updateRecommendations()
+    }
+
     // ==================== 库 / 筛选 ====================
 
-    fun reloadLibrary() {
-        if (_state.value.refreshing) return
-        viewModelScope.launch {
+    /** @param force true = 即使正在刷新也重来（改扫描目录时，旧扫描的范围已经错了） */
+    fun reloadLibrary(force: Boolean = false) {
+        if (_state.value.refreshing && !force) return
+        libraryJob?.cancel()
+        libraryJob = viewModelScope.launch {
             _state.value = _state.value.copy(refreshing = true)
             // 刷新 = 触发媒体扫描（新文件可被索引）+ 重新读库。
             // rescanAndReload 内部走 IO；文件夹聚合也一并放到 IO，避免大库在主线程算。
@@ -717,6 +779,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
             refreshReportIfNeeded()
             // 收编孤儿数据：JSON 解析 + 归并较重，放 IO 线程，别卡刷新动画收尾那一帧
             withContext(Dispatchers.IO) { DataTransfer.attachOrphans(getApplication(), songs) }
+            // 收编改了点赞/歌单/计数：界面状态跟着刷新，否则要重启才看得到导入结果
+            _state.value = _state.value.copy(
+                likedSongIds = PlayHistory.getLikes(),
+                playlists = Playlists.all()
+            )
         }
     }
 
@@ -733,7 +800,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (normalized != null && !java.io.File(normalized).isDirectory) return
         prefs.edit().putString(KEY_SCAN_ROOT, normalized.orEmpty()).apply()
         _state.value = _state.value.copy(scanRoot = normalized)
-        reloadLibrary()
+        reloadLibrary(force = true)
     }
 
     /** 解析 SAF 选中的目录 → 绝对路径。拿不到真实路径（部分文档提供方）时返回 null。 */
@@ -1001,6 +1068,20 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private var lastLayoutCycleAt = 0L
+
+    /**
+     * 布局按钮：从 ViewModel 当前值取下一档，而不是用界面捕获的 state.layout.next——
+     * 连点时两次点击之间界面还没重组，捕获的旧值会让第二下"切回同一个"，表现为切不动。
+     * 再加 280ms 防抖：交叉淡化 420ms 内连点只认第一下，不让三套布局在过渡中层层叠建。
+     */
+    fun cycleLayout() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastLayoutCycleAt < 280L) return
+        lastLayoutCycleAt = now
+        setLayout(_state.value.layout.next)
+    }
+
     /** 模糊浓度倍率，同时作用于毛玻璃半径与液态玻璃各层级半径 */
     fun setGlassBlur(scale: Float) {
         val v = scale.coerceIn(GLASS_BLUR_MIN, GLASS_BLUR_MAX)
@@ -1075,6 +1156,11 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val n = lines.coerceIn(1, 3)
         prefs.edit().putInt(KEY_COVER_LYRIC_LINES, n).apply()
         _state.value = _state.value.copy(coverLyricLines = n)
+    }
+    /** 封面歌词铺满整张封面（仅堆叠/横向卡片布局生效）。 */
+    fun setCoverLyricFull(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_COVER_LYRIC_FULL, enabled).apply()
+        _state.value = _state.value.copy(coverLyricFull = enabled)
     }
     /** 全屏歌词伪逐字扫光开关。 */
     fun setKaraokeLyric(enabled: Boolean) {
@@ -1167,6 +1253,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     fun setJellyAnim(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_JELLY_ANIM, enabled).apply()
         _state.value = _state.value.copy(jellyAnim = enabled)
+        com.iris.music.ui.IrisMotion.jelly = enabled
     }
 
     /** 无声略过（beta） */
@@ -1217,6 +1304,13 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 自适应：时长/灵敏度跟随音乐实时变化 */
+    fun setBassHapticsSync(ms: Int) {
+        val v = ms.coerceIn(-250, 250)
+        prefs.edit().putInt(BassHaptics.KEY_SYNC_OFFSET, v).apply()
+        BassHaptics.setSyncOffsetMs(v)
+        _state.value = _state.value.copy(bassHapticsSync = v)
+    }
+
     fun setBassHapticsAdaptive(enabled: Boolean) {
         prefs.edit().putBoolean(BassHaptics.KEY_ADAPTIVE, enabled).apply()
         BassHaptics.setAdaptive(enabled)
@@ -1312,6 +1406,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         setBassHapticsSensitivity(5)
         setBassHapticsLowCutoff(250)
         setBassHapticsAdaptive(false)
+        setBassHapticsSync(0)
         setVirtualBass(false)
         setVirtualBassStrength(50)
         setRangeEnhancer(false)
@@ -1462,9 +1557,12 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         val app = getApplication<Application>()
         val token = SessionToken(app, ComponentName(app, MusicService::class.java))
         val future = MediaController.Builder(app, token).buildAsync()
+        controllerFuture = future
 
         future.addListener({
             runCatching {
+                // ViewModel 已销毁才连上：立即释放，别把会话绑定泄漏在死对象上
+                if (cleared) { MediaController.releaseFuture(future); return@runCatching }
                 val c = future.get()
                 c.addListener(listener)
                 controller = c
@@ -1528,10 +1626,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 val pos = c.currentPosition
                 if (pos != lastPos) {
                     lastPos = pos
-                    _state.value = _state.value.copy(
-                        positionMs = pos,
-                        durationMs = c.duration.coerceAtLeast(0L)
-                    )
+                    // 进度走独立流，不再整份 copy 87 字段的 UI 状态（那会让整棵界面树 2Hz 重组）
+                    _position.value = pos
+                    val dur = c.duration.coerceAtLeast(0L)
+                    if (dur != _state.value.durationMs) _state.value = _state.value.copy(durationMs = dur)
                     persistPlayback(throttle = true)
                 }
             } else {
@@ -1539,7 +1637,8 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 delay(2000)
                 continue
             }
-            delay(500)
+            // 界面不在前台（没人收集进度）时降到 2s 一拍：只为限流落盘断点，省电
+            delay(if (_position.subscriptionCount.value > 0) 500L else 2000L)
         }
     }
 
@@ -1556,7 +1655,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         lastPersistMs = now
         prefs.edit()
             .putLong(KEY_LAST_SONG, song.id)
-            .putLong(KEY_LAST_POS, (controller?.currentPosition ?: _state.value.positionMs).coerceAtLeast(0L))
+            .putLong(KEY_LAST_POS, (controller?.currentPosition ?: _position.value).coerceAtLeast(0L))
             .apply()
     }
 
@@ -1595,9 +1694,9 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             currentIndex = newIndex,
             isPlaying = c.isPlaying,
-            positionMs = c.currentPosition,
             durationMs = c.duration.coerceAtLeast(0L)
         )
+        _position.value = c.currentPosition
 
         // 切歌后不自动刷新推荐——推荐保持稳定，手动刷新或点赞时才更新
     }
@@ -1680,9 +1779,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         if (cached.isEmpty()) _state.value = _state.value.copy(loading = true)
         val songs = MusicRepository.loadSongs(getApplication(), root)
         // 扫描结果与缓存版一致时不重建队列，避免"进来又跳一下/闪一下"。
-        if (cached.isNotEmpty() && songs.size == cached.size &&
-            songs.map { it.id }.toSet() == cached.map { it.id }.toSet()
-        ) {
+        // 比对的不只是 ID 集合：ID 由路径决定，改了标签（标题/歌手/时长）路径不变，
+        // 只比 ID 会让改过的标签一直显示旧值，直到手动刷新。
+        fun sig(l: List<Song>) = l.mapTo(HashSet(l.size)) { listOf(it.id, it.title, it.artist, it.album, it.durationMs) }
+        if (cached.isNotEmpty() && songs.size == cached.size && sig(songs) == sig(cached)) {
             _state.value = _state.value.copy(loading = false)
             return
         }
@@ -1731,7 +1831,10 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun applyFilters(resetToFirst: Boolean) {
         val s = _state.value
-        val playing = s.currentSong
+        // 以播放器里"真正在放的那首"为准，而不是 UI 列表的当前项：
+        // 搜索把当前歌筛掉后 currentSong=null，清空搜索时旧实现会误判"没在放歌"
+        // 而 pushQueue(0)，播放直接跳到第一首从头开始。
+        val playingId = controller?.currentMediaItem?.mediaId?.toLongOrNull() ?: s.currentSong?.id
 
         var list = s.allSongs
 
@@ -1801,7 +1904,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
                 .flatMap { it.value }
         }
 
-        val keptIndex = if (playing != null) list.indexOfFirst { it.id == playing.id } else -1
+        val keptIndex = if (playingId != null) list.indexOfFirst { it.id == playingId } else -1
 
         // 首次建队列时按上次那首歌定位。库是异步加载的，队列建好之前 currentSong 一直是 null，
         // 光靠 keptIndex 只能落到 0，于是每次冷启动/回前台都从第一首开始。
@@ -1829,7 +1932,7 @@ class PlayerViewModel(app: Application) : AndroidViewModel(app) {
         // 浏览类筛选（搜索防抖等，resetToFirst=false）且当前歌被筛掉：不动播放器。
         // 旧实现会 pushQueue(0)——播放中一搜索，当前歌立刻被第一条搜索结果顶掉。
         // 现在浏览列表与播放队列解耦：筛选只改显示，队列只在点歌/显式重建时改变。
-        if (playing != null && newIndex < 0 && !resetToFirst) return
+        if (playingId != null && newIndex < 0 && !resetToFirst) return
         // 当前曲目仍在队列里则续播原位置，否则用恢复位置（都没有就从头）
         val keepPosition = when {
             keptIndex >= 0 -> controller?.currentPosition ?: 0L
@@ -1939,7 +2042,15 @@ private fun refreshSystemDark() {
     private fun readSelectedFolders(): Set<String> {
         val raw = prefs.getString(KEY_SELECTED_FOLDERS, null) ?: return emptySet()
         if (raw.isBlank()) return emptySet()
-        return raw.split(',').mapNotNull { it.trim() }.toSet()
+        // v5.0 起存 JSON 数组（文件夹名可能含逗号，旧的逗号拼接会把它拆坏、筛出空列表）；
+        // 兼容读取旧格式。
+        if (raw.startsWith("[")) {
+            return runCatching {
+                val arr = org.json.JSONArray(raw)
+                (0 until arr.length()).map { arr.getString(it) }.toSet()
+            }.getOrDefault(emptySet())
+        }
+        return raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     }
 
     /** 循环模式：其它开关都持久化了，这两个原先是漏的，重启会回到默认 */
@@ -1948,7 +2059,7 @@ private fun refreshSystemDark() {
             .getOrDefault(RepeatMode.OFF)
 
     private fun saveSelectedFolders(sets: Set<String>) {
-        prefs.edit().putString(KEY_SELECTED_FOLDERS, sets.joinToString(",")).apply()
+        prefs.edit().putString(KEY_SELECTED_FOLDERS, org.json.JSONArray(sets.toList()).toString()).apply()
     }
 
     /** 限定扫描目录：空串/缺失 = 不限定（全盘扫描） */
@@ -1975,6 +2086,8 @@ private fun refreshSystemDark() {
             .build()
 
     override fun onCleared() {
+        cleared = true
+        controllerFuture?.let { if (!it.isDone) MediaController.releaseFuture(it) }
         sleepUnsub?.let { it() }; sleepUnsub = null
         controller?.removeListener(listener)
         controller?.release()
@@ -2010,6 +2123,7 @@ private const val KEY_THEME = "theme"
         const val KEY_COVER_SHAKE = "cover_shake"
         const val KEY_COVER_LYRIC = "cover_lyric"
         const val KEY_COVER_LYRIC_LINES = "cover_lyric_lines"
+        const val KEY_COVER_LYRIC_FULL = "cover_lyric_full"
         const val KEY_KARAOKE_LYRIC = "karaoke_lyric"
         const val KEY_LYRIC_ALIGN = "lyric_align"
         const val KEY_LYRIC_FONT = "lyric_font"

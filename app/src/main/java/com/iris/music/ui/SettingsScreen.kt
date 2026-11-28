@@ -67,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
@@ -193,31 +194,8 @@ internal fun SettingsPanel(
         Text(L.settings, color = colors.text, fontSize = 20.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(16.dp))
 
-        // ==================== 语言 / Language ====================
-        CollapsibleSection(L.languageLabel, colors) {
-        val langApp = LocalContext.current.applicationContext as android.app.Application
-        Spacer(Modifier.height(2.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ModeSwatch(L.langSystem, L.langSelection == "sys", colors,
-                modifier = Modifier.weight(1f)) {
-                L.setLanguage(langApp, null)
-            }
-            ModeSwatch(L.langChinese, L.langSelection == "zh", colors,
-                modifier = Modifier.weight(1f)) {
-                L.setLanguage(langApp, false)
-            }
-            ModeSwatch(L.langEnglish, L.langSelection == "en", colors,
-                modifier = Modifier.weight(1f)) {
-                L.setLanguage(langApp, true)
-            }
-        }
-        if (L.langSelection == "sys") {
-            Spacer(Modifier.height(6.dp))
-            Text(L.langSummary, color = colors.subText, fontSize = 11.sp)
-        }
-        Spacer(Modifier.height(18.dp))
-        } // 结束语言
-
+        // v5.0 精简：9 个分区并为 5 个（外观 / 播放与歌词 / 动效与触感 / 曲库 / 关于），
+        // 放错位置的项归位，进阶细调默认收进「更多」折叠。
         // ==================== 外观 ====================
         CollapsibleSection(L.secAppearance, colors) {
         // ---- 明暗模式 ----
@@ -257,8 +235,8 @@ internal fun SettingsPanel(
 
         AnimatedVisibility(
             visible = state.theme == IrisTheme.CUSTOM,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
             // 只有选了「自定义」主题才展开调色区：进入时 CustomColorSection 重新组合，
             // HSV 从外部 argb 同步；离开时整段移出组合树，避免常显死控件。
@@ -311,8 +289,8 @@ internal fun SettingsPanel(
         // 只在毛玻璃/液态玻璃下出现：实色没有可调的模糊，摆着是死控件。
         AnimatedVisibility(
             visible = state.surfaceStyle != IrisSurfaceStyle.SOLID,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
             Column(Modifier.padding(top = 12.dp)) {
                 Text(
@@ -366,10 +344,104 @@ internal fun SettingsPanel(
                 inactiveColor = colors.surface
             )
         }
-
         Spacer(Modifier.height(14.dp))
-
+        // ---- 界面排布 ----
+        // 和材质、配色一样是独立一维：这里决定"整个 App 长什么结构"。
+        // 卡片模式下歌单和上栏都不存在，所以下面那些歌单相关的设置项要跟着藏起来。
+        Text(L.layout, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            when (state.layout) {
+                IrisLayout.LIST -> L.layoutListNote
+                IrisLayout.CAROUSEL -> L.layoutCarouselNote
+                IrisLayout.STACK -> L.layoutStackNote
+                IrisLayout.COMPACT -> L.layoutCompactNote
+            },
+            color = colors.subText, fontSize = 11.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            IrisLayout.entries.forEach { layout ->
+                LayoutSwatch(
+                    layout = layout,
+                    selected = state.layout == layout,
+                    colors = colors,
+                    modifier = Modifier.weight(1f)
+                ) { viewModel.setLayout(layout) }
+            }
+        }
         Spacer(Modifier.height(14.dp))
+        // ---- 歌单行大小 / 行封面 ----
+        // 卡片模式下没有歌单，这两项摆着是死控件
+        AnimatedVisibility(
+            visible = !state.layout.isDeck,
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
+        ) {
+            Column {
+                Text(L.rowStyle, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModeSwatch(L.rowCompact, state.rowSize == 0, colors,
+                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(0) }
+                    ModeSwatch(L.rowStandard, state.rowSize == 1, colors,
+                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(1) }
+                    ModeSwatch(L.rowLoose, state.rowSize == 2, colors,
+                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(2) }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                SettingToggleRow(L.rowShowCover, state.showRowCover, colors) { viewModel.setShowRowCover(!state.showRowCover) }
+
+                Spacer(Modifier.height(10.dp))
+                SettingToggleRow(L.rowShowArtist, state.showRowArtist, colors,
+                    subtitle = L.rowShowArtistOff) { viewModel.setShowRowArtist(!state.showRowArtist) }
+
+                Spacer(Modifier.height(10.dp))
+                SettingToggleRow(L.rowShowPlaylist, state.showRowPlaylist, colors,
+                    subtitle = L.rowShowPlaylistOff) { viewModel.setShowRowPlaylist(!state.showRowPlaylist) }
+
+                Spacer(Modifier.height(10.dp))
+                SettingToggleRow(L.searchPinned, state.searchPersistent, colors,
+                    subtitle = L.searchPinnedOff) { viewModel.setSearchPersistent(!state.searchPersistent) }
+
+                Spacer(Modifier.height(10.dp))
+                SettingToggleRow(L.rowShowLikeBadge, state.showLikedBadge, colors,
+                    subtitle = L.rowShowLikeBadgeNote) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
+            }
+        }
+        // ---- 上栏 / 卡片 / 推荐区（原散落在播放、数据、推荐三个分区）----
+        // ---- 上栏排序行 ----
+        SettingToggleRow(
+            L.topBarSort,
+            state.showSortBar,
+            colors,
+            subtitle = L.topBarSortOff
+        ) { viewModel.setShowSortBar(!state.showSortBar) }
+        Spacer(Modifier.height(10.dp))
+        SettingToggleRow(
+            L.topBarIdleHide,
+            state.topBarAutoHide,
+            colors,
+            subtitle = L.topBarIdleHideNote
+        ) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
+        Spacer(Modifier.height(10.dp))
+        SettingToggleRow(
+            L.fullScreenCard,
+            state.fullScreenCard,
+            colors,
+            subtitle = L.fullScreenCardDesc
+        ) { viewModel.toggleFullScreenCard() }
+        Spacer(Modifier.height(10.dp))
+        SettingToggleRow(
+            L.showRecsOnPlaylists,
+            state.showRecommendations,
+            colors,
+            subtitle = L.showRecsOff
+        ) { viewModel.setShowRecommendations(!state.showRecommendations) }
+        Spacer(Modifier.height(6.dp))
+        MoreFold(L.moreAppearance, colors) {
         // ---- 自定义背景 ----
         Text(L.customBackground, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
@@ -405,9 +477,7 @@ internal fun SettingsPanel(
                 }
             }
         }
-
         Spacer(Modifier.height(14.dp))
-
         // ---- 界面圆角 ----
         Text(L.cornerRadius, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
@@ -430,7 +500,6 @@ internal fun SettingsPanel(
             inactiveColor = colors.surface
         )
         Spacer(Modifier.height(14.dp))
-
         // ---- 字号大小 ----
         // 拖动时只改本地值，松手才提交全局——否则每次 onValueChange 都切 Density，
         // 触发整树重测量打断手势，表现为"拉不动"。
@@ -456,7 +525,6 @@ internal fun SettingsPanel(
             inactiveColor = colors.surface
         )
         Spacer(Modifier.height(14.dp))
-
         // ---- 界面字体 ----
         Text(L.appFont, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
@@ -464,84 +532,12 @@ internal fun SettingsPanel(
             ModeSwatch(L.fontSystem, state.uiFont == 0, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(0) }
             ModeSwatch(L.fontSerif, state.uiFont == 1, colors, modifier = Modifier.weight(1f)) { viewModel.setUiFont(1) }
         }
-        Spacer(Modifier.height(14.dp))
-
-        // ---- 界面排布 ----
-        // 和材质、配色一样是独立一维：这里决定"整个 App 长什么结构"。
-        // 卡片模式下歌单和上栏都不存在，所以下面那些歌单相关的设置项要跟着藏起来。
-        Text(L.layout, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            when (state.layout) {
-                IrisLayout.LIST -> L.layoutListNote
-                IrisLayout.CAROUSEL -> L.layoutCarouselNote
-                IrisLayout.STACK -> L.layoutStackNote
-                IrisLayout.COMPACT -> L.layoutCompactNote
-            },
-            color = colors.subText, fontSize = 11.sp
-        )
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            IrisLayout.entries.forEach { layout ->
-                LayoutSwatch(
-                    layout = layout,
-                    selected = state.layout == layout,
-                    colors = colors,
-                    modifier = Modifier.weight(1f)
-                ) { viewModel.setLayout(layout) }
-            }
         }
-
-        Spacer(Modifier.height(14.dp))
-
-        // ---- 歌单行大小 / 行封面 ----
-        // 卡片模式下没有歌单，这两项摆着是死控件
-        AnimatedVisibility(
-            visible = !state.layout.isDeck,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
-        ) {
-            Column {
-                Text(L.rowStyle, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModeSwatch(L.rowCompact, state.rowSize == 0, colors,
-                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(0) }
-                    ModeSwatch(L.rowStandard, state.rowSize == 1, colors,
-                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(1) }
-                    ModeSwatch(L.rowLoose, state.rowSize == 2, colors,
-                        modifier = Modifier.weight(1f)) { viewModel.setRowSize(2) }
-                }
-
-                Spacer(Modifier.height(14.dp))
-
-                SettingToggleRow(L.rowShowCover, state.showRowCover, colors) { viewModel.setShowRowCover(!state.showRowCover) }
-
-                Spacer(Modifier.height(10.dp))
-                SettingToggleRow(L.rowShowArtist, state.showRowArtist, colors,
-                    subtitle = L.rowShowArtistOff) { viewModel.setShowRowArtist(!state.showRowArtist) }
-
-                Spacer(Modifier.height(10.dp))
-                SettingToggleRow(L.rowShowPlaylist, state.showRowPlaylist, colors,
-                    subtitle = L.rowShowPlaylistOff) { viewModel.setShowRowPlaylist(!state.showRowPlaylist) }
-
-                Spacer(Modifier.height(10.dp))
-                SettingToggleRow(L.searchPinned, state.searchPersistent, colors,
-                    subtitle = L.searchPinnedOff) { viewModel.setSearchPersistent(!state.searchPersistent) }
-
-                Spacer(Modifier.height(10.dp))
-                SettingToggleRow(L.rowShowLikeBadge, state.showLikedBadge, colors,
-                    subtitle = L.rowShowLikeBadgeNote) { viewModel.setShowLikedBadge(!state.showLikedBadge) }
-            }
-        }
-
         Spacer(Modifier.height(18.dp))
-
         } // 结束外观
 
-        // ==================== 播放 ====================
-        CollapsibleSection(L.secPlayback, colors) {
-
+        // ==================== 播放与歌词 ====================
+        CollapsibleSection(L.secPlayLyrics, colors) {
         SettingToggleRow(
             L.fadeInOut,
             state.fadeEnabled,
@@ -552,8 +548,8 @@ internal fun SettingsPanel(
         // 时长滑块只在开启时出现：关闭状态下它没有意义，摆着反而干扰
         AnimatedVisibility(
             visible = state.fadeEnabled,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
             Column(Modifier.padding(top = 10.dp)) {
                 Text(
@@ -570,9 +566,7 @@ internal fun SettingsPanel(
                 )
             }
         }
-
         Spacer(Modifier.height(10.dp))
-
         // ---- 无声略过（beta） ----
         SettingToggleRow(
             L.silenceSkip,
@@ -580,32 +574,7 @@ internal fun SettingsPanel(
             colors,
             subtitle = L.silenceSkipNote
         ) { viewModel.setSilenceSkip(!state.silenceSkip) }
-
         Spacer(Modifier.height(10.dp))
-
-        SettingToggleRow(
-            L.topBarIdleHide,
-            state.topBarAutoHide,
-            colors,
-            subtitle = L.topBarIdleHideNote
-        ) { viewModel.setTopBarAutoHide(!state.topBarAutoHide) }
-
-        Spacer(Modifier.height(10.dp))
-
-        SettingToggleRow(
-            L.fullScreenCard,
-            state.fullScreenCard,
-            colors,
-            subtitle = L.fullScreenCardDesc
-        ) { viewModel.toggleFullScreenCard() }
-
-        Spacer(Modifier.height(18.dp))
-
-        } // 结束播放
-
-        // ==================== 歌词 ====================
-        CollapsibleSection(L.secLyrics, colors) {
-
         SettingToggleRow(
             L.coverLyric,
             state.coverLyric,
@@ -626,6 +595,13 @@ internal fun SettingsPanel(
                         modifier = Modifier.weight(1f)) { viewModel.setCoverLyricLines(3) }
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            SettingToggleRow(
+                L.coverLyricFull,
+                state.coverLyricFull,
+                colors,
+                subtitle = L.coverLyricFullNote
+            ) { viewModel.setCoverLyricFull(!state.coverLyricFull) }
             Spacer(Modifier.height(14.dp))
         } else {
             Spacer(Modifier.height(14.dp))
@@ -638,6 +614,10 @@ internal fun SettingsPanel(
             subtitle = L.karaokeNote
         ) { viewModel.setKaraokeLyric(!state.karaokeLyric) }
         Spacer(Modifier.height(14.dp))
+        // ---- 悬浮歌词 ----
+        FloatingLyricSection(colors, headerColor)
+        Spacer(Modifier.height(6.dp))
+        MoreFold(L.moreLyricStyle, colors) {
         Column {
             Text(L.lyricAlign, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
@@ -651,7 +631,6 @@ internal fun SettingsPanel(
             }
         }
         Spacer(Modifier.height(14.dp))
-
         // ---- 歌词字体 ----
         Column {
             Text(L.lyricFont, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -662,7 +641,6 @@ internal fun SettingsPanel(
             }
         }
         Spacer(Modifier.height(14.dp))
-
         // ---- 歌词字号 ----
         Text(L.lyricFontSize(state.lyricFontSize.toInt()), color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         CompactSlider(
@@ -672,16 +650,11 @@ internal fun SettingsPanel(
             activeColor = colors.primary,
             inactiveColor = colors.surface
         )
-        Spacer(Modifier.height(14.dp))
-
-        // ---- 悬浮歌词 ----
-        FloatingLyricSection(colors, headerColor)
-
+        }
         Spacer(Modifier.height(18.dp))
+        } // 结束播放与歌词
 
-        } // 结束歌词
-
-        // ==================== 动效与反馈 ====================
+        // ==================== 动效与触感 ====================
         CollapsibleSection(L.secMotion, colors) {
         // ---- 触感反馈 ----
         SettingToggleRow(
@@ -734,8 +707,8 @@ internal fun SettingsPanel(
         // 强度档位只在开启时出现（同渐变时长的做法）
         AnimatedVisibility(
             visible = state.bassHaptics,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
             Column(Modifier.padding(top = 10.dp)) {
                 Text(L.vibStrength, color = colors.subText, fontSize = 11.sp)
@@ -749,6 +722,7 @@ internal fun SettingsPanel(
                         modifier = Modifier.weight(1f)) { viewModel.setBassHapticsIntensity(2) }
                 }
 
+                MoreFold(L.moreBass, colors) {
                 Spacer(Modifier.height(10.dp))
 
                 // 自适应：震动强度跟随鼓点力度、时长跟随鼓点时长，开启后隐藏手动时长档
@@ -763,8 +737,8 @@ internal fun SettingsPanel(
                 // 单次震动时长仅在「自适应」关闭时显示（自适应时由鼓点时长接管）
                 AnimatedVisibility(
                     visible = !state.bassHapticsAdaptive,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
+                    enter = IrisMotion.expandIn(),
+                    exit = IrisMotion.collapseOut()
                 ) {
                     Column {
                         Spacer(Modifier.height(10.dp))
@@ -808,6 +782,37 @@ internal fun SettingsPanel(
 
                 Spacer(Modifier.height(12.dp))
 
+                // 震动同步：自动按输出延迟补偿后的微调，±250ms，步进 10ms
+                Text(L.bassSync, color = colors.subText, fontSize = 11.sp)
+                Spacer(Modifier.height(2.dp))
+                Text(L.bassSyncNote(state.bassHapticsSync), color = colors.subText, fontSize = 10.sp)
+                Spacer(Modifier.height(6.dp))
+                CompactSlider(
+                    // 中间留一段"卡位"（滑条宽度的 12%）都算 0 = 自动，拖回中间就能稳稳落回原位，
+                    // 进入卡位时轻点一下提示。两侧按剩余行程线性映射到 ±250ms。
+                    value = run {
+                        val ms = state.bassHapticsSync
+                        if (ms == 0) 0.5f
+                        else 0.5f + kotlin.math.sign(ms.toFloat()) *
+                            (SYNC_DETENT + kotlin.math.abs(ms) / 250f * (0.5f - SYNC_DETENT))
+                    },
+                    onValueChange = {
+                        val c = it - 0.5f
+                        val ms = if (kotlin.math.abs(c) < SYNC_DETENT) 0 else {
+                            val mag = (kotlin.math.abs(c) - SYNC_DETENT) / (0.5f - SYNC_DETENT) * 250f
+                            (kotlin.math.sign(c) * mag).toInt().let { v -> (v / 10) * 10 }.coerceIn(-250, 250)
+                        }
+                        if (ms != state.bassHapticsSync) {
+                            if (ms == 0) Haptics.tick()
+                            viewModel.setBassHapticsSync(ms)
+                        }
+                    },
+                    valueRange = 0f..1f,
+                    activeColor = colors.primary,
+                    inactiveColor = colors.surface
+                )
+                Spacer(Modifier.height(14.dp))
+
                 // 低音截止频率：多少 Hz 以下算作"低音"（走底鼓闷震），120–320Hz 可调。
                 // 调高 → 更多中低频鼓（如厚底鼓/低 tom）归入低音走沉震；调低 → 只有最低的底鼓算低音。
                 Text(L.bassCutoff, color = colors.subText, fontSize = 11.sp)
@@ -828,50 +833,15 @@ internal fun SettingsPanel(
                     activeColor = colors.primary,
                     inactiveColor = colors.surface
                 )
+                }
             }
         }
 
         Spacer(Modifier.height(18.dp))
+        } // 结束动效与触感
 
-        } // 结束动效与反馈
-
-        // ==================== 推荐 ====================
-        CollapsibleSection(L.secRecs, colors) {
-
-        // ---- 推荐探索度 ----
-        Text(L.recExplore, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            if (state.exploration < 0.2f) L.recSafe
-            else if (state.exploration < 0.5f) L.recBalanced
-            else if (state.exploration < 0.8f) L.recExploreMost
-            else L.recRandom,
-            color = colors.subText, fontSize = 11.sp
-        )
-        Spacer(Modifier.height(8.dp))
-        CompactSlider(
-            value = state.exploration,
-            onValueChange = { viewModel.setExploration(it) },
-            valueRange = 0f..1f,
-            activeColor = colors.primary,
-            inactiveColor = colors.surface
-        )
-
-        Spacer(Modifier.height(10.dp))
-        SettingToggleRow(
-            L.showRecsOnPlaylists,
-            state.showRecommendations,
-            colors,
-            subtitle = L.showRecsOff
-        ) { viewModel.setShowRecommendations(!state.showRecommendations) }
-
-        Spacer(Modifier.height(18.dp))
-
-        } // 结束推荐
-
-        // ==================== 数据 ====================
-        CollapsibleSection(L.secData, colors) {
-
+        // ==================== 曲库 ====================
+        CollapsibleSection(L.secLibrary, colors) {
         // ---- 指定文件夹 ----
         Text(L.scanFolder, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
@@ -909,15 +879,6 @@ internal fun SettingsPanel(
             Spacer(Modifier.height(8.dp))
             Text(scanRootStatus, color = colors.subText, fontSize = 11.sp, lineHeight = 16.sp)
         }
-        Spacer(Modifier.height(12.dp))
-        // ---- 上栏排序行 ----
-        SettingToggleRow(
-            L.topBarSort,
-            state.showSortBar,
-            colors,
-            subtitle = L.topBarSortOff
-        ) { viewModel.setShowSortBar(!state.showSortBar) }
-
         // ---- 存储权限 ----
         // 「所有文件访问」未授予时曲库直扫会漏歌。启动只在首次引导一次，
         // 这里补一个常驻手动入口（旧实现没有：错过首启引导就再也没地方开）。
@@ -951,13 +912,10 @@ internal fun SettingsPanel(
                 Text(L.goEnable, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = colors.primary)
             }
         }
-
         Spacer(Modifier.height(14.dp))
-
-        // ---- 文件夹 ----
+        // ---- 文件夹 ----（r4 按用户要求加回）
         Text(L.musicFolders, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(10.dp))
-
         LazyColumn(
             modifier = Modifier.heightIn(max = 200.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -975,14 +933,31 @@ internal fun SettingsPanel(
                     f.path in state.selectedFolders, colors) { viewModel.toggleFolder(f.path) }
             }
         }
+        Spacer(Modifier.height(14.dp))
 
+        // ---- 推荐探索度 ----
+        Text(L.recExplore, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (state.exploration < 0.2f) L.recSafe
+            else if (state.exploration < 0.5f) L.recBalanced
+            else if (state.exploration < 0.8f) L.recExploreMost
+            else L.recRandom,
+            color = colors.subText, fontSize = 11.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        CompactSlider(
+            value = state.exploration,
+            onValueChange = { viewModel.setExploration(it) },
+            valueRange = 0f..1f,
+            activeColor = colors.primary,
+            inactiveColor = colors.surface
+        )
         Spacer(Modifier.height(18.dp))
-
-        } // 结束数据
+        } // 结束曲库
 
         // ==================== 关于 ====================
         CollapsibleSection(L.about, colors) {
-
         Text(
             L.aboutBody(BuildConfig.VERSION_NAME),
             color = colors.subText,
@@ -994,17 +969,36 @@ internal fun SettingsPanel(
 
         // ---- 检查更新（opt-in）----
         UpdateCheckSection(colors)
-
+        Spacer(Modifier.height(14.dp))
+        Text(L.languageLabel, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        val langApp = LocalContext.current.applicationContext as android.app.Application
+        Spacer(Modifier.height(2.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ModeSwatch(L.langSystem, L.langSelection == "sys", colors,
+                modifier = Modifier.weight(1f)) {
+                L.setLanguage(langApp, null)
+            }
+            ModeSwatch(L.langChinese, L.langSelection == "zh", colors,
+                modifier = Modifier.weight(1f)) {
+                L.setLanguage(langApp, false)
+            }
+            ModeSwatch(L.langEnglish, L.langSelection == "en", colors,
+                modifier = Modifier.weight(1f)) {
+                L.setLanguage(langApp, true)
+            }
+        }
+        if (L.langSelection == "sys") {
+            Spacer(Modifier.height(6.dp))
+            Text(L.langSummary, color = colors.subText, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(L.myData, color = headerColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        DataTransferSection(colors, state.allSongs, onImported = viewModel::onDataImported)
         Spacer(Modifier.height(18.dp))
-
         } // 结束关于
 
-        // ==================== 我的数据 ====================
-        CollapsibleSection(L.myData, colors) {
-
-        DataTransferSection(colors, state.allSongs)
-
-        } // 结束我的数据
 
         Spacer(Modifier.height(24.dp))
         } // ===== 结束可滚动内容 =====
@@ -1037,6 +1031,47 @@ private fun SectionHeader(text: String, colors: IrisColors) {
         fontSize = 15.sp,
         fontWeight = FontWeight.Black
     )
+}
+
+/**
+ * 分区内的「更多」折叠（v5.0）：进阶细调默认收起，只露一行轻量入口，
+ * 让每个分区第一眼只看到常用项。视觉比一级分区低一级（小字、次要色）。
+ */
+@Composable
+private fun MoreFold(
+    label: String,
+    colors: IrisColors,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var open by remember { mutableStateOf(false) }
+    val rot by animateFloatAsState(if (open) 90f else 0f, tween(220, easing = EaseInOutCubic), label = "moreChevron")
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(IrisShape.item)
+                .clickable { Haptics.tap(); open = !open }
+                .padding(vertical = 8.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, color = colors.subText, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f))
+            Canvas(Modifier.size(12.dp).graphicsLayer { rotationZ = rot }) {
+                val w = size.width; val h = size.height; val st = w * 0.14f
+                drawLine(colors.subText, Offset(w * 0.38f, h * 0.22f), Offset(w * 0.66f, h / 2f), st,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                drawLine(colors.subText, Offset(w * 0.66f, h / 2f), Offset(w * 0.38f, h * 0.78f), st,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round)
+            }
+        }
+        AnimatedVisibility(
+            visible = open,
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
+        ) {
+            Column(Modifier.padding(top = 6.dp), content = content)
+        }
+    }
 }
 
 /**
@@ -1097,8 +1132,8 @@ private fun CollapsibleSection(
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
             Column(Modifier.padding(top = 4.dp), content = content)
         }
@@ -1112,7 +1147,7 @@ private fun CollapsibleSection(
  * 走 SAF（ACTION_CREATE_DOCUMENT / OpenDocument），因此不需要任何存储写权限。
  */
 @Composable
-private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
+private fun DataTransferSection(colors: IrisColors, songs: List<Song>, onImported: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf("") }
@@ -1140,6 +1175,8 @@ private fun DataTransferSection(colors: IrisColors, songs: List<Song>) {
         scope.launch {
             status = when (val r = DataTransfer.import(ctx, uri, songs)) {
                 is DataTransfer.ImportResult.Success -> {
+                    // 导入立即生效（旧版要重启 App 才看得到）
+                    onImported()
                     val s = r.summary
                     L.imported(s.playedSongs, s.likes, s.playlists, s.listenDays)
                 }
@@ -1243,8 +1280,8 @@ private fun UpdateCheckSection(colors: IrisColors) {
 
         AnimatedVisibility(
             visible = enabled,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
             Column(Modifier.padding(top = 10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1370,8 +1407,8 @@ private fun FloatingLyricSection(colors: IrisColors, headerColor: Color) {
 
     AnimatedVisibility(
         visible = enabled,
-        enter = fadeIn() + expandVertically(),
-        exit = fadeOut() + shrinkVertically()
+        enter = IrisMotion.expandIn(),
+        exit = IrisMotion.collapseOut()
     ) {
         Column(Modifier.padding(top = 6.dp)) {
             if (!granted) {
@@ -1450,25 +1487,7 @@ private fun SettingToggleRow(
             }
         }
         Spacer(Modifier.width(10.dp))
-        // 拨钮位置走动画，不是瞬移（果冻开关下为弹性滑动）
-        val knobAlign by animateFloatAsState(
-            targetValue = if (checked) 1f else 0f,
-            animationSpec = IrisMotion.knob(),
-            label = "toggleKnob"
-        )
-        Box(
-            Modifier
-                .size(40.dp, 24.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (checked) colors.primary else colors.subText.copy(alpha = 0.55f))
-                .padding(2.dp),
-            contentAlignment = androidx.compose.ui.BiasAlignment(
-                horizontalBias = -1f + 2f * knobAlign,
-                verticalBias = 0f
-            )
-        ) {
-            Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(colors.surface))
-        }
+        IrisSwitch(checked, colors)
     }
 }
 
@@ -1719,17 +1738,81 @@ private fun CustomColorSection(
     }
     Spacer(Modifier.height(12.dp))
 
-    Text(L.hue(activeHsv[0].toInt()), color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-    CompactSlider(value = activeHsv[0], onValueChange = { onSlider(0, it) },
-        valueRange = 0f..360f, activeColor = colors.primary, inactiveColor = colors.surface)
+    // r13：三条 HSV 滑条换成取色方块（横轴饱和度、纵轴明度）+ 色相条，所见即所得
+    val setHsv: (Float, Float, Float) -> Unit = { h, sat, v ->
+        val updated = floatArrayOf(h.coerceIn(0f, 360f), sat.coerceIn(0f, 1f), v.coerceIn(0f, 1f))
+        if (editSecondary) secondaryHsv = updated else primaryHsv = updated
+        onColorsChange(argbOf(primaryHsv), argbOf(secondaryHsv))
+    }
+    SvSquare(activeHsv[0], activeHsv[1], activeHsv[2]) { sat, v -> setHsv(activeHsv[0], sat, v) }
+    Spacer(Modifier.height(12.dp))
+    HueStrip(activeHsv[0]) { h -> setHsv(h, activeHsv[1], activeHsv[2]) }
     Spacer(Modifier.height(8.dp))
-    Text(L.saturation((activeHsv[1] * 100).toInt()), color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-    CompactSlider(value = activeHsv[1], onValueChange = { onSlider(1, it) },
-        valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
-    Spacer(Modifier.height(8.dp))
-    Text(L.brightness((activeHsv[2] * 100).toInt()), color = colors.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-    CompactSlider(value = activeHsv[2], onValueChange = { onSlider(2, it) },
-        valueRange = 0f..1f, activeColor = colors.primary, inactiveColor = colors.surface)
+    Text(
+        "#" + String.format("%06X", (argbOf(activeHsv) and 0xFFFFFFL)),
+        color = colors.subText, fontSize = 11.sp, fontWeight = FontWeight.Medium
+    )
+}
+
+/** 拖动/点按的通用处理：按下即消费，避免和外层设置面板的纵向滚动抢手势 */
+private fun Modifier.pickGesture(onPick: (Offset, androidx.compose.ui.unit.IntSize) -> Unit): Modifier =
+    this.pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown()
+            down.consume()
+            onPick(down.position, size)
+            var id = down.id
+            while (true) {
+                val ev = awaitPointerEvent()
+                val ch = ev.changes.firstOrNull { it.id == id } ?: break
+                if (!ch.pressed) break
+                ch.consume()
+                onPick(ch.position, size)
+            }
+        }
+    }
+
+@Composable
+private fun SvSquare(hue: Float, sat: Float, value: Float, onChange: (Float, Float) -> Unit) {
+    val cb by androidx.compose.runtime.rememberUpdatedState(onChange)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(168.dp)
+            .clip(IrisShape.item)
+            .drawBehind {
+                drawRect(Color.hsv(hue, 1f, 1f))
+                drawRect(Brush.horizontalGradient(listOf(Color.White, Color.White.copy(alpha = 0f))))
+                drawRect(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0f), Color.Black)))
+                val c = Offset(sat * size.width, (1f - value) * size.height)
+                drawCircle(Color.Black.copy(alpha = 0.22f), 12.dp.toPx(), c)
+                drawCircle(Color.hsv(hue, sat, value), 9.dp.toPx(), c)
+                drawCircle(Color.White, 9.dp.toPx(), c, style = androidx.compose.ui.graphics.drawscope.Stroke(3.dp.toPx()))
+            }
+            .pickGesture { p, sz ->
+                cb((p.x / sz.width).coerceIn(0f, 1f), 1f - (p.y / sz.height).coerceIn(0f, 1f))
+            }
+    )
+}
+
+@Composable
+private fun HueStrip(hue: Float, onChange: (Float) -> Unit) {
+    val cb by androidx.compose.runtime.rememberUpdatedState(onChange)
+    val rainbow = remember { (0..6).map { Color.hsv(it * 60f % 360f, 1f, 1f) } }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(26.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(13.dp))
+            .drawBehind {
+                drawRect(Brush.horizontalGradient(rainbow))
+                val r = size.height / 2f
+                val x = (hue / 360f * size.width).coerceIn(r, size.width - r)
+                drawCircle(Color.hsv(hue, 1f, 1f), r - 3.dp.toPx(), Offset(x, r))
+                drawCircle(Color.White, r - 3.dp.toPx(), Offset(x, r), style = androidx.compose.ui.graphics.drawscope.Stroke(3.dp.toPx()))
+            }
+            .pickGesture { p, sz -> cb((p.x / sz.width).coerceIn(0f, 1f) * 359.9f) }
+    )
 }
 
 @Composable
@@ -1755,3 +1838,6 @@ private fun ColorPreviewBox(
         Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = c.readableTextOn())
     }
 }
+
+/** 震动同步滑条中间的"自动"卡位半宽（占滑条比例） */
+private const val SYNC_DETENT = 0.06f

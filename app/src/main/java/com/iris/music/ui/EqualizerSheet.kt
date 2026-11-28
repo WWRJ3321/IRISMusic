@@ -335,7 +335,7 @@ fun EqualizerSheet(
                         .clickable { Haptics.tap(); onReset() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(L.reset, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = onSheet.copy(alpha = 0.75f))
+                    Text(if (L.zh) "重置曲线" else "Reset curve", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = onSheet.copy(alpha = 0.75f))
                 }
                 Box(
                     Modifier
@@ -902,7 +902,6 @@ private fun LoudnessRow(
     onStrengthChange: (Int) -> Unit
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
-    val knob by animateFloatAsState(if (checked) 1f else 0f, tween(200), label = "loudnessKnob")
     Column(
         Modifier
             .fillMaxWidth()
@@ -919,25 +918,13 @@ private fun LoudnessRow(
                 Text(L.eqLoudnessCurve, color = onSheet, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.width(10.dp))
-        Box(
-            Modifier
-                .size(40.dp, 24.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (checked) colors.primary else onSheet.copy(alpha = 0.22f))
-                .padding(2.dp),
-            contentAlignment = androidx.compose.ui.BiasAlignment(
-                horizontalBias = -1f + 2f * knob,
-                verticalBias = 0f
-            )
-        ) {
-            Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(colors.surface))
-        }
+            IrisSwitch(checked, colors)
         }
         // 开启时展开补偿强度滑条（与 EnhancerRow 同款：标签+滑条并排一行）
         AnimatedVisibility(
             visible = checked,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
 // 开启时展开补偿强度滑条（与 EnhancerRow 同款：标签+滑条并排，行高 = 36dp 命中区）
             Row(
@@ -987,7 +974,6 @@ private fun EnhancerRow(
     onStrengthChange: (Int) -> Unit
 ) {
     val onSheet = if (colors.isDark) Color.White else Color.Black
-    val knob by animateFloatAsState(if (checked) 1f else 0f, tween(200), label = "enhKnob")
     Column(
         Modifier
             .fillMaxWidth()
@@ -1014,27 +1000,15 @@ private fun EnhancerRow(
                 }
             }
             Spacer(Modifier.width(10.dp))
-            Box(
-                Modifier
-                    .size(36.dp, 21.dp)
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(if (checked) colors.primary else onSheet.copy(alpha = 0.22f))
-                    .padding(2.dp),
-                contentAlignment = androidx.compose.ui.BiasAlignment(
-                    horizontalBias = -1f + 2f * knob,
-                    verticalBias = 0f
-                )
-            ) {
-                Box(Modifier.size(17.dp).clip(RoundedCornerShape(9.dp)).background(colors.surface))
-            }
+            IrisSwitch(checked, colors, compact = true)
         }
         // 开启时展开强度滑条：标签与滑条并排一行（原先上下两行 ~58dp）。
             // 上下不加 padding——CompactSlider 自带 36dp 命中区（视觉轨道 16dp），
             // 行高即命中区，展开增量从 ~58dp 压到 36dp，拖动手感不变。
             AnimatedVisibility(
                 visible = checked,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
+                enter = IrisMotion.expandIn(),
+                exit = IrisMotion.collapseOut()
             ) {
             Row(
                 Modifier

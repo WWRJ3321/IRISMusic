@@ -169,6 +169,8 @@ object EqProcessor : BaseAudioProcessor() {
 
     /** 重算全部双二阶系数与预增益（音频线程调用）。 */
     private fun rebuild(sr: Int) {
+        // 先清脏标记再读增益：反过来的话，UI 恰好在两行之间改了增益，这次改动会被吞掉
+        dirty = false
         val gains = gainsMb
         sampleRate = sr
         var maxBoost = 0
@@ -177,7 +179,6 @@ object EqProcessor : BaseAudioProcessor() {
         preGain = if (maxBoost > 0) 10f.pow(-maxBoost / 2000f) else 1f
         bypassed = maxBoost == 0 && gains.all { it == 0 }
         activeGains = gains
-        dirty = false
         val nyq = sr / 2f
         for (b in BAND_FREQS.indices) {
             val f = BAND_FREQS[b].toFloat().coerceAtMost(nyq * 0.9f)

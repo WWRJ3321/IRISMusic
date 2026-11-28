@@ -875,9 +875,15 @@ internal fun DeckPosterWall(
     // 全局快照刷新：普通 var 写入不触发任何重组，供歌词轮询/播放按钮读取。
     // 位置变化时记下采样时刻：逐字扫光要在两次 positionMs 更新（约 500ms 一次）
     // 之间按帧外推，否则光带一顿一顿地跳。
-    if (globalPositionMs != state.positionMs) {
-        globalPositionMs = state.positionMs
-        globalPosSampleAt = android.os.SystemClock.uptimeMillis()
+    // v5.0：进度改走独立流，这里在副作用里同步到全局快照，壳本身不再随进度重组
+    val live = rememberLivePosition()
+    LaunchedEffect(live) {
+        snapshotFlow { live() }.collect { p ->
+            if (globalPositionMs != p) {
+                globalPositionMs = p
+                globalPosSampleAt = android.os.SystemClock.uptimeMillis()
+            }
+        }
     }
     globalDurationMs = state.durationMs
     globalKaraoke = state.karaokeLyric
@@ -1007,10 +1013,11 @@ private fun PosterWallBody(
         // 初始视野对齐：只在首次进墙（队列建立）时执行一次，对准播放磁贴。
         // 之后换歌（currentIndex 变、queue 不变）这个 effect 完全不会重启——
         // 从根上保证换歌绝不碰视角，用户拖到哪就在哪。
-        var alignedInitial = remember { false }
+        // 必须是可变容器：remember { false } 记住的是值，赋值不会保留，每次队列变化都会重新居中
+        val alignedInitialRef = remember { booleanArrayOf(false) }
         LaunchedEffect(queue) {
-            if (alignedInitial || allTiles.isEmpty()) return@LaunchedEffect
-            alignedInitial = true
+            if (alignedInitialRef[0] || allTiles.isEmpty()) return@LaunchedEffect
+            alignedInitialRef[0] = true
             val t = allTiles.firstOrNull { it.index == currentIndex } ?: return@LaunchedEffect
             val cx = (t.col + t.spanW / 2f) * step
             val cy = (t.row + t.spanH / 2f) * step
@@ -1437,7 +1444,8 @@ val out = ArrayList<VisibleTile>(48)
                     // PosterTile 参数永远"不相等"，skip 失效——几十张卡在每次
                     // 进度轮询/跨界重组时全部跟着重组。点击发生时才经 ref 读最新回调。
                     val tileInteraction = remember { MutableInteractionSource() }
-                    val tileModifier = remember(isActive, tileInteraction) {
+                    // t（含 index）也作 key：队列重排/点赞后同一格位换了歌，旧 Modifier 会播错歌
+                    val tileModifier = remember(isActive, tileInteraction, t) {
                         Modifier
                             .zIndex(if (isActive) 1f else 0f)
                             .clickable(
@@ -1996,7 +2004,9 @@ private fun PosterKaraokeText(
     var layout by remember(text) { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
     LaunchedEffect(line, lineEndMs) {
         while (true) {
-            androidx.compose.runtime.withFrameMillis { }
+            // 暂停时降到 4 帧/秒（位置不走，逐帧外推毫无意义，只白耗电）
+            if (posterIsPlaying.value) androidx.compose.runtime.withFrameMillis { }
+            else kotlinx.coroutines.delay(250)
             val drift = if (posterIsPlaying.value)
                 (android.os.SystemClock.uptimeMillis() - globalPosSampleAt).coerceIn(0L, 1500L) else 0L
             val est = globalPositionMs + drift
@@ -2069,7 +2079,8 @@ private const val POSTER_LYRIC_LINE_GAP = 9f
 // ==================== 歌词缓存 ====================
 
 // 歌词全局缓存：key 为歌曲文件路径 */
-private val posterLyricCache = java.util.concurrent.ConcurrentHashMap<String, List<LyricLine>>()
+// v5.0：有界 LRU（旧版无界 ConcurrentHashMap，放过的每首歌词都常驻到进程结束）
+private val posterLyricCache = android.util.LruCache<String, List<LyricLine>>(32)
 
 /** 数据类：歌词列表 + 当前高亮行下标 */
 private class PosterLyricState(
@@ -2089,13 +2100,13 @@ private fun rememberPosterLyric(song: Song): androidx.compose.runtime.State<Post
     }
 
     LaunchedEffect(path) {
-        var lines = posterLyricCache[path]
+        var lines = posterLyricCache.get(path)
         if (lines == null) {
             // 防御：解析任何一处抛出异常都不能崩掉唱片墙（#6 闪退候选点），失败即视为无歌词
             lines = withContext(Dispatchers.IO) {
                 runCatching { LyricParser.loadLyrics(path, globalDurationMs) }.getOrDefault(emptyList())
             }
-            posterLyricCache[path] = lines
+            posterLyricCache.put(path, lines)
         }
         val allLines = lines
         while (true) {
@@ -2103,7 +2114,7 @@ private fun rememberPosterLyric(song: Song): androidx.compose.runtime.State<Post
             // 原来 250ms 一跳，最坏情况整整晚 1/4 秒才开始滑，观感上就是
             // "歌都唱下一句了字才动"，再平滑的动画也救不回来。
             // 这里只做一次整数比较 + 可能的一次赋值，60ms 的成本可以忽略。
-            kotlinx.coroutines.delay(60)
+            kotlinx.coroutines.delay(if (posterIsPlaying.value) 60L else 400L)
             val idx = LyricParser.currentIndex(allLines, globalPositionMs)
             val next = if (idx >= 0 && idx < allLines.size) idx else 0
             // 只在行号真的变了才写 state，避免每 60ms 触发一次无意义重组

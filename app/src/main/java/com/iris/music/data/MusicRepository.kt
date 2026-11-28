@@ -53,7 +53,12 @@ object MusicRepository {
 
     private val AUDIO_EXTS = setOf("mp3", "flac", "m4a", "aac", "ogg", "wav", "opus") // wma 去掉：ExoPlayer 无 ASF/WMA 解码，扫进来只会播放出错
     private const val MIN_DURATION_MS = 10_000L
-    private const val SCAN_CONCURRENCY = 16
+    /**
+     * 元数据读取并发。MediaMetadataRetriever 是重对象（每个都开 native 解析器），
+     * v5.0 前固定 16 路，低端机上内存尖峰大、setDataSource 偶发失败。
+     * 现在按 CPU 核数取 2~6 路：I/O 等待仍能重叠，峰值内存降到原来的 1/3 左右。
+     */
+    private val SCAN_CONCURRENCY = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
     private const val DIR_BUDGET = 20_000  // 目录访问上限，防御异常深树
     private const val CACHE_FILE = "song_meta_cache.json"
 
@@ -332,7 +337,7 @@ object MusicRepository {
         // 不许整个 awaitAll 结构化取消把全库扫成空（评审 P1-14）。
         val entries = supervisorScope {
             paths.map { path ->
-                // 每个任务自带信号量限流（16 路 MMR 是重对象，不放开跑）
+                // 每个任务自带信号量限流（MMR 是重对象，不放开跑）
                 async {
                     sem.withPermit {
                         runCatching {

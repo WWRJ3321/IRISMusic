@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,9 +66,23 @@ import kotlinx.coroutines.launch
  * 静态字段由 MainScreen 在状态变化时写入，各组件直接读取，不引入重组依赖。
  */
 object IrisMotion {
-    /** 果冻动效总开关（PlayerViewModel.jellyAnim 同步而来） */
-    @Volatile
-    var jelly: Boolean = false
+    /**
+     * 果冻动效总开关（PlayerViewModel.jellyAnim 同步而来）。
+     * v5.0：改为 snapshot 状态——旧的 @Volatile 普通字段在 LaunchedEffect 里才写入，
+     * 首帧总是非果冻规格，切开关后已组合的组件也拿不到新规格（不重组）。
+     */
+    var jelly: Boolean by androidx.compose.runtime.mutableStateOf(false)
+
+    /**
+     * 弹层（设置/歌单/均衡器/睡眠定时/加入歌单/报告）整体入场与退场。
+     * v5.0 前这段规格在 MainScreen 里逐字复制了 6 份。面板本身的上滑由 irisSheetSlideIn 负责。
+     */
+    fun sheetEnter(): androidx.compose.animation.EnterTransition =
+        androidx.compose.animation.fadeIn(tween(260, easing = IrisEase.standard))
+
+    /** 遮罩比面板稍晚淡完：面板先滑走，背景再亮回来 */
+    fun sheetExit(): androidx.compose.animation.ExitTransition =
+        androidx.compose.animation.fadeOut(tween(220, delayMillis = 60, easing = IrisEase.exit))
 
     /** 按钮按压回弹（按压缩小 → 松手弹回） */
     fun pressScale(): FiniteAnimationSpec<Float> =
@@ -77,19 +92,58 @@ object IrisMotion {
     /** 开关拨钮滑动 */
     fun knob(): FiniteAnimationSpec<Float> =
         if (jelly) spring(dampingRatio = 0.6f, stiffness = 420f)
-        else tween(200)
+        else tween(240, easing = IrisEase.emphasized)
 
-    /** 卡片/元素位移动 */
+    /** 卡片/元素位移动（v5.0：非果冻档由默认 FastOutSlowIn 换成强调减速曲线，起步干脆、收尾更长更柔） */
     fun move(): FiniteAnimationSpec<Float> =
         if (jelly) spring(dampingRatio = 0.68f, stiffness = 340f)
-        else tween(300)
+        else tween(IrisDur.MEDIUM, easing = IrisEase.emphasized)
     fun moveDp(): FiniteAnimationSpec<Dp> =
         if (jelly) spring(dampingRatio = 0.68f, stiffness = 340f)
-        else tween(300)
+        else tween(IrisDur.MEDIUM, easing = IrisEase.emphasized)
     /** 出现/展开（面板、区块） */
     fun appear(): FiniteAnimationSpec<Float> =
         if (jelly) spring(dampingRatio = 0.7f, stiffness = 300f)
-        else tween(300)
+        else tween(IrisDur.MEDIUM, easing = IrisEase.emphasized)
+
+    /**
+     * 区块展开 / 收起（设置分区、开关后出现的滑条、歌单输入行……全 App 24 处）。
+     * v5.0 前一律是默认 `IrisMotion.expandIn()`：高度用默认弹簧、透明度同时起步，
+     * 展开时内容先糊成一团再被撑开。现在：高度走强调曲线，内容稍晚 60ms 淡入（先腾地方再出字）；
+     * 收起时内容先快速淡出，高度再收——层次分明。
+     */
+    fun expandIn(): androidx.compose.animation.EnterTransition =
+        androidx.compose.animation.expandVertically(
+            animationSpec = if (jelly) spring(dampingRatio = 0.8f, stiffness = 380f)
+            else tween(IrisDur.MEDIUM, easing = IrisEase.emphasized),
+            expandFrom = androidx.compose.ui.Alignment.Top
+        ) + androidx.compose.animation.fadeIn(tween(220, delayMillis = 60, easing = IrisEase.emphasized))
+
+    fun collapseOut(): androidx.compose.animation.ExitTransition =
+        androidx.compose.animation.fadeOut(tween(120, easing = IrisEase.exit)) +
+            androidx.compose.animation.shrinkVertically(
+                animationSpec = tween(260, easing = IrisEase.emphasized),
+                shrinkTowards = androidx.compose.ui.Alignment.Top
+            )
+}
+
+/**
+ * 缓动曲线（v5.0 统一）：全 App 只用这三条，手感一致。
+ * - [emphasized] 强调减速：绝大多数"出现/移动"——起步快、长尾缓停，最有质感
+ * - [exit] 加速离场：退场/淡出——越走越快，不拖泥带水
+ * - [standard] 对称缓入缓出：来回往复、颜色渐变
+ */
+object IrisEase {
+    val emphasized = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0f, 0f, 1f)
+    val exit = androidx.compose.animation.core.CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+    val standard = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+}
+
+/** 时长刻度（ms）：短 = 微交互，中 = 常规过渡，长 = 大块界面切换 */
+object IrisDur {
+    const val SHORT = 180
+    const val MEDIUM = 320
+    const val LONG = 440
 }
 
 /** [irisPressable] 的触感强度档位，对应 [Haptics] 的三档。 */
@@ -185,7 +239,11 @@ fun rememberSheetDragState(): SheetDragState = remember { SheetDragState() }
 @Composable
 fun Modifier.sheetDragTranslate(state: SheetDragState): Modifier = this
     .onSizeChanged { if (it.height > 0) state.dismissPx = it.height.toFloat() }
-    .graphicsLayer { translationY = state.offset }
+    // r9：改用布局位移而不是 graphicsLayer.translationY。玻璃表面靠 onGloballyPositioned 取
+    // 自身坐标去对齐背板；纯图层平移不触发重新布局，拖动时坐标回调跟不上，背板取样位置
+    // 落后一帧，卡片上沿的折射内容一跳一跳（用户实录「上边缘在移动的时候抽搐」）。
+    // 布局位移每帧都会重新上报坐标；取整像素也避免半格重影。
+    .offset { androidx.compose.ui.unit.IntOffset(0, kotlin.math.round(state.offset).toInt()) }
 
 /** 下滑比例超过这个值就关闭 */
 private const val SHEET_DISMISS_FRACTION = 0.30f

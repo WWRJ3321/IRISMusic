@@ -17,6 +17,8 @@
  */
 package com.iris.music.ui
 
+import com.iris.music.ui.theme.fieldSolid
+import com.iris.music.ui.theme.fieldGlass
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -157,53 +159,17 @@ fun SongDeck(
     }
     val lyricsHazeState = remember { HazeState() }
 
-    var showLyrics by remember { mutableStateOf(false) }
+    val lyricOverlay = rememberLyricOverlayState(state.currentSong?.filePath, state.durationMs)
 
     // 卡片模式的歌词层同样要吃掉返回键，否则直接退出应用
-    androidx.activity.compose.BackHandler(enabled = showLyrics) { showLyrics = false }
-    var lyricLines by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
-    var lyricLoading by remember { mutableStateOf(false) }
-    // 歌词层当前歌词所属文件：开着歌词层切歌时据此判断要重新加载
-    var lyricPath by remember { mutableStateOf<String?>(null) }
+    androidx.activity.compose.BackHandler(enabled = lyricOverlay.visible) { lyricOverlay.visible = false }
     val scope = rememberCoroutineScope()
 
-    // 歌词层开着时自动切歌：旧词跟着走，路径一变先清空再按新歌重解析
-    LaunchedEffect(showLyrics, state.currentSong?.filePath, state.durationMs) {
-        val path = state.currentSong?.filePath
-        if (showLyrics && !path.isNullOrBlank() && path != lyricPath) {
-            lyricLines = emptyList()
-            lyricLoading = true
-            try {
-                lyricLines = withContext(Dispatchers.IO) {
-                    LyricParser.loadLyrics(path, state.durationMs)
-                }
-                lyricPath = path
-            } catch (_: Exception) {
-            } finally {
-                lyricLoading = false
-            }
-        }
-    }
 
     val openLyrics: () -> Unit = {
+        // 立即弹出歌词层（层内显示加载态），解析由 rememberLyricOverlayState 在后台完成
         val song = state.currentSong
-        if (song != null && song.filePath.isNotBlank()) {
-            scope.launch {
-                lyricLoading = true
-                try {
-                    val lines = withContext(Dispatchers.IO) {
-                        LyricParser.loadLyrics(song.filePath, state.durationMs)
-                    }
-                    lyricLines = lines
-                    lyricPath = song.filePath
-                    showLyrics = true
-                } catch (_: Exception) {
-                    // 文件读取异常静默忽略
-                } finally {
-                    lyricLoading = false
-                }
-            }
-        }
+        if (song != null && song.filePath.isNotBlank()) lyricOverlay.open()
     }
 
 // 顶栏三档透明度联动：deck 内容区（非顶栏）任意按下 → contentTick++，顶栏升到中档。
@@ -213,6 +179,8 @@ fun SongDeck(
     // 点框外收键盘、失焦无字 4 秒自动收起、再点标题收起并清词。
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
+    // r12：搜索框是否由点歌手名静默打开（不自动聚焦）
+    var searchQuiet by remember { mutableStateOf(false) }
     val searchInteraction = remember { MutableInteractionSource() }
     val searchFocusRequester = remember { FocusRequester() }
     val searchBounds = remember { mutableStateOf(Rect.Zero) }
@@ -221,12 +189,15 @@ fun SongDeck(
     var locateTarget by remember { mutableStateOf<Pair<com.iris.music.data.Song, Int>?>(null) }
     var locateNonce by remember { mutableIntStateOf(0) }
     val matchQuery = searchText.trim().lowercase()
-    val matchedSong = if (matchQuery.isEmpty()) null else state.queue.firstOrNull {
-        it.title.lowercase().contains(matchQuery) ||
-            it.artist.lowercase().contains(matchQuery) ||
-            it.album.lowercase().contains(matchQuery)
+    // 只在关键词/队列变化时匹配一次（旧实现每次重组都对整个队列 lowercase 一遍，再二次遍历找下标）
+    val matchedIndex = remember(matchQuery, state.queue) {
+        if (matchQuery.isEmpty()) -1 else state.queue.indexOfFirst {
+            it.title.contains(matchQuery, ignoreCase = true) ||
+                it.artist.contains(matchQuery, ignoreCase = true) ||
+                it.album.contains(matchQuery, ignoreCase = true)
+        }
     }
-    val matchedIndex = matchedSong?.let { m -> state.queue.indexOfFirst { it.id == m.id } } ?: -1
+    val matchedSong = state.queue.getOrNull(matchedIndex)
     fun requestLocate(song: com.iris.music.data.Song?) {
         if (song == null) return
         locateTarget = song to locateNonce
@@ -246,8 +217,16 @@ fun SongDeck(
             }
             searchOpen = false
         } else {
+            searchQuiet = false
             searchOpen = true
         }
+    }
+    // r12：点播放卡上的歌手名 → 用顶栏搜索按歌手定位（卡片模式没有曲库列表，复用本地搜索）。
+    // 静默展开：不自动聚焦、不弹键盘；用户手动点标题展开时照旧聚焦。
+    val onArtistSearch: (String) -> Unit = { a ->
+        searchQuiet = true
+        searchText = a
+        searchOpen = true
     }
     // Carousel/Stack 跳转：直接调 onSelect（切到那首，队列不动）
     LaunchedEffect(locateTarget) {
@@ -320,6 +299,7 @@ fun SongDeck(
                 onSearchBounds = { searchBounds.value = it },
                 contentTick = contentTick,
                 autoHide = state.topBarAutoHide,
+                searchQuiet = searchQuiet,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()
@@ -358,6 +338,7 @@ fun SongDeck(
                     searchFocusRequester = searchFocusRequester,
                     onSearchBounds = { searchBounds.value = it },
                     autoHide = state.topBarAutoHide,
+                    searchQuiet = searchQuiet,
                     // 横屏窄化：顶栏玻璃与下方播放卡片同宽（用补偿值抵消 padding 差，
                     // 唱片墙分支不走这里）
                     modifier = if (LocalConfiguration.current.orientation ==
@@ -372,13 +353,7 @@ fun SongDeck(
                     contentAlignment = Alignment.Center
                 ) {
                     if (state.queue.isEmpty()) {
-                        Text(
-                                if (state.loading) L.loadingLibrary else L.emptyLibrary,
-                            color = colors.subText,
-                            fontSize = 13.sp,
-                            lineHeight = 19.sp,
-                            textAlign = TextAlign.Center
-                        )
+                        LibraryPlaceholder(loading = state.loading, colors = colors)
                     } else if (state.layout == IrisLayout.STACK) {
                         val stackLandscape = LocalConfiguration.current.orientation ==
                             android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -388,11 +363,10 @@ fun SongDeck(
                             LandscapeDeckPlayer(
                                 title = stackCur?.title ?: L.none,
                                 artist = stackCur?.artist ?: "",
-                                positionMs = state.positionMs,
+                                positionMs = rememberLivePosition(),
                                 durationMs = state.durationMs,
                                 shuffle = state.shuffle,
                                 repeatMode = state.repeatMode,
-                                progress = state.progress,
                                 isPlaying = state.isPlaying,
                                 onToggle = onToggle,
                                 onPrev = onPrev,
@@ -412,7 +386,8 @@ fun SongDeck(
                                 onToggleVisualizer = onToggleVisualizer,
                                 tiltSpectrum = state.tiltSpectrum,
                                 // 堆叠往右后方，舞台留出余量给后面几层露头
-                                coverAspect = 1.30f
+                                coverAspect = 1.30f,
+                                onClickArtist = onArtistSearch
                             ) {
                                 DeckStack(
                                     state = state,
@@ -430,7 +405,8 @@ fun SongDeck(
                                     onClickArtwork = openLyrics,
                                     onAddToPlaylist = onAddToPlaylist,
                                     eqActive = eqActive,
-                                    landscape = true
+                                    landscape = true,
+                                    onClickArtist = onArtistSearch
                                 )
                             }
                         } else {
@@ -449,7 +425,8 @@ fun SongDeck(
                             onOpenSleepTimer = onOpenSleepTimer,
                             onClickArtwork = openLyrics,
                             onAddToPlaylist = onAddToPlaylist,
-                            eqActive = eqActive
+                            eqActive = eqActive,
+                            onClickArtist = onArtistSearch
                         )
                         }
                     } else {
@@ -468,18 +445,26 @@ fun SongDeck(
                             onOpenSleepTimer = onOpenSleepTimer,
                             onClickArtwork = openLyrics,
                             onAddToPlaylist = onAddToPlaylist,
-                            eqActive = eqActive
+                            eqActive = eqActive,
+                            onClickArtist = onArtistSearch
                         )
                     }
                 }
             }
         }
 
-        if (showLyrics) {
+        // 歌词层淡入 + 轻微放大入场、淡出退场（旧版瞬间弹出/消失）
+        androidx.compose.animation.AnimatedVisibility(
+            visible = lyricOverlay.visible,
+            enter = androidx.compose.animation.fadeIn(tween(260, easing = IrisEase.emphasized)) +
+                androidx.compose.animation.scaleIn(tween(320, easing = LyricEase), initialScale = 0.97f),
+            exit = androidx.compose.animation.fadeOut(tween(200, easing = IrisEase.exit)) +
+                androidx.compose.animation.scaleOut(tween(200, easing = IrisEase.exit), targetScale = 0.985f)
+        ) {
             LyricsOverlay(
-                lines = lyricLines,
-                loading = lyricLoading,
-                positionMs = state.positionMs,
+                lines = lyricOverlay.lines,
+                loading = lyricOverlay.loading,
+                positionMs = rememberLivePosition(),
                 durationMs = state.durationMs,
                 title = state.currentSong?.title ?: "",
                 artist = state.currentSong?.artist ?: "",
@@ -489,7 +474,7 @@ fun SongDeck(
                 onSeek = onSeek,
                 lyricAlign = state.lyricAlign,
                 karaoke = state.karaokeLyric,
-                onDismiss = { showLyrics = false }
+                onDismiss = { lyricOverlay.visible = false }
             )
         }
     }
@@ -524,6 +509,8 @@ private fun DeckTopBar(
     contentTick: Int = 0,
     /** 开启后：完全静止时顶栏淡到全透明（关=停在半透明 30%） */
     autoHide: Boolean = false,
+    /** r12：搜索由点歌手名打开时不自动聚焦（不弹键盘） */
+    searchQuiet: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     // 静止时的回落透明度：开关开启则完全透明。
@@ -623,15 +610,15 @@ private fun DeckTopBar(
         // ---- Deck 本地搜索框：与主页上栏同款——顶栏玻璃内 expand 展开、同款灰底+放大镜图标 ----
         AnimatedVisibility(
             visible = searchOpen,
-            enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = EaseOutCubic)),
-            exit = fadeOut(tween(180)) + shrinkVertically(tween(220, easing = EaseOutCubic))
+            enter = IrisMotion.expandIn(),
+            exit = IrisMotion.collapseOut()
         ) {
             Column(Modifier.padding(horizontal = 12.dp)) {
                 Spacer(Modifier.height(8.dp))
                 val searchBg = if (isLiquidGlass) {
-                    if (colors.isDark) Color(0x3DFFFFFF) else Color(0x52FFFFFF)
+                    colors.fieldGlass
                 } else {
-                    if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC)
+                    colors.fieldSolid
                 }
                 val iconTint = colors.subText
                 TextField(
@@ -680,7 +667,7 @@ private fun DeckTopBar(
                     )
                 )
                 LaunchedEffect(searchOpen) {
-                    if (searchOpen) {
+                    if (searchOpen && !searchQuiet) {
                         delay(150)
                         runCatching { searchFocusRequester.requestFocus() }
                     }
@@ -805,7 +792,8 @@ private fun DeckCarousel(
     onOpenEqualizer: () -> Unit,
     onOpenSleepTimer: () -> Unit,
     onClickArtwork: () -> Unit,
-    eqActive: Boolean
+    eqActive: Boolean,
+    onClickArtist: ((String) -> Unit)? = null
 ) {
     val queue = state.queue
     val pagerState = rememberPagerState(
@@ -847,11 +835,10 @@ private fun DeckCarousel(
         LandscapeDeckPlayer(
             title = cur?.title ?: L.none,
             artist = cur?.artist ?: "",
-            positionMs = state.positionMs,
+            positionMs = rememberLivePosition(),
             durationMs = state.durationMs,
             shuffle = state.shuffle,
             repeatMode = state.repeatMode,
-            progress = state.progress,
             isPlaying = state.isPlaying,
             onToggle = onToggle,
             onPrev = onPrev,
@@ -871,7 +858,8 @@ private fun DeckCarousel(
             onToggleVisualizer = onToggleVisualizer,
             tiltSpectrum = state.tiltSpectrum,
             // 舞台比封面宽 30%：多出的部分左右均分，正好给邻曲露头
-            coverAspect = 1.30f
+            coverAspect = 1.30f,
+            onClickArtist = onClickArtist
         ) {
             // 封面 Pager：封面本体清晰。左右边界做「向背景柔化淡出」——
             // 用横向 DstIn 渐变只在最外侧约 24% 范围把封面 alpha 平滑降到 0，
@@ -919,12 +907,13 @@ private fun DeckCarousel(
                 if (song != null) {
                     PlayerCoverArt(
                         artworkPath = song.filePath,
-                        positionMs = if (page == state.currentIndex) state.positionMs else 0L,
+                        positionMs = if (page == state.currentIndex) rememberLivePosition() else ZeroPosition,
                         isDark = colors.isDark,
                         vizAlpha = 0f,
                         shake = rememberShakeState(false),
                         coverLyricEnabled = state.coverLyric,
                                                 coverLyricLines = state.coverLyricLines,
+                        coverLyricFull = state.coverLyricFull,
                         interactive = page == state.currentIndex,
                         coverLyrics = emptyList(),
                         onClickArtwork = { if (page == state.currentIndex) onClickArtwork() else onSelect(page) },
@@ -975,6 +964,7 @@ private fun DeckCarousel(
                 onOpenSleepTimer = onOpenSleepTimer,
                 onClickArtwork = onClickArtwork,
                 eqActive = eqActive,
+                onClickArtist = onClickArtist,
                 // 距离在 graphicsLayer 里算：这个 lambda 跑在绘制阶段，
                 // 滑动时只重绘不重组（写在外面每一帧都要重组一整张卡）
                 modifier = Modifier.graphicsLayer {
@@ -1054,7 +1044,8 @@ private fun DeckStack(
     onOpenSleepTimer: () -> Unit,
     onClickArtwork: () -> Unit,
     eqActive: Boolean,
-    landscape: Boolean = false
+    landscape: Boolean = false,
+    onClickArtist: ((String) -> Unit)? = null
 ) {
     val queue = state.queue
     val base = state.currentIndex.coerceAtLeast(0).coerceAtMost(queue.lastIndex.coerceAtLeast(0))
@@ -1257,7 +1248,10 @@ private fun DeckStack(
             // 多画一张 d = -1（上一首）：它平时停在屏幕左外，右划时跟着手指滑进来。
             // 之前右划看着没动画就是因为少了它——被"推回来"的那张卡根本不在画面里，
             // 只能等状态更新后凭空出现。
-            for (d in STACK_DEPTH downTo -1) {
+            // r10：多画一张 d = STACK_DEPTH + 1（透明度为 0 的队尾预备卡）。之前队尾只画到
+            // STACK_DEPTH，左划推进后新补进来的那张从无到有、带着 ~0.3 的透明度直接冒出来
+            // （用户实录"最底层那张突兀出现"）；现在它随手势从 0 渐显到位，封面也提前加载好。
+            for (d in STACK_DEPTH + 1 downTo -1) {
                 val index = top + d
                 val song = queue.getOrNull(index) ?: continue
                 val depth = d.toFloat()
@@ -1340,7 +1334,7 @@ private fun DeckStack(
                             // 透明度在比渲染深度再深 0.6 档处归零，于是最深那张本身就很淡。
                             // 往下一首推进时队尾会补进一张新卡（再深一档没有渲染），
                             // 淡的层次让这次补位几乎看不出来。
-                            alpha = (1f - (eff / (STACK_DEPTH + 0.6f)).pow(1.4f))
+                            alpha = (1f - (eff / (STACK_DEPTH + 1f)).pow(1.4f))
                                 .coerceIn(0f, 1f)
                         }
                 ) {
@@ -1348,12 +1342,13 @@ private fun DeckStack(
                         // 横屏：只堆封面，控制区在外层固定。
                         PlayerCoverArt(
                             artworkPath = song.filePath,
-                            positionMs = if (d == 0) state.positionMs else 0L,
+                            positionMs = if (d == 0) rememberLivePosition() else ZeroPosition,
                             isDark = colors.isDark,
                             vizAlpha = 0f,
                             shake = rememberShakeState(false),
                             coverLyricEnabled = state.coverLyric,
                                                         coverLyricLines = state.coverLyricLines,
+                            coverLyricFull = state.coverLyricFull,
                             interactive = d == 0,
                             coverLyrics = emptyList(),
                             onClickArtwork = { if (d == 0) onClickArtwork() else onSelect(index) },
@@ -1380,7 +1375,8 @@ private fun DeckStack(
                         onClickArtwork = onClickArtwork,
                         onAddToPlaylist = onAddToPlaylist,
                         eqActive = eqActive,
-                        fullWidth = false
+                        fullWidth = false,
+                        onClickArtist = onClickArtist
                     )
                     }
                     // 其它卡整块不接受点击——露出来的那条边误触一下就跳歌，比它带来的便利更烦。
@@ -1465,10 +1461,9 @@ private fun DeckCompact(
         ) {
             // 细进度条（可拖动 seek）：宽度 = 位置/时长
             val duration = state.durationMs
-            val position = state.positionMs
-            val ratio = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            val live = rememberLivePosition()
             CompactSeekBar(
-                progress = ratio,
+                progress = { if (duration > 0) (live().toFloat() / duration).coerceIn(0f, 1f) else 0f },
                 enabled = song != null && duration > 0,
                 onSeek = onSeek,
                 modifier = Modifier
@@ -1512,11 +1507,11 @@ private fun DeckCompact(
                         )
                         if (song != null) {
                             Spacer(Modifier.width(6.dp))
-                            Text(
-                                "${fmtCompact(position)} / ${fmtCompact(duration)}",
-                                color = colors.subText,
-                                fontSize = 10.sp
-                            )
+                            // derivedStateOf：每秒只重组这一个 Text
+                            val timeText by remember(live, duration) {
+                                derivedStateOf { "${fmtCompact(live())} / ${fmtCompact(duration)}" }
+                            }
+                            Text(timeText, color = colors.subText, fontSize = 10.sp)
                         }
                     }
                 }
@@ -1712,7 +1707,8 @@ private fun CompactPlayButton(
 /** 迷你播放条的细进度条：轨道 3dp + 点击 seek */
 @Composable
 private fun CompactSeekBar(
-    progress: Float,
+    /** 延迟读取：只在绘制阶段读，进度变化只重绘 */
+    progress: () -> Float,
     enabled: Boolean,
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
@@ -1723,7 +1719,6 @@ private fun CompactSeekBar(
     // 拖动期间显示本地即时值（dragPos），松手才提交 seek——与海报墙封面进度条同款，
     // 避免拖动途中每帧都真 seek 卡顿。-1f = 未在拖动。
     val dragPos = remember { mutableFloatStateOf(-1f) }
-    val shown = if (dragPos.floatValue >= 0f) dragPos.floatValue else progress
     Box(
         modifier
             .fillMaxWidth()
@@ -1762,7 +1757,7 @@ private fun CompactSeekBar(
             drawRoundRect(
                 fillColor,
                 Offset(0f, trackY),
-                Size(size.width * shown, 3.dp.toPx()),
+                Size(size.width * (if (dragPos.floatValue >= 0f) dragPos.floatValue else progress()), 3.dp.toPx()),
                 CornerRadius(1.5.dp.toPx())
             )
         }
@@ -1805,7 +1800,8 @@ private fun DeckCard(
     eqActive: Boolean,
     modifier: Modifier = Modifier,
     /** true 时自己撑满可用宽度（横向排布由 Pager 给宽度），false 时由外层控制 */
-    fullWidth: Boolean = true
+    fullWidth: Boolean = true,
+    onClickArtist: ((String) -> Unit)? = null
 ) {
     Box(
         modifier
@@ -1815,12 +1811,11 @@ private fun DeckCard(
         PlayerCard(
             title = song.title,
             artist = song.artist,
-            positionMs = if (isCurrent) state.positionMs else 0L,
+            positionMs = if (isCurrent) rememberLivePosition() else ZeroPosition,
             durationMs = if (isCurrent && state.durationMs > 0) state.durationMs else song.durationMs,
             shuffle = state.shuffle,
             repeatMode = state.repeatMode,
             artworkPath = song.filePath,
-            progress = if (isCurrent) state.progress else 0f,
             isPlaying = isCurrent && state.isPlaying,
             onToggle = if (isCurrent) onToggle else onActivate,
             onPrev = if (isCurrent) onPrev else onActivate,
@@ -1850,6 +1845,8 @@ tiltSpectrum = state.tiltSpectrum,
              coverShakeEnabled = state.coverShake,
              coverLyricEnabled = state.coverLyric,
                           coverLyricLines = state.coverLyricLines,
+             coverLyricFull = state.coverLyricFull,
+             onClickArtist = if (isCurrent) onClickArtist else null,
              onToggleVisualizer = if (isCurrent) onToggleVisualizer else onActivate,
             interactive = isCurrent
         )

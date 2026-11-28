@@ -43,6 +43,9 @@ data class LyricLine(
 }
 
 object LyricParser {
+    /** 单个标签块读取上限（含内嵌封面的 ID3 一般 < 20MB） */
+    private const val MAX_TAG_BYTES = 32 * 1024 * 1024
+
 
     /**
      * 综合获取歌词，优先级：
@@ -182,7 +185,8 @@ object LyricParser {
             if (ver < 2 || ver > 4) return null
             val flags = head[5].toInt() and 0xFF
             val tagSize = syncsafe(head, 6)
-            if (tagSize <= 0 || offset + 10 + tagSize > file.length()) return null
+            // 32MB 封顶：损坏的标签头可能声称几百 MB，按它分配会直接 OOM
+            if (tagSize <= 0 || tagSize > MAX_TAG_BYTES || offset + 10 + tagSize > file.length()) return null
             var body = ByteArray(tagSize)
             raf.readFully(body)
             var end = tagSize
@@ -471,7 +475,7 @@ object LyricParser {
                 if (String(ft, 0, 8, Charsets.ISO_8859_1) != "APETAGEX") continue
                 val tagSize = readInt32LE(ft, 12).toLong() and 0xFFFFFFFFL   // 含 footer，不含 header
                 val count = readInt32LE(ft, 16)
-                if (tagSize < 32 || tagSize > footerPos + 32 || count !in 0..10_000) return null
+                if (tagSize < 32 || tagSize > footerPos + 32 || tagSize > MAX_TAG_BYTES || count !in 0..10_000) return null
                 val itemsStart = footerPos + 32 - tagSize
                 val items = ByteArray((tagSize - 32).toInt())
                 raf.seek(itemsStart)

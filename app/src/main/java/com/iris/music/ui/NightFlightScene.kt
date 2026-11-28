@@ -82,7 +82,8 @@ fun NightFlightScene(state: PlayerUiState, onToggle: () -> Unit, onPrev: () -> U
             catch (_: Exception) { value = emptyList() }
         }
     }
-    val index = lines.indexOfLast { it.timeMs <= state.positionMs }
+    val live = rememberLivePosition()
+    val index by remember(lines, live) { derivedStateOf { lines.indexOfLast { it.timeMs <= live() } } }
     val meteor = remember { Animatable(1f) }
     LaunchedEffect(path, index) {
         if (index >= 0) { meteor.snapTo(0f); meteor.animateTo(1f, tween(2400)) }

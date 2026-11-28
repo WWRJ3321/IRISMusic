@@ -794,6 +794,14 @@ private fun RankRow(
                 )
             }
             Spacer(Modifier.width(10.dp))
+            // r12：封面小图。SongArtwork 内部先 peek 内存缓存、未命中再 IO 解码，组合期不同步解码
+            SongArtwork(
+                filePath = stat.filePath.ifBlank { null },
+                seedId = stat.songId,
+                artworkSize = 40.dp,
+                isDark = colors.isDark
+            )
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     stat.title,

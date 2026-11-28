@@ -47,8 +47,9 @@ object Recommender {
     const val DEFAULT_LIMIT = 10
     private const val RECENT_WINDOW_MS = 3_600_000L
 
-    /** 缓存上次的偏好分（key = allSongs 的 identityHashCode），避免同一次操作重复计算 */
-    @Volatile private var cachedScores: Pair<Int, Map<Long, Float>>? = null
+    // 按列表"身份"缓存：旧实现用 identityHashCode 作键，哈希碰撞时会拿另一份列表的分数（静默错推荐）。
+    // 现在持弱引用做 === 比较，既不碰撞也不阻止旧列表回收。
+    @Volatile private var cachedScores: Pair<java.lang.ref.WeakReference<List<Song>>, Map<Long, Float>>? = null
 
     /**
      * 让偏好分缓存失效。
@@ -107,11 +108,10 @@ object Recommender {
 
     /** 获取或创建偏好分缓存：同一批歌曲只计算一次 */
     private fun getOrCreateScores(allSongs: List<Song>): Map<Long, Float> {
-        val key = System.identityHashCode(allSongs)
         val cached = cachedScores
-        if (cached != null && cached.first == key) return cached.second
+        if (cached != null && cached.first.get() === allSongs) return cached.second
         val scores = preferenceScores(allSongs)
-        cachedScores = key to scores
+        cachedScores = java.lang.ref.WeakReference(allSongs) to scores
         return scores
     }
 

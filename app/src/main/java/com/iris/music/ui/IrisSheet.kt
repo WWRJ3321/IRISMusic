@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -90,9 +91,14 @@ fun IrisSheet(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                // 输入法弹起时面板整体上移（App 是 edge-to-edge，系统不会替我们让位）：
+                // 新建歌单的输入框原来被键盘挡住
+                .imePadding()
                 .then(panelModifier)
-                // 入场自底部上滑归位（遮罩只淡入，不跟着位移——避免黑影）
-                .irisSheetSlideIn()
+                // 入场自底部整块滑入、退场整块滑出（遮罩只淡入淡出，不跟着位移——避免黑影）。
+                // v5.0：放在 IrisSheetHost 里时由可见性动画驱动，退场也有方向感；
+                // 旧版退场只有整体淡出，面板原地变透明，和入场的上滑不对称。
+                .then(sheetPanelMotion())
                 // 拖把手下滑关闭：必须放在 irisSurface 之前，平移图层才包住卡片背景整体
                 .then(if (drag != null) Modifier.sheetDragTranslate(drag) else Modifier)
                 .irisSurface(GlassLevel.SHEET, colors, IrisShape.sheetTop)
@@ -147,10 +153,23 @@ private fun Modifier.noIndicationClick(onClick: () -> Unit): Modifier = this.cli
  * @param requireUnconsumed true 用于遮罩：面板本体已在 Main 通道吃掉 down，
  *        所以点面板内部不会被误判成点遮罩。
  */
+@Composable
 internal fun Modifier.sheetGestureBarrier(
     onTap: (() -> Unit)? = null,
     requireUnconsumed: Boolean = false
-): Modifier = this.pointerInput(onTap, requireUnconsumed) {
+): Modifier {
+    // 不能把 onTap 当 pointerInput 的 key：调用方每次重组都传新 lambda，
+    // 手势协程随之重启，正在进行的点按会被丢掉（点遮罩偶尔关不掉）。
+    val tapRef = androidx.compose.runtime.rememberUpdatedState(onTap)
+    val hasTap = onTap != null
+    return sheetGestureBarrierImpl(tapRef, hasTap, requireUnconsumed)
+}
+
+private fun Modifier.sheetGestureBarrierImpl(
+    tapRef: androidx.compose.runtime.State<(() -> Unit)?>,
+    hasTap: Boolean,
+    requireUnconsumed: Boolean
+): Modifier = this.pointerInput(hasTap, requireUnconsumed) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = requireUnconsumed)
         down.consume()
@@ -165,6 +184,47 @@ internal fun Modifier.sheetGestureBarrier(
             }
             if (event.changes.all { !it.pressed }) break
         }
-        if (!moved) onTap?.invoke()
+        if (!moved) tapRef.value?.invoke()
+    }
+}
+
+
+/** 当前弹层所在的可见性动画作用域（由 [IrisSheetHost] 提供） */
+internal val LocalSheetVisibility =
+    androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.animation.AnimatedVisibilityScope?> { null }
+
+/**
+ * 弹层宿主：遮罩淡入淡出 + 面板自底部滑入/滑出（v5.0）。
+ * MainScreen 里六个弹层原来各写一遍 AnimatedVisibility 规格，现在统一走这里。
+ */
+@Composable
+fun IrisSheetHost(
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        modifier = modifier,
+        enter = IrisMotion.sheetEnter(),
+        exit = IrisMotion.sheetExit()
+    ) {
+        androidx.compose.runtime.CompositionLocalProvider(LocalSheetVisibility provides this) { content() }
+    }
+}
+
+@Composable
+private fun sheetPanelMotion(): Modifier {
+    val vis = LocalSheetVisibility.current ?: return Modifier.irisSheetSlideIn()
+    val enterSpec: androidx.compose.animation.core.FiniteAnimationSpec<androidx.compose.ui.unit.IntOffset> =
+        if (IrisMotion.jelly) androidx.compose.animation.core.spring(dampingRatio = 0.82f, stiffness = 320f)
+        else androidx.compose.animation.core.tween(IrisDur.LONG, easing = IrisEase.emphasized)
+    return with(vis) {
+        Modifier.animateEnterExit(
+            enter = androidx.compose.animation.slideInVertically(enterSpec) { it },
+            exit = androidx.compose.animation.slideOutVertically(
+                androidx.compose.animation.core.tween(260, easing = IrisEase.exit)
+            ) { it }
+        )
     }
 }

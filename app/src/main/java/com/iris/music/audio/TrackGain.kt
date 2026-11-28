@@ -64,8 +64,15 @@ object TrackGain : BaseAudioProcessor() {
     const val KEY_STRENGTH = "loudnorm_strength"
     private const val KEY_STORE = "loudnorm_lufs_store_v2"
 
-    /** path → LUFS 存储上限（约 400 首 × ~100B ≈ 40KB） */
-    private const val STORE_MAX = 400
+    /**
+     * path → LUFS 存储上限。v5.0 前是 400：曲库一过 400 首，先测的就被挤掉，
+     * 下次再听又要重测 10~30 秒才生效——大曲库上等于随机生效。
+     * 现在 4000 首（每条约 100B ≈ 400KB），存在独立的 prefs 文件里，
+     * 不拖慢主设置文件的冷启动读取。
+     */
+    private const val STORE_MAX = 4000
+    /** 响度库独立存储文件（v5.0 起从 iris_prefs 迁出） */
+    private const val STORE_PREFS = "iris_loudness"
     /** 目标响度：Spotify/-14 LUFS 档，听感饱满且给 SafeLimiter 留余量 */
     private const val TARGET_LUFS = -14.0
     /** 少于该时长不定稿（短促片段测不准） */
@@ -87,11 +94,29 @@ object TrackGain : BaseAudioProcessor() {
     /** path → 该曲的 (LUFS, 峰值)。定稿后写入，Key 是完整路径 */
     @Volatile private var store: MutableMap<String, FloatArray> = mutableMapOf()
 
-    fun init(p: SharedPreferences) {
-        prefs = p
+    /**
+     * @param p 主设置（iris_prefs），只读开关与力度
+     * @param context 用于打开独立的响度库文件；库在后台线程加载，不阻塞服务启动
+     */
+    fun init(p: SharedPreferences, context: android.content.Context) {
         enabled = p.getBoolean(KEY_ENABLED, false)
         strength = p.getInt(KEY_STRENGTH, 70).coerceIn(0, 100)
-        store = loadStore(p)
+        val app = context.applicationContext
+        runCatching {
+            storeExecutor.execute {
+                val sp = app.getSharedPreferences(STORE_PREFS, android.content.Context.MODE_PRIVATE)
+                prefs = sp
+                // 一次性迁移：旧版把整库塞在主设置文件里
+                if (!sp.contains(KEY_STORE) && p.contains(KEY_STORE)) {
+                    sp.edit().putString(KEY_STORE, p.getString(KEY_STORE, "")).apply()
+                    p.edit().remove(KEY_STORE).apply()
+                }
+                val loaded = loadStore(sp)
+                // 加载期间若已有新测量写入，合并保留
+                if (store.isNotEmpty()) loaded.putAll(store)
+                store = loaded
+            }
+        }
     }
 
     /**
@@ -390,17 +415,21 @@ object TrackGain : BaseAudioProcessor() {
     // 库存取（切换时才发生，非实时路径；@Volatile 引用交换 + 落盘走 [storeExecutor]）
     /** 只改内存 + 投递落盘。序列化/写 prefs 全在 [storeExecutor] 做，不占音频线程 */
     private fun putLufs(path: String, lufs: Float, peak: Float) {
-        val m = store.toMutableMap()
-        m.remove(path)
-        m[path] = floatArrayOf(lufs, peak)
-        // 超限删最旧（LinkedHashMap 插入序近似访问序，够用）
-        while (m.size > STORE_MAX) {
-            val eldest = m.keys.firstOrNull() ?: break
-            m.remove(eldest)
+        // v5.0：整库复制（几千条）也挪出音频线程——音频线程只投递三个数。
+        // 单线程 executor 保证多次写入按序生效。
+        runCatching {
+            storeExecutor.execute {
+                val m = LinkedHashMap(store)
+                m.remove(path)
+                m[path] = floatArrayOf(lufs, peak)
+                // 超限删最旧（插入序 ≈ 最近测量序）
+                val it = m.keys.iterator()
+                while (m.size > STORE_MAX && it.hasNext()) { it.next(); it.remove() }
+                store = m
+                // 旧实现用 HashMap 快照落盘，插入顺序丢失，重启后"删最旧"删的是随机条目
+                persistStore(m)
+            }
         }
-        store = m
-        val snapshot = HashMap(m)
-        runCatching { storeExecutor.execute { persistStore(snapshot) } }
     }
 
     /** 仅在 [storeExecutor] 线程执行：序列化 + 写 prefs（可能几十 KB，慢） */

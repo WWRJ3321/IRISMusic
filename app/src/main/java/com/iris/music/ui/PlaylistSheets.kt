@@ -17,6 +17,7 @@
  */
 package com.iris.music.ui
 
+import com.iris.music.ui.theme.fieldSolid
 import androidx.compose.animation.*
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInOutCubic
@@ -141,6 +142,8 @@ val onSheet = if (colors.isDark) Color.White else Color.Black
     // 新建歌单输入框
     var newName by remember { mutableStateOf("") }
     var showCreate by remember { mutableStateOf(false) }
+    // 非 null = 输入框处于「重命名该歌单」模式（复用新建输入行，长按歌单进入）
+    var renaming by remember { mutableStateOf<Playlist?>(null) }
 
     // 待删除的歌单（二次确认用）
     var pendingDelete by remember { mutableStateOf<Playlist?>(null) }
@@ -217,10 +220,21 @@ val onSheet = if (colors.isDark) Color.White else Color.Black
                                 active = state.activePlaylistId == p.id,
                                 colors = colors,
                                 onClick = { onSelect(p.id) },
+                                onLongClick = {
+                                    renaming = p
+                                    newName = L.displayName(p.name)
+                                    showCreate = true
+                                },
                                 onDelete = { pendingDelete = p }
                             )
                             Spacer(Modifier.height(4.dp))
                         }
+                        Text(
+                            L.renameHint,
+                            color = colors.subText.copy(alpha = 0.7f),
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                        )
                     }
 
                     Spacer(Modifier.height(12.dp))
@@ -241,8 +255,8 @@ val onSheet = if (colors.isDark) Color.White else Color.Black
                                 modifier = Modifier.weight(1f),
                                 shape = IrisShape.item,
                                 colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC),
-                                    unfocusedContainerColor = if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC),
+                                    focusedContainerColor = colors.fieldSolid,
+                                    unfocusedContainerColor = colors.fieldSolid,
                                     focusedIndicatorColor = Color.Transparent,
                                     unfocusedIndicatorColor = Color.Transparent,
                                     cursorColor = colors.primary
@@ -257,15 +271,17 @@ val onSheet = if (colors.isDark) Color.White else Color.Black
                                         Haptics.click()
                                         val n = newName.trim()
                                         if (n.isNotEmpty()) {
-                                            onCreate(n)
+                                            val r = renaming
+                                            if (r != null) onRename(r.id, n) else onCreate(n)
                                             newName = ""
                                             showCreate = false
+                                            renaming = null
                                         }
                                     }
                                     .padding(horizontal = 14.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text(L.create, color = accent.readableTextOn(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(if (renaming != null) L.rename else L.create, color = accent.readableTextOn(), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     } else {
@@ -313,7 +329,7 @@ val onSheet = if (colors.isDark) Color.White else Color.Black
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            L.deletePlaylistAsk(pendingDelete?.name ?: ""),
+                            L.deletePlaylistAsk(pendingDelete?.name?.let { L.displayName(it) } ?: ""),
                             color = if (colors.isDark) Color.White else Color.Black,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold
@@ -366,12 +382,14 @@ val onSheet = if (colors.isDark) Color.White else Color.Black
 }
 
 /** 歌单行：名称 + 歌曲数 + 选中态 + 删除按钮 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PlaylistRow(
     playlist: Playlist,
     active: Boolean,
     colors: IrisColors,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
     onDelete: () -> Unit
 ) {
     val t by animateFloatAsState(
@@ -389,7 +407,11 @@ private fun PlaylistRow(
                 solid = lerp(colors.row, colors.primary.copy(alpha = 0.12f), t),
                 accent = if (t > 0.5f) colors.primary else null
             )
-            .clickable { Haptics.tap(); onClick() }
+            // 长按 = 重命名（v5.0 前 onRename 已接线却没有任何入口）
+            .combinedClickable(
+                onClick = { Haptics.tap(); onClick() },
+                onLongClick = { Haptics.click(); onLongClick() }
+            )
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -398,7 +420,7 @@ private fun PlaylistRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                playlist.name,
+                L.displayName(playlist.name),
                 color = lerp(colors.text, colors.primary.readableOn(colors.row, 3.2f), t),
                 fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis
             )
@@ -541,7 +563,7 @@ internal fun AddToPlaylistSheet(
                         state.playlists.forEach { p ->
                             val alreadyIn = Playlists.contains(p.id, song.id)
                             AddRow(
-                                name = p.name,
+                                name = L.displayName(p.name),
                                 trailing = if (alreadyIn) L.addedIn else L.songs(p.songCount),
                                 alreadyIn = alreadyIn,
                                 colors = colors,
@@ -570,8 +592,8 @@ internal fun AddToPlaylistSheet(
                                 modifier = Modifier.weight(1f),
                                 shape = IrisShape.item,
                                 colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC),
-                                    unfocusedContainerColor = if (colors.isDark) Color(0xFF2A2A32) else Color(0xFFE8E8EC),
+                                    focusedContainerColor = colors.fieldSolid,
+                                    unfocusedContainerColor = colors.fieldSolid,
                                     focusedIndicatorColor = Color.Transparent,
                                     unfocusedIndicatorColor = Color.Transparent,
                                     cursorColor = colors.primary

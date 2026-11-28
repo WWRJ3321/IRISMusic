@@ -49,7 +49,9 @@ object ScanPath {
             .joinToString("/")
 
         val root = when (vol) {
-            "primary", "home" -> Environment.getExternalStorageDirectory().absolutePath
+            "primary" -> Environment.getExternalStorageDirectory().absolutePath
+            // SAF 的 "home" 卷是「文档」目录（home:Music = /sdcard/Documents/Music），不是存储根
+            "home" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).absolutePath
             else -> externalVolumeRoot(context, vol) ?: return null
         }
         if (rest.isEmpty()) root else "$root/$rest"

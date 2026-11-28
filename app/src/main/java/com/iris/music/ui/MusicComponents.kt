@@ -354,13 +354,22 @@ visible: Boolean = true,
     // 滚动进度：按 LazyColumn 实际可达首项范围归一化，而非 totalItems - 1。
     val scrollProgress by remember {
         derivedStateOf {
+            // 按像素算进度，而不是"首项索引 / (总数 − 可见数)"：
+            // 可见数随半截行进出屏在 8↔9 之间跳，歌少时分母一变进度就跳一大截——滑块"抽"。
+            // 用可见行的平均高度估算总内容高，分母不再随滚动变化。
             val info = listState.layoutInfo
-            val first = info.visibleItemsInfo.firstOrNull() ?: return@derivedStateOf 0f
-            val maxFirst = (info.totalItemsCount - info.visibleItemsInfo.size).coerceAtLeast(1)
-            if (!canScroll) return@derivedStateOf 0f
-            val exactIndex = first.index +
-                (if (first.size > 0) (-first.offset.toFloat() / first.size) else 0f)
-            (exactIndex / maxFirst).coerceIn(0f, 1f)
+            val vis = info.visibleItemsInfo
+            val first = vis.firstOrNull() ?: return@derivedStateOf 0f
+            if (!canScroll || !listState.canScrollBackward) return@derivedStateOf 0f
+            if (!listState.canScrollForward) return@derivedStateOf 1f
+            val spacing = info.mainAxisItemSpacing
+            val avg = vis.sumOf { it.size }.toFloat() / vis.size + spacing
+            val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
+            val content = avg * info.totalItemsCount - spacing +
+                info.beforeContentPadding + info.afterContentPadding
+            val maxScroll = (content - viewport).coerceAtLeast(1f)
+            val scrolled = first.index * avg - first.offset
+            (scrolled / maxScroll).coerceIn(0f, 1f)
         }
     }
 
@@ -511,8 +520,15 @@ visible: Boolean = true,
         if (dragT > 0.01f) {
             val label = labelForIndex(dragIndex)
             // 只显示 A-Z 首字母，中文/日文/数字/符号统一归为 #
-            val fc = label?.trim()?.firstOrNull()?.uppercaseChar()
-            val head = if (fc != null && fc in 'A'..'Z') fc.toString() else "#"
+            val trimmed = label?.trim()
+            // 时长标签（按时长排序时）整段显示；其余只显示 A-Z 首字母，中文/日文/数字/符号归为 #
+            val isTime = trimmed != null && trimmed.length <= 6 && trimmed.firstOrNull()?.isDigit() == true && trimmed.contains(':')
+            val fc = trimmed?.firstOrNull()?.uppercaseChar()
+            val head = when {
+                isTime -> trimmed!!
+                fc != null && fc in 'A'..'Z' -> fc.toString()
+                else -> "#"
+            }
             val bubbleSize = 58.dp
             val bubbleHalfPx = with(density) { bubbleSize.toPx() } / 2f
             val bubbleXpx = with(density) { 24.dp.roundToPx() }
@@ -542,7 +558,7 @@ visible: Boolean = true,
                     Text(
                         head,
                         color = colors.text,
-                        fontSize = 22.sp,
+                        fontSize = if (head.length > 2) 15.sp else 22.sp,
                         fontWeight = FontWeight.Black,
                         maxLines = 1
                     )

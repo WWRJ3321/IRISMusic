@@ -138,7 +138,22 @@ object VirtualBass : BaseAudioProcessor() {
         lastLow = 0f
     }
 
+    private val declick = Declick()
+    private var lastOut: ByteBuffer? = null
+
     override fun queueInput(inputBuffer: ByteBuffer) {
+        val on = enabled
+        if (!declick.transitioning(on)) { processImpl(inputBuffer, false); return }
+        val n = inputBuffer.remaining()
+        if (n == 0) return
+        declick.snapshot(inputBuffer)
+        processImpl(inputBuffer, true)
+        val out = lastOut ?: return
+        val fmt = inputAudioFormat
+        declick.blend(out, n, on, fmt.sampleRate, fmt.channelCount, fmt.encoding == C.ENCODING_PCM_16BIT)
+    }
+
+    private fun processImpl(inputBuffer: ByteBuffer, forceOn: Boolean) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
         val format = inputAudioFormat
@@ -149,12 +164,12 @@ object VirtualBass : BaseAudioProcessor() {
         // 先整块拷贝到输出缓冲，再原位（绝对索引）改写样本：
         // DSP 任何异常最多让个别样本保持原样，结构上不可能丢数据、
         // 不可能产生半处理状态、更不可能中断音频流。
-        val out = replaceOutputBuffer(remaining)
+        val out = replaceOutputBuffer(remaining).also { lastOut = it }
         out.put(inputBuffer)
         out.flip()
 
         // 关闭时纯直通（处理器仍在链上，开关即时切换）
-        if (!enabled || channels < 1) return
+        if (!(enabled || forceOn) || channels < 1) return
         if (designedRate != format.sampleRate) designFilters(format.sampleRate)
         // 混入比例：0-100 → 8%…52%（线性映射，直观）。
         // v2.2.22：谐波归一化分母 2→0.6 使单样本谐波电平提升约 3 倍，

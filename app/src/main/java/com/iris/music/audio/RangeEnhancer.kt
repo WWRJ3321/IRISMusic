@@ -112,7 +112,22 @@ object RangeEnhancer : BaseAudioProcessor() {
         refSq = 1e-4f
     }
 
+    private val declick = Declick()
+    private var lastOut: ByteBuffer? = null
+
     override fun queueInput(inputBuffer: ByteBuffer) {
+        val on = enabled
+        if (!declick.transitioning(on)) { processImpl(inputBuffer, false); return }
+        val n = inputBuffer.remaining()
+        if (n == 0) return
+        declick.snapshot(inputBuffer)
+        processImpl(inputBuffer, true)
+        val out = lastOut ?: return
+        val fmt = inputAudioFormat
+        declick.blend(out, n, on, fmt.sampleRate, fmt.channelCount, fmt.encoding == C.ENCODING_PCM_16BIT)
+    }
+
+    private fun processImpl(inputBuffer: ByteBuffer, forceOn: Boolean) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
         val format = inputAudioFormat
@@ -121,12 +136,12 @@ object RangeEnhancer : BaseAudioProcessor() {
         val bytesPerFrame = if (is16) channels * 2 else channels * 4
 
         // 先整块拷贝，再原位改写（同 VirtualBass：结构上不可能丢数据）
-        val out = replaceOutputBuffer(remaining)
+        val out = replaceOutputBuffer(remaining).also { lastOut = it }
         out.put(inputBuffer)
         out.flip()
 
         // 关闭时纯直通（处理器仍在链上，开关即时切换）
-        if (!enabled || channels < 1) return
+        if (!(enabled || forceOn) || channels < 1) return
         if (designedRate != format.sampleRate) {
             designedRate = format.sampleRate
             sampleRate = if (format.sampleRate > 0) format.sampleRate else 44100

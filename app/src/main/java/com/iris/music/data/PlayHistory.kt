@@ -30,6 +30,12 @@ import android.content.SharedPreferences
  * - last_played: "songId:timestamp;..."
  */
 object PlayHistory {
+    /**
+     * 每类统计最多落盘多少首。v5.0 前是 500：曲库过 500 首时，播放/跳过次数与最近播放
+     * 在重启后被静默截断，「播放次数」排序和推荐重启前后表现不一致。
+     * 每条约 20 字节，2 万首 ≈ 400KB 上限，正常曲库远到不了。
+     */
+    private const val HISTORY_CAP = 20_000
 
     private const val PREFS = "iris_prefs"
     private const val KEY_PLAY_COUNTS = "play_counts"
@@ -93,7 +99,7 @@ object PlayHistory {
             val edit = prefs.edit()
             writeCountsTo(edit, KEY_PLAY_COUNTS, counts)
             writeCountsTo(edit, KEY_SKIP_COUNTS, skips)
-            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.toInt() })
+            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() })
             writeCountsTo(edit, KEY_INCOMPLETE, incomplete)
             writeLastPlayedTo(edit, lastPlayed)
             edit.apply()
@@ -180,7 +186,7 @@ object PlayHistory {
             val edit = prefs.edit()
             edit.putString(KEY_LIKES, mergedLikes.joinToString(";"))
             writeCountsTo(edit, KEY_PLAY_COUNTS, counts)
-            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.toInt() })
+            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() })
             writeCountsTo(edit, KEY_INCOMPLETE, incomplete)
             writeLastPlayedTo(edit, lasts)
             edit.apply()
@@ -231,7 +237,7 @@ object PlayHistory {
             edit.putString(KEY_LIKES, likes.joinToString(";"))
             writeCountsTo(edit, KEY_PLAY_COUNTS, counts)
             writeCountsTo(edit, KEY_SKIP_COUNTS, skips)
-            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.toInt() })
+            writeCountsTo(edit, KEY_TOTAL_PLAYED_MS, totals.mapValues { it.value.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt() })
             writeCountsTo(edit, KEY_INCOMPLETE, incomplete)
             writeLastPlayedTo(edit, lasts)
             edit.apply()
@@ -271,7 +277,7 @@ object PlayHistory {
         val raw = counts.entries
             .filter { it.value > 0 }
             .sortedByDescending { it.value }
-            .take(500)
+            .take(HISTORY_CAP)
             .joinToString(";") { "${it.key}:${it.value}" }
         return edit.putString(key, raw)
     }
@@ -293,7 +299,7 @@ object PlayHistory {
     private fun writeLastPlayedTo(edit: SharedPreferences.Editor, map: Map<Long, Long>): SharedPreferences.Editor {
         val raw = map.entries
             .sortedByDescending { it.value }
-            .take(500)
+            .take(HISTORY_CAP)
             .joinToString(";") { "${it.key}:${it.value}" }
         return edit.putString(KEY_LAST_PLAYED, raw)
     }

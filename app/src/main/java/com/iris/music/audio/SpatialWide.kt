@@ -138,7 +138,22 @@ object SpatialWide : BaseAudioProcessor() {
         reflLpR = 0f
     }
 
+    private val declick = Declick()
+    private var lastOut: ByteBuffer? = null
+
     override fun queueInput(inputBuffer: ByteBuffer) {
+        val on = enabled
+        if (!declick.transitioning(on)) { processImpl(inputBuffer, false); return }
+        val n = inputBuffer.remaining()
+        if (n == 0) return
+        declick.snapshot(inputBuffer)
+        processImpl(inputBuffer, true)
+        val out = lastOut ?: return
+        val fmt = inputAudioFormat
+        declick.blend(out, n, on, fmt.sampleRate, fmt.channelCount, fmt.encoding == C.ENCODING_PCM_16BIT)
+    }
+
+    private fun processImpl(inputBuffer: ByteBuffer, forceOn: Boolean) {
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
         val format = inputAudioFormat
@@ -147,12 +162,12 @@ object SpatialWide : BaseAudioProcessor() {
         val bytesPerFrame = if (is16) channels * 2 else channels * 4
 
         // 先整块拷贝，再原位改写（结构上不可能丢数据）
-        val out = replaceOutputBuffer(remaining)
+        val out = replaceOutputBuffer(remaining).also { lastOut = it }
         out.put(inputBuffer)
         out.flip()
 
         // 关闭 / 单声道 / 非法：纯直通（单声道侧边恒 0，展宽无意义）
-        if (!enabled || channels < 2) return
+        if (!(enabled || forceOn) || channels < 2) return
         if (designedRate != format.sampleRate) designFilters(format.sampleRate)
 
         val w = (strength / 100f).coerceIn(0f, 1f)

@@ -2,7 +2,7 @@
 
 > 写给未来的自己和 AI 协作者：改代码前先读这份，避免走弯路。
 >
-> 对应版本：v4.9.6 · 最后更新：2026-11-22 · 规模：56 个 Kotlin 文件 / ~27000 行
+> 对应版本：v5.0.0 · 最后更新：2026-11-27 · 规模：约 60 个 Kotlin 文件 / ~29000 行
 
 ## 1. 技术栈与总体形态
 
@@ -47,6 +47,31 @@ PlayerViewModel  ──  PlayerUiState   ← 唯一真相源（StateFlow）
 > 1. `PlayerUiState` 加字段 → 2. `companion object` 加 `KEY_` → 3. **初始化块 `prefs.getXxx` 读取**
 > → 4. `setXxx()` 写盘 + copy state → 5. `SettingsScreen` 加控件 → 6. `MainScreen` 传回调
 > → 7. **搜索所有渲染分支**确认都接了参数。漏第 3 步 = 重启丢失，漏第 7 步 = 部分不生效。
+
+
+### 2.1 v5.0 起的三条性能铁律
+
+1. **高频值不进 `PlayerUiState`**。播放进度走 `PlayerViewModel.position`（独立 StateFlow），
+   由 MainActivity 收集后经 `LocalPlaybackPosition` 下发。需要进度的组件接收 `positionMs: () -> Long`
+   （延迟读取），调用方传 `rememberLivePosition()`，非当前卡片传 `ZeroPosition`。
+   在绘制阶段读（Canvas/graphicsLayer）或包 `derivedStateOf`，**不要在大组件的组合期直接读**。
+2. **强跳过已开启**（`experimentalStrongSkipping` + `app/compose-stability.conf`）。data 层模型一律按
+   不可变值使用：改就 `copy()` / 新 List，**禁止原地修改**传给 UI 的集合，否则界面不刷新。
+3. **列表 item 里不查数据层**。需要派生数据（如歌曲所属歌单）在数据层建索引，item 里只查表。
+
+### 2.2 公共组件（改样式只改一处）
+
+| 组件 | 位置 | 用途 |
+|---|---|---|
+| `IrisSwitch` | ui/IrisSwitch.kt | 全 App 开关拨钮 |
+| `IrisSheet` + `IrisSheetHost` | ui/IrisSheet.kt | 底部弹层外壳；放进 Host 由可见性驱动入场滑入、退场整块下滑 |
+| `IrisMotion` / `IrisEase` / `IrisDur` | ui/IrisMotion.kt | 统一缓动与时长；`expandIn()`/`collapseOut()` 展开收起；**不写裸 `tween(数字)`** |
+| `LyricOverlayState` | ui/LyricOverlayState.kt | 全屏歌词层状态与加载 |
+| `LibraryPlaceholder` / `LoadingDots` | ui/EmptyState.kt | 读取中 / 空库 / 无结果 |
+| `IrisColors.fieldSolid/fieldGlass/playerCard/track` | theme/Color.kt | 语义色，禁止再写颜色字面量 |
+| 全局按压高亮 | theme/Theme.kt `PressHighlight` | 替代涟漪（「无水波」）；整卡/长按区等大面积容器传 `indication = null` |
+| `Declick` | audio/Declick.kt | 音效处理器开关 30ms 交叉淡化，关闭后零开销直通 |
+| 音律震动 | audio/BassHaptics.kt + SpectrumAnalyzer.kt | 时域三段分频包络 → 独立线程按本曲重拍判定 → 按输出延迟后推 |
 
 ## 3. 核心模块
 
