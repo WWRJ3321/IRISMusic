@@ -29,31 +29,13 @@ Your music, laid out as simple cards. No network, no account — your data stays
 
 <br>
 
-## What's new in 5.0
-
-- **Rhythm haptics, rebuilt**: vibrates on the beat, stays still in quiet passages, and lines up automatically with speaker or Bluetooth latency.
-- **Smoother**: playback progress refreshes on its own, so large libraries and track changes no longer drag the whole UI.
-- **Tidier**: settings folded from 9 sections into 5; one consistent set of easing, expand and sheet animations.
-- **Details**: a color-picker square for custom themes, translations grouped under lyrics, full-cover lyrics in stack and carousel, click-free effect toggles, and 20+ fixes.
-
-Full notes in the [Release](https://github.com/WWRJ3321/IRISMusic/releases/latest).
-
 ## Features
 
-**What you see**
-- Four layouts: list, carousel, stack and poster wall. Layout, colors, light/dark and material are independent — mix freely.
-- Three materials: solid, frosted glass, and true-refraction liquid glass.
-- Colors: Mono, Ocean, Grass, or your own primary and secondary picked from a color square.
-- Lyrics: full-screen scrolling lyrics, karaoke highlight, floating lyrics, cover lyrics.
-
-**What you hear**
-- Free-curve equalizer, plus virtual bass, wide surround, range enhancer, safe limiter and loudness normalization.
-- Rhythm haptics: your phone taps along with the kick drum, harder on stronger beats.
-
-**What you don't see**
-- On-device recommendations scored from likes, plays and skips, with an adjustable "exploration" level.
-- Listening report with your most-played songs and listening stats.
-- Offline by default. The only request ever made is a GitHub API call when you turn on "Check for updates" yourself — no telemetry.
+| | |
+|:--|:--|
+| 👀 **What you see** | Four layouts — list, carousel, stack, poster wall — with layout, colors, light/dark and material all independent; solid, frosted glass and true-refraction liquid glass; Mono / Ocean / Grass, or pick your own primary and secondary; four lyric forms — scrolling, karaoke, floating, on-cover. |
+| 🎧 **What you hear** | Free-curve equalizer plus virtual bass, wide surround, range enhancer, safe limiter and loudness normalization; rhythm haptics tapping with the kick drum, harder on stronger beats. |
+| 🧠 **What you don't see** | On-device recommendations with an adjustable "exploration" dial; a listening report; offline by default — the only request ever is a manual "check for updates" call to GitHub, no telemetry. |
 
 > The poster-wall interaction is inspired by [Folia](https://github.com/chthollyphile/folia-major), used with the author's permission and implemented independently.
 
